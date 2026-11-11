@@ -1,0 +1,115 @@
+import { useRef } from "react";
+import type { ZoomSegment } from "../editApi";
+
+interface Props {
+  durationMs: number;
+  segments: ZoomSegment[];
+  selected: number | null;
+  playhead: number;
+  onSelect: (index: number | null) => void;
+  /** `first` is true for the first change of a drag, so one drag is one undo step. */
+  onChange: (segments: ZoomSegment[], first: boolean) => void;
+}
+
+type Drag =
+  | { kind: "start" | "end" | "move"; index: number; grabMs: number; orig: ZoomSegment; moved: boolean }
+  | { kind: "create"; fromMs: number; index: number | null };
+
+/** Grabbing a segment this close to its edge resizes it. */
+const EDGE_PX = 7;
+const MIN_LEN_MS = 200;
+
+/**
+ * The Zoom track under the video track: one block per zoom segment. Drag an edge to change
+ * its times, drag the middle to move it, drag on empty space to add a manual segment.
+ */
+export default function ZoomTrack(props: Props) {
+  const track = useRef<HTMLDivElement>(null);
+  const drag = useRef<Drag | null>(null);
+  const d = Math.max(1, props.durationMs);
+  const pct = (ms: number) => `${(Math.min(Math.max(ms, 0), d) / d) * 100}%`;
+
+  const msAt = (clientX: number) => {
+    const r = track.current?.getBoundingClientRect();
+    if (!r || r.width === 0) return 0;
+    return Math.round(Math.min(Math.max((clientX - r.left) / r.width, 0), 1) * d);
+  };
+
+  const replace = (index: number, seg: ZoomSegment, first: boolean) => {
+    const next = props.segments.slice();
+    next[index] = seg;
+    props.onChange(next, first);
+  };
+
+  const downOnSegment = (e: React.PointerEvent, index: number) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    track.current?.setPointerCapture(e.pointerId);
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const kind = e.clientX - r.left <= EDGE_PX ? "start" : r.right - e.clientX <= EDGE_PX ? "end" : "move";
+    drag.current = { kind, index, grabMs: msAt(e.clientX), orig: props.segments[index], moved: false };
+    props.onSelect(index);
+  };
+
+  const downOnTrack = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    track.current?.setPointerCapture(e.pointerId);
+    drag.current = { kind: "create", fromMs: msAt(e.clientX), index: null };
+  };
+
+  const move = (e: React.PointerEvent) => {
+    const g = drag.current;
+    if (!g) return;
+    const ms = msAt(e.clientX);
+    if (g.kind === "create") {
+      if (Math.abs(ms - g.fromMs) < MIN_LEN_MS) return;
+      const seg: ZoomSegment = { start_ms: Math.min(g.fromMs, ms), end_ms: Math.max(g.fromMs, ms), scale: 1.5, center: null, manual: true };
+      if (g.index === null) {
+        g.index = props.segments.length;
+        props.onChange([...props.segments, seg], true);
+        props.onSelect(g.index);
+      } else {
+        replace(g.index, seg, false);
+      }
+      return;
+    }
+    const first = !g.moved;
+    g.moved = true;
+    const o = g.orig;
+    const len = o.end_ms - o.start_ms;
+    let seg: ZoomSegment;
+    if (g.kind === "start") seg = { ...o, start_ms: Math.min(Math.max(0, ms), o.end_ms - MIN_LEN_MS) };
+    else if (g.kind === "end") seg = { ...o, end_ms: Math.max(Math.min(d, ms), o.start_ms + MIN_LEN_MS) };
+    else {
+      const start = Math.min(Math.max(0, o.start_ms + ms - g.grabMs), d - len);
+      seg = { ...o, start_ms: start, end_ms: start + len };
+    }
+    replace(g.index, { ...seg, manual: true }, first);
+  };
+
+  const up = () => {
+    const g = drag.current;
+    drag.current = null;
+    if (g?.kind === "create" && g.index === null) props.onSelect(null);
+  };
+
+  return (
+    <div className="ztrack-row">
+      <span className="ztrack-label">Zoom</span>
+      <div ref={track} className="track ztrack" onPointerDown={downOnTrack} onPointerMove={move} onPointerUp={up} title="Kéo trên chỗ trống để thêm một đoạn zoom">
+        {props.segments.map((s, i) => (
+          <div
+            key={i}
+            className={"zseg" + (i === props.selected ? " on" : "") + (s.manual ? " manual" : "")}
+            style={{ left: pct(s.start_ms), width: `calc(${pct(s.end_ms)} - ${pct(s.start_ms)})` }}
+            onPointerDown={(e) => downOnSegment(e, i)}
+            title={`Zoom ${s.scale.toFixed(1)}× — kéo mép để đổi thời gian, kéo giữa để dời`}
+          >
+            <span className="zseg-text">{s.scale.toFixed(1)}×</span>
+          </div>
+        ))}
+        <div className="track-head" style={{ left: pct(props.playhead) }} />
+      </div>
+    </div>
+  );
+}

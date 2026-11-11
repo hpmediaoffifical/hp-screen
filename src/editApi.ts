@@ -14,12 +14,42 @@ export interface EffectToggles {
   keys: boolean;
 }
 
+export interface ZoomSegment {
+  start_ms: number;
+  end_ms: number;
+  scale: number;
+  /** Fixed centre (0–1 of the frame); null follows the cursor, or stays centred. */
+  center: [number, number] | null;
+  /** Added or changed by hand: "Tự tạo lại" keeps it. */
+  manual: boolean;
+}
+
+export interface ZoomDoc {
+  enabled: boolean;
+  segments: ZoomSegment[];
+}
+
+/** Where the zoom camera looks: centre (0–1) and zoom level. */
+export interface Camera {
+  cx: number;
+  cy: number;
+  scale: number;
+}
+
 export interface EditDoc {
   v: number;
   trim: { start_ms: number; end_ms: number | null };
   /** Removed spans, in source time. */
   cuts: Span[];
   effects: EffectToggles;
+  zoom: ZoomDoc;
+}
+
+/** The video's size and length, sent with zoom commands. */
+export interface Frame {
+  width: number;
+  height: number;
+  duration_ms: number;
 }
 
 export type MouseButton = "left" | "right" | "middle";
@@ -61,6 +91,8 @@ export const editSave = (path: string, doc: EditDoc) => invoke<void>("edit_save"
 export const editKeep = (doc: EditDoc, durationMs: number) => invoke<KeepInfo>("edit_keep", { doc, durationMs });
 export const exportStart = (path: string, doc: EditDoc) => invoke<string>("export_start", { path, doc });
 export const exportCancel = () => invoke<void>("export_cancel");
+export const zoomAuto = (path: string, doc: EditDoc, frame: Frame) => invoke<ZoomSegment[]>("zoom_auto", { path, doc, frame });
+export const zoomTrack = (path: string, doc: EditDoc, frame: Frame) => invoke<[number, Camera][]>("zoom_track", { path, doc, frame });
 
 // Every export event names the source video, so a page only follows its own export.
 export const onExportProgress = (handler: (source: string, done: number, total: number) => void): Promise<UnlistenFn> =>

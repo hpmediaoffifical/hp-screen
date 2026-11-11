@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorMessage, formatElapsed } from "../api";
-import { addCut, editKeep, editOpen, editSave, type EditDoc, type EditSession, type KeepInfo, type Span } from "../editApi";
+import { addCut, editKeep, editOpen, editSave, zoomAuto, zoomTrack, type Camera, type EditDoc, type EditSession, type KeepInfo, type Span, type ZoomSegment } from "../editApi";
 import ExportPanel from "../editor/ExportPanel";
 import Preview, { type PreviewHandle } from "../editor/Preview";
 import Timeline from "../editor/Timeline";
 import { drawEffects } from "../editor/drawEffects";
+import ZoomTrack from "../editor/ZoomTrack";
+import { cameraAt } from "../editor/zoomMath";
 
-type Tab = "cut" | "effects" | "export";
+type Tab = "cut" | "effects" | "zoom" | "export";
 const TABS: { id: Tab; label: string }[] = [
   { id: "cut", label: "Cắt" },
   { id: "effects", label: "Hiệu ứng" },
+  { id: "zoom", label: "Zoom" },
   { id: "export", label: "Xuất" },
 ];
 
@@ -28,6 +31,9 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
   const [selection, setSelection] = useState<Span | null>(null);
   const [tab, setTab] = useState<Tab>("cut");
   const [message, setMessage] = useState("");
+  const [track, setTrack] = useState<[number, Camera][]>([]);
+  const [zoomSel, setZoomSel] = useState<number | null>(null);
+  const [picking, setPicking] = useState(false);
   const preview = useRef<PreviewHandle>(null);
   const past = useRef<EditDoc[]>([]);
   const future = useRef<EditDoc[]>([]);
@@ -80,6 +86,25 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
       alive = false;
     };
   }, [doc, session]);
+
+  // The zoom camera path, worked out by the core, refreshed shortly after zoom edits.
+  useEffect(() => {
+    if (!doc || !session) return;
+    if (!doc.zoom.enabled) {
+      setTrack([]);
+      return;
+    }
+    let alive = true;
+    const timer = window.setTimeout(() => {
+      zoomTrack(props.path, doc, frameOf(session))
+        .then((t) => alive && setTrack(t))
+        .catch((e) => alive && setMessage(errorMessage(e)));
+    }, 150);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [doc?.zoom, session, props.path]);
 
   /** Applies a change: recorded for undo (unless it continues the last one), saved a moment later. */
   const change = useCallback(
@@ -147,12 +172,49 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
         setSelection((s) => ({ start_ms: Math.min(s?.start_ms ?? doc?.trim.start_ms ?? 0, playhead - frameMs), end_ms: playhead }));
       } else if (e.key === "Delete") {
         e.preventDefault();
-        removeSelection();
+        if (zoomSel !== null && doc) {
+          change({ ...doc, zoom: { ...doc.zoom, segments: doc.zoom.segments.filter((_, i) => i !== zoomSel) } });
+          setZoomSel(null);
+        } else removeSelection();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undoRedo, removeSelection, playhead, duration, frameMs, trimEnd, doc]);
+  }, [undoRedo, removeSelection, playhead, duration, frameMs, trimEnd, doc, zoomSel, change]);
+
+  const setZoomSegment = (index: number, patch: Partial<ZoomSegment>) => {
+    const d = latest.current;
+    if (!d) return;
+    const segments = d.zoom.segments.map((s, i) => (i === index ? { ...s, ...patch, manual: true } : s));
+    change({ ...d, zoom: { ...d.zoom, segments } });
+  };
+
+  const regenerateZoom = async () => {
+    const d = latest.current;
+    if (!d || !session) return;
+    try {
+      const segments = await zoomAuto(props.path, d, frameOf(session));
+      change({ ...d, zoom: { ...d.zoom, segments } });
+      setZoomSel(null);
+    } catch (e) {
+      setMessage(errorMessage(e));
+    }
+  };
+
+  const setZoomEnabled = async (enabled: boolean) => {
+    const d = latest.current;
+    if (!d || !session) return;
+    let segments = d.zoom.segments;
+    // First time on: start from the clicks.
+    if (enabled && segments.length === 0 && session.effects) {
+      try {
+        segments = await zoomAuto(props.path, d, frameOf(session));
+      } catch (e) {
+        setMessage(errorMessage(e));
+      }
+    }
+    change({ ...d, zoom: { enabled, segments } });
+  };
 
   const close = async () => {
     await save();
@@ -195,7 +257,21 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
           onError={() => setMessage("Không phát được video này trong trang chỉnh sửa.")}
           draw={
             session.effects
-              ? (ctx, ms) => drawEffects(ctx, session.effects!, ms, doc.effects, session.info.height, ctx.canvas.height / session.info.height)
+              ? (ctx, ms) => drawEffects(ctx, session.effects!, ms, { ...doc.effects, keys: false }, session.info.height, ctx.canvas.height / session.info.height)
+              : undefined
+          }
+          drawFixed={
+            session.effects
+              ? (ctx, ms) => drawEffects(ctx, session.effects!, ms, { ...doc.effects, clicks: false }, session.info.height, ctx.canvas.height / session.info.height)
+              : undefined
+          }
+          camera={doc.zoom.enabled && track.length > 0 ? (ms) => cameraAt(track, ms) : undefined}
+          onPick={
+            picking && zoomSel !== null
+              ? (x, y) => {
+                  setPicking(false);
+                  setZoomSegment(zoomSel, { center: [x, y] });
+                }
               : undefined
           }
         />
@@ -252,6 +328,41 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
               )}
             </div>
           )}
+          {tab === "zoom" && (
+            <div className="panel-body">
+              <label className="check">
+                <input type="checkbox" checked={doc.zoom.enabled} onChange={(e) => void setZoomEnabled(e.target.checked)} />
+                <span>
+                  Bật zoom
+                  <span className="hint check-hint">Phóng to những chỗ bạn muốn người xem chú ý. Kéo trên rãnh Zoom (dưới dòng thời gian) để thêm một đoạn.</span>
+                </span>
+              </label>
+              {doc.zoom.enabled && (
+                <>
+                  <button className="btn btn-small" disabled={!session.effects} onClick={() => void regenerateZoom()}>
+                    Tự tạo lại theo click
+                  </button>
+                  {!session.effects && <p className="hint">Video này không có nhật ký thao tác: chỉ thêm zoom bằng tay được.</p>}
+                  {zoomSel !== null && doc.zoom.segments[zoomSel] ? (
+                    <ZoomControls
+                      seg={doc.zoom.segments[zoomSel]}
+                      picking={picking}
+                      hasCursor={!!session.effects}
+                      onScale={(scale) => setZoomSegment(zoomSel, { scale })}
+                      onPick={() => setPicking(!picking)}
+                      onFollow={() => setZoomSegment(zoomSel, { center: null })}
+                      onDelete={() => {
+                        change({ ...doc, zoom: { ...doc.zoom, segments: doc.zoom.segments.filter((_, i) => i !== zoomSel) } });
+                        setZoomSel(null);
+                      }}
+                    />
+                  ) : (
+                    <p className="hint">Bấm vào một đoạn trên rãnh Zoom để chỉnh mức phóng và tâm.</p>
+                  )}
+                </>
+              )}
+            </div>
+          )}
           {/* Always mounted, so a running export keeps its progress and result across tabs. */}
           <ExportPanel
             hidden={tab !== "export"}
@@ -280,7 +391,63 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
           onRestoreCut={(i) => change({ ...doc, cuts: doc.cuts.filter((_, j) => j !== i) })}
         />
       </div>
+      <div className="editor-transport">
+        {doc.zoom.enabled && (
+          <ZoomTrack
+            durationMs={duration}
+            segments={doc.zoom.segments}
+            selected={zoomSel}
+            playhead={playhead}
+            onSelect={(i) => {
+              setZoomSel(i);
+              setPicking(false);
+              if (i !== null) setTab("zoom");
+            }}
+            onChange={(segments, first) => change({ ...doc, zoom: { ...doc.zoom, segments } }, !first)}
+          />
+        )}
+      </div>
       {message && <p className="status bar-warn editor-msg" role="alert">{message}</p>}
     </section>
+  );
+}
+
+function frameOf(s: EditSession) {
+  return { width: s.info.width, height: s.info.height, duration_ms: s.info.duration_ms };
+}
+
+/** Controls for the selected zoom segment. */
+function ZoomControls(props: {
+  seg: ZoomSegment;
+  picking: boolean;
+  hasCursor: boolean;
+  onScale: (scale: number) => void;
+  onPick: () => void;
+  onFollow: () => void;
+  onDelete: () => void;
+}) {
+  const { seg } = props;
+  return (
+    <div className="zoom-controls">
+      <label className="zoom-scale">
+        Mức phóng: <strong>{seg.scale.toFixed(1)}×</strong>
+        <input type="range" min={1} max={4} step={0.1} value={seg.scale} onChange={(e) => props.onScale(Number(e.target.value))} />
+      </label>
+      {seg.scale > 2 && <p className="hint bar-warn">Phóng hơn 2× thì video có thể bị mờ.</p>}
+      <p className="hint">
+        Tâm: {seg.center ? "cố định" : props.hasCursor ? "đi theo con trỏ chuột" : "giữa khung hình"}
+      </p>
+      <div className="row">
+        <button className={"btn btn-small" + (props.picking ? " btn-rec" : "")} onClick={props.onPick}>
+          {props.picking ? "Bấm lên video…" : "Chọn tâm trên video"}
+        </button>
+        {seg.center && (
+          <button className="btn btn-small" onClick={props.onFollow}>
+            {props.hasCursor ? "Theo con trỏ" : "Về giữa"}
+          </button>
+        )}
+      </div>
+      <button className="btn btn-small btn-danger" onClick={props.onDelete}>Xóa đoạn zoom</button>
+    </div>
   );
 }

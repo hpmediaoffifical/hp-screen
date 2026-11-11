@@ -1,6 +1,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
-import { keptTime, playFrom, type Span } from "../editApi";
+import { keptTime, playFrom, type Camera, type Span } from "../editApi";
+import { pickPoint, viewOffset, WHOLE } from "./zoomMath";
 
 export interface PreviewHandle {
   play(): void;
@@ -16,23 +17,39 @@ interface Props {
   onTime: (ms: number) => void;
   onPlaying: (playing: boolean) => void;
   onError: () => void;
-  /** Draws over the picture at source time `ms`; the canvas covers the whole video. */
+  /** Draws effects that zoom with the picture (rings), at source time `ms`. */
   draw?: (ctx: CanvasRenderingContext2D, ms: number) => void;
+  /** Draws what stays put in the frame (shortcut chips), at source time `ms`. */
+  drawFixed?: (ctx: CanvasRenderingContext2D, ms: number) => void;
+  /** The zoom camera at source time `ms`. */
+  camera?: (ms: number) => Camera;
+  /** When set, a click on the picture picks that point of the frame (0–1). */
+  onPick?: (x: number, y: number) => void;
 }
 
-/** The video with playback that jumps over removed spans and stops at the trim end. */
+/**
+ * The video with playback that jumps over removed spans and stops at the trim end, zoomed
+ * like the export, with effect layers on top.
+ */
 const Preview = forwardRef<PreviewHandle, Props>(function Preview(props, ref) {
   const video = useRef<HTMLVideoElement>(null);
+  const zoom = useRef<HTMLDivElement>(null);
   const keep = useRef(props.keep);
   keep.current = props.keep;
   const onTime = useRef(props.onTime);
   onTime.current = props.onTime;
   const canvas = useRef<HTMLCanvasElement>(null);
+  const fixed = useRef<HTMLCanvasElement>(null);
   const draw = useRef(props.draw);
   draw.current = props.draw;
+  const drawFixed = useRef(props.drawFixed);
+  drawFixed.current = props.drawFixed;
+  const camera = useRef(props.camera);
+  camera.current = props.camera;
+  const current = useRef<Camera>(WHOLE);
   const repaint = useRef<() => void>(() => {});
   // Redraw when what is drawn changes, also while paused (no frames arrive then).
-  useEffect(() => repaint.current(), [props.draw]);
+  useEffect(() => repaint.current(), [props.draw, props.drawFixed, props.camera]);
 
   // Keep playback inside kept spans on every frame.
   useEffect(() => {
@@ -55,19 +72,36 @@ const Preview = forwardRef<PreviewHandle, Props>(function Preview(props, ref) {
       onTime.current(v.currentTime * 1000);
       paint();
     };
-    // The overlay canvas follows the size the video is shown at, in device pixels.
-    const paint = () => {
-      const c = canvas.current;
+    // Layers follow the size the video is shown at, in device pixels.
+    const fit = (c: HTMLCanvasElement | null) => {
       const ctx = c?.getContext("2d");
-      if (!c || !ctx) return;
+      if (!c || !ctx) return null;
       const w = Math.round(v.clientWidth * devicePixelRatio);
       const h = Math.round(v.clientHeight * devicePixelRatio);
       if (c.width !== w || c.height !== h) {
         c.width = w;
         c.height = h;
       }
-      if (draw.current) draw.current(ctx, v.currentTime * 1000);
-      else ctx.clearRect(0, 0, w, h);
+      return ctx;
+    };
+    const paint = () => {
+      const ms = v.currentTime * 1000;
+      const cam = camera.current ? camera.current(ms) : WHOLE;
+      current.current = cam;
+      if (zoom.current) {
+        const { s, x, y } = viewOffset(cam, v.clientWidth, v.clientHeight);
+        zoom.current.style.transform = s > 1.0001 ? `scale(${s}) translate(${-x}px, ${-y}px)` : "";
+      }
+      const ctx = fit(canvas.current);
+      if (ctx) {
+        if (draw.current) draw.current(ctx, ms);
+        else ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+      }
+      const fctx = fit(fixed.current);
+      if (fctx) {
+        if (drawFixed.current) drawFixed.current(fctx, ms);
+        else fctx.clearRect(0, 0, fctx.canvas.width, fctx.canvas.height);
+      }
     };
     repaint.current = paint;
     const supportsFrames = "requestVideoFrameCallback" in v;
@@ -82,11 +116,13 @@ const Preview = forwardRef<PreviewHandle, Props>(function Preview(props, ref) {
       paint();
     };
     v.addEventListener("seeked", onSeeked);
+    v.addEventListener("loadeddata", paint);
     return () => {
       stopped = true;
       if (supportsFrames) v.cancelVideoFrameCallback(handle);
       else cancelAnimationFrame(handle);
       v.removeEventListener("seeked", onSeeked);
+      v.removeEventListener("loadeddata", paint);
     };
   }, []);
 
@@ -114,19 +150,29 @@ const Preview = forwardRef<PreviewHandle, Props>(function Preview(props, ref) {
     },
   }));
 
+  const pick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!props.onPick) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const [x, y] = pickPoint(current.current, e.clientX - r.left, e.clientY - r.top, r.width, r.height);
+    props.onPick(x, y);
+  };
+
   return (
     <div className="preview">
-      <div className="preview-stage">
-        <video
-          ref={video}
-          className="preview-video"
-          src={convertFileSrc(props.path)}
-          preload="auto"
-          onPlay={() => props.onPlaying(true)}
-          onPause={() => props.onPlaying(false)}
-          onError={props.onError}
-        />
-        <canvas ref={canvas} className="preview-overlay" aria-hidden="true" />
+      <div className={"preview-stage" + (props.onPick ? " preview-picking" : "")} onClick={pick}>
+        <div ref={zoom} className="preview-zoom">
+          <video
+            ref={video}
+            className="preview-video"
+            src={convertFileSrc(props.path)}
+            preload="auto"
+            onPlay={() => props.onPlaying(true)}
+            onPause={() => props.onPlaying(false)}
+            onError={props.onError}
+          />
+          <canvas ref={canvas} className="preview-overlay" aria-hidden="true" />
+        </div>
+        <canvas ref={fixed} className="preview-overlay" aria-hidden="true" />
       </div>
     </div>
   );
