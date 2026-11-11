@@ -43,3 +43,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .btn:disabled { opacity: .5; cursor: default; }
 .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .status { color: var(--text-dim); user-select: text; word-break: break-all; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.btn-rec { background: var(--rec); border-color: var(--rec); color: #fff; font-weight: 600; }
+.btn-rec:hover:not(:disabled) { border-color: #fff; }
+.rec-line { font-variant-numeric: tabular-nums; }
+.status.warn { color: var(--warn); }
+.status.err { color: #ff8589; }

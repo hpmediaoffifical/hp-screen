@@ -1,6 +1,7 @@
 //! Tauri commands: the only way the UI reaches the core.
 use crate::capture::{self, MonitorInfo, Target, WindowInfo};
 use crate::events;
+use crate::recorder::{RecStatus, Recorder};
 use crate::screenshot;
 use hp_core::settings::Settings;
 use std::sync::Mutex;
@@ -9,6 +10,7 @@ use tauri::{AppHandle, State};
 /// Shared application state.
 pub struct AppState {
     pub settings: Mutex<Settings>,
+    pub recorder: Recorder,
 }
 
 impl AppState {
@@ -34,4 +36,29 @@ pub async fn take_screenshot(app: AppHandle, state: State<'_, AppState>, target:
     let path = screenshot::take_screenshot(&app, &settings, &target)?;
     events::library_changed(&app);
     Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub fn rec_start(state: State<'_, AppState>, target: Target) -> Result<(), String> {
+    state.recorder.start(target, state.settings())
+}
+
+#[tauri::command]
+pub fn rec_stop(state: State<'_, AppState>) -> Result<(), String> {
+    state.recorder.stop()
+}
+
+#[tauri::command]
+pub fn rec_toggle_pause(state: State<'_, AppState>) -> Result<(), String> {
+    state.recorder.toggle_pause()
+}
+
+#[tauri::command]
+pub fn rec_cancel(state: State<'_, AppState>) -> Result<(), String> {
+    state.recorder.cancel()
+}
+
+#[tauri::command]
+pub fn rec_status(state: State<'_, AppState>) -> RecStatus {
+    state.recorder.status()
 }

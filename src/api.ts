@@ -38,3 +38,35 @@ export const onLibraryChanged = (handler: () => void): Promise<UnlistenFn> =>
 /** Commands reject with a Vietnamese message string; anything else gets a generic one. */
 export const errorMessage = (e: unknown): string =>
   typeof e === "string" ? e : "Đã xảy ra lỗi không xác định.";
+
+export type RecState = "idle" | "countdown" | "recording" | "paused" | "finalizing";
+
+export interface RecStatus {
+  state: RecState;
+  elapsed_ms: number;
+  countdown: number | null;
+  file: string | null;
+  warning: string | null;
+}
+
+export const recStart = (target: Target) => invoke<void>("rec_start", { target });
+export const recStop = () => invoke<void>("rec_stop");
+export const recTogglePause = () => invoke<void>("rec_toggle_pause");
+export const recCancel = () => invoke<void>("rec_cancel");
+export const recStatus = () => invoke<RecStatus>("rec_status");
+
+export const onRecState = (handler: (s: RecStatus) => void): Promise<UnlistenFn> =>
+  listen<RecStatus>("rec-state", (e) => handler(e.payload));
+export const onRecError = (handler: (message: string) => void): Promise<UnlistenFn> =>
+  listen<{ message: string }>("rec-error", (e) => handler(e.payload.message));
+
+/** 75_000 ms → "01:15"; an hour or more → "1:02:03". */
+export function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const mm = String(m).padStart(2, "0");
+  const ss = String(s).padStart(2, "0");
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
