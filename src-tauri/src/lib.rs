@@ -1,3 +1,4 @@
+mod audio;
 mod capture;
 mod clock;
 mod commands;
@@ -37,6 +38,7 @@ pub fn run() {
             commands::rec_toggle_pause,
             commands::rec_cancel,
             commands::rec_status,
+            commands::audio_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running HP Screen");

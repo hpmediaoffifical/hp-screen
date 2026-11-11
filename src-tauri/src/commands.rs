@@ -62,3 +62,9 @@ pub fn rec_cancel(state: State<'_, AppState>) -> Result<(), String> {
 pub fn rec_status(state: State<'_, AppState>) -> RecStatus {
     state.recorder.status()
 }
+
+/// Whether a default playback device and a default microphone exist right now.
+#[tauri::command]
+pub fn audio_status() -> crate::audio::AudioStatus {
+    crate::audio::audio_status()
+}

@@ -1,5 +1,6 @@
 //! One recording from capture to file, independent of the UI: capture frames, pace them to a
 //! constant frame rate on the shared timeline, encode, and report progress through a callback.
+use crate::audio::{self, AudioConfig, AudioSession};
 use crate::capture::{self, CaptureSession, Frame, FrameSink, Target};
 use crate::clock;
 use crate::encoder::{self, EncoderConfig, Mp4Encoder};
@@ -26,7 +27,8 @@ pub struct PipelineConfig {
     pub thumb: Option<PathBuf>,
     pub fps: u32,
     pub quality: Quality,
-    pub audio: bool,
+    /// Which audio sources to record; `None` writes a video without an audio track.
+    pub audio: Option<AudioConfig>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -56,6 +58,7 @@ pub struct Pipeline {
     timeline: Arc<Mutex<Timeline>>,
     encoder: SharedEncoder,
     capture: Option<CaptureSession>,
+    audio: Option<AudioSession>,
     pacer: Option<JoinHandle<Result<Stats, String>>>,
 }
 
@@ -104,6 +107,7 @@ impl Pipeline {
         let sink = LatestSink { latest: latest.clone(), events: events.clone() };
         let capture = capture::start_capture(&cfg.target, Box::new(sink))?;
 
+        let audio_cfg = cfg.audio;
         let pacer = {
             let (stop, timeline, encoder) = (stop.clone(), timeline.clone(), encoder.clone());
             std::thread::Builder::new()
@@ -111,7 +115,20 @@ impl Pipeline {
                 .spawn(move || pace(cfg, stop, timeline, encoder, latest, events))
                 .map_err(|e| format!("Không tạo được luồng ghi hình: {e}"))?
         };
-        Ok(Self { stop, timeline, encoder, capture: Some(capture), pacer: Some(pacer) })
+        let mut pipeline = Self { stop, timeline, encoder, capture: Some(capture), audio: None, pacer: Some(pacer) };
+        if let Some(audio_cfg) = audio_cfg {
+            let encoder = pipeline.encoder.clone();
+            // Audio that arrives before the first video frame has no file to go to yet and is
+            // dropped; a failed audio write must not end the recording.
+            let sink = Box::new(move |pcm: &[f32], time_100ns: i64| {
+                if let Some(enc) = lock(&encoder).as_mut() {
+                    let _ = enc.write_audio(pcm, time_100ns);
+                }
+            });
+            // On error `pipeline` is dropped here, which stops the capture and the pacer.
+            pipeline.audio = Some(audio::start_audio(audio_cfg, pipeline.timeline.clone(), sink)?);
+        }
+        Ok(pipeline)
     }
 
     pub fn timeline(&self) -> Arc<Mutex<Timeline>> {
@@ -137,6 +154,7 @@ impl Pipeline {
 
     fn shutdown(&mut self) -> Result<Stats, String> {
         self.stop.store(true, Ordering::SeqCst);
+        self.audio.take();
         self.capture.take();
         match self.pacer.take() {
             Some(handle) => handle.join().unwrap_or_else(|_| Err("Luồng ghi hình dừng bất thường".to_string())),
@@ -214,7 +232,7 @@ fn pace_loop(
                             height,
                             fps,
                             video_bitrate: video_bitrate(width, height, fps, cfg.quality),
-                            audio: cfg.audio,
+                            audio: cfg.audio.is_some(),
                         })?;
                         *lock(encoder) = Some(enc);
                     }
@@ -318,13 +336,22 @@ mod desktop_tests {
     }
 
     fn record(target: Target, name: &str, script: impl FnOnce(&Pipeline)) -> (Stats, (u32, i64, u32), Vec<PipelineEvent>) {
+        record_with(target, name, None, script)
+    }
+
+    fn record_with(
+        target: Target,
+        name: &str,
+        audio: Option<AudioConfig>,
+        script: impl FnOnce(&Pipeline),
+    ) -> (Stats, (u32, i64, u32), Vec<PipelineEvent>) {
         let path = temp_file(name);
         let seen = Arc::new(Mutex::new(Vec::new()));
         let events: EventFn = {
             let seen = seen.clone();
             Arc::new(move |e| seen.lock().unwrap().push(e))
         };
-        let cfg = PipelineConfig { target, path: path.clone(), thumb: None, fps: 30, quality: Quality::Standard, audio: false };
+        let cfg = PipelineConfig { target, path: path.clone(), thumb: None, fps: 30, quality: Quality::Standard, audio };
         let pipeline = Pipeline::start(cfg, events).expect("pipeline starts");
         script(&pipeline);
         let stats = pipeline.finish().expect("pipeline finishes");
@@ -348,6 +375,24 @@ mod desktop_tests {
         assert!((80..=100).contains(&frames), "expected about 90 frames, got {frames}");
         assert!((2.6e7..=3.4e7).contains(&(last as f64)), "last frame at {last}");
         assert!(events.iter().any(|e| matches!(e, PipelineEvent::Tick { .. })));
+        assert!(!events.iter().any(|e| matches!(e, PipelineEvent::Failed(_))));
+    }
+
+    #[test]
+    #[ignore = "needs a desktop session"]
+    fn recording_with_audio_writes_an_audio_track_as_long_as_the_video() {
+        let primary = list_monitors().into_iter().find(|m| m.primary).unwrap();
+        let rect = hp_core::geometry::Rect { x: primary.rect.x + 100, y: primary.rect.y + 100, w: 640, h: 480 };
+        let audio = Some(AudioConfig { system: true, mic: true });
+        println!("audio status: {:?}", audio::audio_status());
+        let (_, (frames, last, audio_samples), events) =
+            record_with(Target::Region { monitor: primary.index, rect }, "audio.mp4", audio, |_| {
+                std::thread::sleep(Duration::from_secs(3));
+            });
+        println!("video frames {frames}, last {:.2}s, audio samples {audio_samples}", last as f64 / 1e7);
+        assert!((80..=100).contains(&frames));
+        // AAC packs 1024 frames per sample: 3 s at 48 kHz is about 140 samples.
+        assert!((110..=170).contains(&audio_samples), "audio samples {audio_samples}");
         assert!(!events.iter().any(|e| matches!(e, PipelineEvent::Failed(_))));
     }
 

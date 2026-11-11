@@ -70,3 +70,9 @@ export function formatElapsed(ms: number): string {
   const ss = String(s).padStart(2, "0");
   return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
 }
+
+export interface AudioStatus {
+  system_available: boolean;
+  mic_available: boolean;
+}
+export const audioStatus = () => invoke<AudioStatus>("audio_status");

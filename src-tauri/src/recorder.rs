@@ -171,7 +171,8 @@ impl Inner {
             thumb: Some(thumb_path(&path)),
             fps: settings.fps,
             quality: settings.quality,
-            audio: false,
+            audio: (settings.system_audio || settings.mic)
+                .then_some(crate::audio::AudioConfig { system: settings.system_audio, mic: settings.mic }),
         };
         let weak = Arc::downgrade(&self);
         let on_event: EventFn = Arc::new(move |event| {
