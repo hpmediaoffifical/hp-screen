@@ -2,7 +2,7 @@
 //! (and, later, the webcam bubble). Both windows are excluded from capture; what reaches the
 //! video is drawn by `LiveLayer` in the pipeline.
 use crate::camera::{Camera, CameraInfo};
-use crate::capture;
+use crate::capture::{self, Target};
 use crate::commands::AppState;
 use crate::shell::exclude_from_capture;
 use hp_core::geometry::Rect;
@@ -238,6 +238,7 @@ impl CameraAlive {
 /// Called on every recording state report: starts the webcam when a recording begins with
 /// the webcam enabled, and forgets the attempt when the session ends.
 pub fn on_rec_state(app: &AppHandle, state: RecState) {
+    sync_region_border(app, state);
     let Some(cams) = app.try_state::<CamState>() else { return };
     if state == RecState::Idle {
         cams.attempted.store(false, Ordering::SeqCst);
@@ -268,6 +269,78 @@ pub async fn cam_set(app: AppHandle, on: bool) -> Result<(), String> {
 #[tauri::command]
 pub fn cam_on(cams: State<'_, CamState>) -> bool {
     lock(&cams.session).is_some()
+}
+
+/// Thickness of the on-screen border around a recorded region, in physical pixels. The
+/// border lies entirely outside the region, so it never covers what is recorded.
+pub const BORDER_PX: i32 = 6;
+pub const BORDER_WINDOW: &str = "region-border";
+
+/// The border window: the region grown by `BORDER_PX` on every side.
+fn border_rect(region: Rect) -> Rect {
+    let grow = (2 * BORDER_PX) as u32;
+    Rect { x: region.x - BORDER_PX, y: region.y - BORDER_PX, w: region.w + grow, h: region.h + grow }
+}
+
+/// Whether the region border is on screen: from the countdown until the recording stops.
+fn shows_border(state: RecState, target: Option<&Target>) -> bool {
+    matches!(state, RecState::Countdown | RecState::Recording | RecState::Paused) && matches!(target, Some(Target::Region { .. }))
+}
+
+/// Set while the border window is being made, so state reports arriving meanwhile do not make
+/// a second one.
+static BORDER_OPENING: AtomicBool = AtomicBool::new(false);
+
+/// Shows or hides the dashed border around a recorded region. It is excluded from capture and
+/// lets the mouse through; being outside the region, it could not reach the video anyway.
+fn sync_region_border(app: &AppHandle, state: RecState) {
+    let target = app.try_state::<AppState>().and_then(|s| s.recorder.last_target());
+    let window = app.get_webview_window(BORDER_WINDOW);
+    if !shows_border(state, target.as_ref()) {
+        if let Some(w) = window {
+            let _ = w.close();
+        }
+        return;
+    }
+    if window.is_some() || BORDER_OPENING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let Some(target) = target else { return };
+    let app = app.clone();
+    // Windows must not be made on the event-loop thread.
+    tauri::async_runtime::spawn(async move {
+        let made = (|| -> Result<(), String> {
+            let area = border_rect(capture::target_rect(&target)?);
+            let w = WebviewWindowBuilder::new(&app, BORDER_WINDOW, WebviewUrl::App("index.html".into()))
+                .title("HP Screen - Vùng quay")
+                .decorations(false)
+                .transparent(true)
+                .shadow(false)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .resizable(false)
+                .focused(false)
+                .visible(false)
+                .build()
+                .map_err(|e| e.to_string())?;
+            let _ = w.set_position(PhysicalPosition::new(area.x, area.y));
+            let _ = w.set_size(PhysicalSize::new(area.w, area.h));
+            exclude_from_capture(&w);
+            let _ = w.set_ignore_cursor_events(true);
+            // The session may have ended while the window was being made.
+            let still = app.try_state::<AppState>().is_some_and(|s| shows_border(s.recorder.status().state, s.recorder.last_target().as_ref()));
+            if still {
+                let _ = w.show();
+            } else {
+                let _ = w.close();
+            }
+            Ok(())
+        })();
+        BORDER_OPENING.store(false, Ordering::SeqCst);
+        if let Err(e) = made {
+            crate::paths::log_error(&app, &format!("Không hiện được viền vùng quay: {e}"));
+        }
+    });
 }
 
 /// The drawing window covers exactly the recorded area (its even-sized part).
@@ -371,6 +444,25 @@ pub fn draw_context(state: State<'_, AppState>) -> DrawContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_border_sits_just_outside_the_region() {
+        assert_eq!(border_rect(Rect { x: 100, y: 50, w: 640, h: 480 }), Rect { x: 94, y: 44, w: 652, h: 492 });
+        assert_eq!(border_rect(Rect { x: -1920, y: 0, w: 300, h: 200 }), Rect { x: -1926, y: -6, w: 312, h: 212 });
+    }
+
+    #[test]
+    fn the_border_shows_only_for_a_region_while_a_session_runs() {
+        let region = Target::Region { monitor: 0, rect: Rect { x: 0, y: 0, w: 100, h: 100 } };
+        let monitor = Target::Monitor { index: 0 };
+        for state in [RecState::Countdown, RecState::Recording, RecState::Paused] {
+            assert!(shows_border(state, Some(&region)), "{state:?}");
+        }
+        assert!(!shows_border(RecState::Idle, Some(&region)));
+        assert!(!shows_border(RecState::Finalizing, Some(&region)));
+        assert!(!shows_border(RecState::Recording, Some(&monitor)));
+        assert!(!shows_border(RecState::Recording, None));
+    }
 
     #[test]
     fn a_start_overtaken_by_a_stop_is_abandoned() {
