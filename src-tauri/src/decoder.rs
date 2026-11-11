@@ -127,7 +127,7 @@ impl VideoDecoder {
             let out = reader.GetCurrentMediaType(VIDEO).map_err(err("Không giải mã được video"))?;
             let (fw, fh) = unpack(out.GetUINT64(&MF_MT_FRAME_SIZE).map_err(err("Video không rõ kích thước"))?);
             let (offset, width, height) = match aperture(&native).or_else(|| aperture(&out)) {
-                Some((x, y, w, h)) if w > 0 && h > 0 && x + w <= fw && y + h <= fh => ((x, y), w, h),
+                Some((x, y, w, h)) if x.checked_add(w).is_some_and(|r| r <= fw) && y.checked_add(h).is_some_and(|b| b <= fh) => ((x, y), w, h),
                 _ => ((0, 0), fw, fh),
             };
             let default_stride = out.GetUINT32(&MF_MT_DEFAULT_STRIDE).map(|s| s as i32).unwrap_or(fw as i32 * 4);
@@ -193,31 +193,39 @@ impl VideoDecoder {
         }
     }
 
-    /// Copies the visible picture out of a decoded buffer as tight top-down BGRA.
+    /// Copies the visible picture out of a decoded buffer as tight top-down BGRA. The buffer's
+    /// geometry comes from the file, so every row is bounds-checked before it is read.
     unsafe fn copy_picture(&self, buffer: &IMFMediaBuffer) -> Result<Vec<u8>, String> {
         unsafe {
             let row = self.width as usize * 4;
-            let mut out = vec![0u8; row * self.height as usize];
-            let (x0, y0) = (self.offset.0 as isize * 4, self.offset.1 as isize);
-            let mut copy = |scan0: *const u8, pitch: isize| {
+            let rows = self.height as usize;
+            let (x0, y0) = (self.offset.0 as usize * 4, self.offset.1 as usize);
+            let mut out = vec![0u8; row * rows];
+            let mut copy = |start: *const u8, len: usize, base: isize, pitch: isize| -> Result<(), String> {
+                if !rows_in_bounds(len, base, pitch, x0, y0, rows, row) {
+                    return Err("Khung hình trong file video không hợp lệ".to_string());
+                }
                 for (y, dst) in out.chunks_exact_mut(row).enumerate() {
-                    let src = scan0.offset((y as isize + y0) * pitch + x0);
+                    let src = start.offset(base + (y + y0) as isize * pitch + x0 as isize);
                     std::ptr::copy_nonoverlapping(src, dst.as_mut_ptr(), row);
                 }
+                Ok(())
             };
-            if let Ok(b2) = buffer.cast::<IMF2DBuffer>() {
-                let (mut scan0, mut pitch) = (std::ptr::null_mut(), 0i32);
-                b2.Lock2D(&mut scan0, &mut pitch).map_err(err("Lỗi khi đọc video"))?;
-                copy(scan0, pitch as isize);
+            if let Ok(b2) = buffer.cast::<IMF2DBuffer2>() {
+                let (mut scan0, mut pitch, mut start, mut len) = (std::ptr::null_mut(), 0i32, std::ptr::null_mut(), 0u32);
+                b2.Lock2DSize(MF2DBuffer_LockFlags_Read, &mut scan0, &mut pitch, &mut start, &mut len).map_err(err("Lỗi khi đọc video"))?;
+                let result = copy(start, len as usize, scan0.offset_from(start), pitch as isize);
                 let _ = b2.Unlock2D();
+                result?;
             } else {
                 let (mut data, mut len) = (std::ptr::null_mut(), 0u32);
                 buffer.Lock(&mut data, None, Some(&mut len)).map_err(err("Lỗi khi đọc video"))?;
-                let stride = self.default_stride as isize;
+                let pitch = self.default_stride as isize;
                 // Bottom-up rows: the top row is the last one in memory.
-                let scan0 = if stride < 0 { data.offset(len as isize + stride) } else { data };
-                copy(scan0, stride);
+                let base = if pitch < 0 { len as isize + pitch } else { 0 };
+                let result = copy(data, len as usize, base, pitch);
                 let _ = buffer.Unlock();
+                result?;
             }
             Ok(out)
         }
@@ -231,7 +239,12 @@ unsafe fn aperture(t: &IMFMediaType) -> Option<(u32, u32, u32, u32)> {
             let mut area = MFVideoArea::default();
             let bytes = std::slice::from_raw_parts_mut(&mut area as *mut MFVideoArea as *mut u8, std::mem::size_of::<MFVideoArea>());
             if t.GetBlob(key, bytes, None).is_ok() {
-                return Some((area.OffsetX.value.max(0) as u32, area.OffsetY.value.max(0) as u32, area.Area.cx as u32, area.Area.cy as u32));
+                let (x, y) = (area.OffsetX.value, area.OffsetY.value);
+                let (w, h) = (area.Area.cx, area.Area.cy);
+                if x < 0 || y < 0 || w <= 0 || h <= 0 {
+                    return None;
+                }
+                return Some((x as u32, y as u32, w as u32, h as u32));
             }
         }
         None
@@ -284,13 +297,30 @@ impl AudioDecoder {
                 let buffer = sample.ConvertToContiguousBuffer().map_err(err("Lỗi khi đọc âm thanh"))?;
                 let (mut data, mut len) = (std::ptr::null_mut(), 0u32);
                 buffer.Lock(&mut data, None, Some(&mut len)).map_err(err("Lỗi khi đọc âm thanh"))?;
-                let pcm = std::slice::from_raw_parts(data as *const f32, len as usize / 4).to_vec();
+                // Read as bytes: the buffer is not guaranteed to be aligned for f32.
+                let bytes = std::slice::from_raw_parts(data as *const u8, len as usize);
+                let pcm: Vec<f32> = bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
                 let _ = buffer.Unlock();
                 let out = to_48k_stereo(&pcm, self.rate, self.channels, &mut self.resampler);
                 return Ok(Some((time as f64 / 10_000.0, out)));
             }
         }
     }
+}
+
+/// True when every byte of `rows` rows of `row` bytes, starting `x0` bytes into row `y0`,
+/// lies inside a buffer of `len` bytes whose row 0 starts at byte `base` and whose rows are
+/// `pitch` bytes apart (negative: stored bottom-up).
+fn rows_in_bounds(len: usize, base: isize, pitch: isize, x0: usize, y0: usize, rows: usize, row: usize) -> bool {
+    if rows == 0 || pitch == 0 || x0.saturating_add(row) > pitch.unsigned_abs() {
+        return false;
+    }
+    let start_of = |y: usize| -> Option<isize> { base.checked_add((y as isize).checked_mul(pitch)?)?.checked_add(x0 as isize) };
+    let Some(last_y) = y0.checked_add(rows - 1) else { return false };
+    [y0, last_y].into_iter().all(|y| match start_of(y) {
+        Some(start) => start >= 0 && (start as usize).saturating_add(row) <= len,
+        None => false,
+    })
 }
 
 /// Integer frame rate from a ratio: 30000/1001 gives 30.
@@ -311,6 +341,20 @@ fn to_48k_stereo(pcm: &[f32], rate: u32, channels: usize, rs: &mut Resampler) ->
 mod tests {
     use super::*;
     use crate::test_media::*;
+
+    #[test]
+    fn row_bounds_are_checked_before_copying() {
+        // 4 rows of 16 bytes, top-down.
+        assert!(rows_in_bounds(64, 0, 16, 0, 0, 4, 16));
+        assert!(rows_in_bounds(64, 0, 16, 4, 1, 3, 12));
+        assert!(!rows_in_bounds(64, 0, 16, 0, 1, 4, 16), "last row past the end");
+        assert!(!rows_in_bounds(64, 0, 16, 8, 0, 1, 12), "row spills into the next one");
+        assert!(!rows_in_bounds(64, 0, 0, 0, 0, 4, 16), "zero pitch");
+        // Bottom-up: row 0 is the last 16 bytes.
+        assert!(rows_in_bounds(64, 48, -16, 0, 0, 4, 16));
+        assert!(!rows_in_bounds(64, 48, -16, 0, 0, 5, 16), "row before the start");
+        assert!(!rows_in_bounds(64, 60, -16, 0, 0, 1, 16), "first row past the end");
+    }
 
     #[test]
     fn fps_is_rounded_from_the_ratio() {
