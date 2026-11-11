@@ -3,7 +3,7 @@ use crate::cut::{Cuts, MIN_OUTPUT_MS};
 use crate::edit::EditDoc;
 use crate::edit::EffectToggles;
 use crate::effects::{Draw, Effects, draws_at};
-use crate::geometry::make_even;
+use crate::layout::{Layout, layout, source_view};
 use crate::zoom::{Camera, camera_at, camera_track};
 
 /// Camera samples per second for zoom.
@@ -24,6 +24,8 @@ pub struct FramePlan {
     pub draws: Vec<Draw>,
     /// Where the zoom camera looks in the source frame.
     pub camera: Camera,
+    /// The part of the source shown (zoom and fill crop), in source pixels.
+    pub view: (f32, f32, f32, f32),
 }
 
 #[derive(Clone, Debug)]
@@ -34,6 +36,7 @@ pub struct Plan {
     toggles: EffectToggles,
     /// Zoom camera over source time; `None` when zoom is off.
     track: Option<Vec<(i64, Camera)>>,
+    layout: Layout,
 }
 
 impl Plan {
@@ -44,7 +47,20 @@ impl Plan {
             let cursor = |t: i64| effects.as_ref().and_then(|e| e.cursor_at(t)).map(|(x, y)| (x / w, y / h));
             camera_track(&doc.zoom, &cursor, src.duration_ms, CAMERA_STEP_MS)
         });
-        Plan { src, cuts: doc.cuts(src.duration_ms), effects, toggles: doc.effects, track }
+        let layout = layout(src.width, src.height, &doc.frame);
+        Plan { src, cuts: doc.cuts(src.duration_ms), effects, toggles: doc.effects, track, layout }
+    }
+
+    /// The same edit as a GIF: `fps` frames per second, `width` pixels wide.
+    pub fn for_gif(&self, fps: u32, width: u32) -> Plan {
+        let mut p = self.clone();
+        p.src.fps = fps.max(1);
+        p.layout = self.layout.scaled(width);
+        p
+    }
+
+    pub fn layout(&self) -> &Layout {
+        &self.layout
     }
 
     /// The zoom camera samples (for the preview).
@@ -61,7 +77,7 @@ impl Plan {
     }
 
     pub fn out_size(&self) -> (u32, u32) {
-        make_even(self.src.width, self.src.height)
+        (self.layout.out_w, self.layout.out_h)
     }
 
     pub fn frame(&self, n: u64) -> Option<FramePlan> {
@@ -75,7 +91,8 @@ impl Plan {
             None => Vec::new(),
         };
         let camera = self.track.as_deref().map_or(Camera::WHOLE, |t| camera_at(t, src_ms));
-        Some(FramePlan { out_ms, src_ms, draws, camera })
+        let view = source_view(camera, self.src.width, self.src.height, self.layout.fill_aspect);
+        Some(FramePlan { out_ms, src_ms, draws, camera, view })
     }
 
     pub fn cuts(&self) -> &Cuts {
@@ -150,6 +167,26 @@ mod tests {
         assert!((late.scale - 2.0).abs() < 0.02 && (late.cx - 0.25).abs() < 0.01, "{late:?}");
         let off = Plan::new(src(640, 480), &EditDoc::default(), None);
         assert_eq!(off.frame(100).unwrap().camera, crate::zoom::Camera::WHOLE);
+    }
+
+    #[test]
+    fn the_frame_layout_sets_the_size_and_view() {
+        use crate::layout::{Aspect, Fit, FrameDoc};
+        let doc = EditDoc { frame: FrameDoc { aspect: Aspect::Tall, fit: Fit::Fill, ..FrameDoc::default() }, ..EditDoc::default() };
+        let p = Plan::new(src(1920, 1080), &doc, None);
+        assert_eq!(p.out_size(), (608, 1080));
+        let v = p.frame(0).unwrap().view;
+        assert!((v.2 / v.3 - 608.0 / 1080.0).abs() < 1e-3, "{v:?}");
+        let fit = Plan::new(src(1920, 1080), &EditDoc::default(), None);
+        assert_eq!(fit.frame(0).unwrap().view, (0.0, 0.0, 1920.0, 1080.0));
+    }
+
+    #[test]
+    fn a_gif_plan_has_its_own_rate_and_width() {
+        let p = sample().for_gif(10, 320);
+        assert_eq!(p.fps(), 10);
+        assert_eq!(p.frames(), 60, "6 s kept at 10 fps");
+        assert_eq!(p.out_size(), (320, 240));
     }
 
     #[test]

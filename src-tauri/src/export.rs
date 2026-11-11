@@ -109,9 +109,12 @@ fn write_all(
         }
         let Some(fp) = plan.frame(n) else { break };
         let src = video.frame_at(fp.src_ms)?;
-        // Same size, no zoom and nothing to draw: the encoder crops an odd source edge by itself.
+        // Same size, no zoom, no frame layout and nothing to draw: the encoder crops an odd
+        // source edge by itself.
         let zoomed = fp.camera.scale > 1.0001;
-        let direct = !zoomed && fp.draws.is_empty() && info.width >= out_w && info.height >= out_h && info.width - out_w <= 1 && info.height - out_h <= 1;
+        let layout = plan.layout();
+        let plain = !layout.decorated && layout.fill_aspect.is_none();
+        let direct = plain && !zoomed && fp.draws.is_empty() && info.width >= out_w && info.height >= out_h && info.width - out_w <= 1 && info.height - out_h <= 1;
         let (frame, stride): (&[u8], u32) = if direct {
             (src, info.width * 4)
         } else {
@@ -119,8 +122,7 @@ fn write_all(
                 compositor = Some(Compositor::new(out_w, out_h, Device::Hardware)?);
             }
             let c = compositor.as_mut().expect("just created");
-            let view = zoomed.then(|| fp.camera.view(info.width, info.height));
-            (c.render(src, info.width, info.height, view, None, &fp.draws)?, out_w * 4)
+            (c.render(src, info.width, info.height, Some(fp.view), Some(layout), &fp.draws)?, out_w * 4)
         };
         if first.is_none() {
             first = Some(tight(frame, stride, out_w, out_h));
@@ -327,6 +329,39 @@ mod tests {
         let out = export(&source, &plan_doc(&source, &zoomed(vec![Span { start_ms: 500, end_ms: 1500 }], 600, 1400))).unwrap();
         let (frames, _, _) = probe(&out).unwrap();
         assert!((29..=31).contains(&frames), "{frames}");
+    }
+
+    #[test]
+    fn tall_export_has_the_frame_size_and_background() {
+        use hp_core::layout::{Aspect, FrameDoc};
+        let source = temp_path("exp-tall", "a.mp4");
+        make_sample(&source, 1, 320, 180, false);
+        let doc = EditDoc { frame: FrameDoc { aspect: Aspect::Tall, background: "white".into(), ..FrameDoc::default() }, ..EditDoc::default() };
+        let out = export(&source, &plan_doc(&source, &doc)).unwrap();
+        let (mut dec, info) = VideoDecoder::open(&out).unwrap();
+        assert_eq!((info.width, info.height), (100, 180), "9:16 of a 180 px tall source (101.25 made even)");
+        let f = dec.frame_at(500).unwrap();
+        let i = (2 * 100 + 50) * 4;
+        let top = [f[i + 2], f[i + 1], f[i]];
+        assert!(near(top, [255, 255, 255]), "white bar above the video: {top:?}");
+        assert!(near(centre_rgb(f, 100, 180), [255, 0, 0]), "red video in the middle");
+    }
+
+    #[test]
+    fn fill_export_crops() {
+        use hp_core::layout::{Aspect, Fit, FrameDoc};
+        let source = temp_path("exp-fill", "a.mp4");
+        make_quadrants(&source, 1, 320, 180);
+        let doc = EditDoc { frame: FrameDoc { aspect: Aspect::Square, fit: Fit::Fill, ..FrameDoc::default() }, ..EditDoc::default() };
+        let out = export(&source, &plan_doc(&source, &doc)).unwrap();
+        let (mut dec, info) = VideoDecoder::open(&out).unwrap();
+        assert_eq!((info.width, info.height), (180, 180));
+        let f = dec.frame_at(500).unwrap();
+        let px = |x: u32, y: u32| {
+            let i = ((y * 180 + x) * 4) as usize;
+            [f[i + 2], f[i + 1], f[i]]
+        };
+        assert!(near(px(20, 20), [255, 0, 0]) && near(px(160, 20), [0, 255, 0]), "the centre square of the source: {:?} {:?}", px(20, 20), px(160, 20));
     }
 
     #[test]

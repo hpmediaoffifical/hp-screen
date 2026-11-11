@@ -228,7 +228,7 @@ pub(crate) unsafe fn copy_bgra(buffer: &IMFMediaBuffer, width: u32, height: u32,
         } else {
             let (mut data, mut len) = (std::ptr::null_mut(), 0u32);
             buffer.Lock(&mut data, None, Some(&mut len)).map_err(err("Lỗi khi đọc khung hình"))?;
-            let pitch = default_stride as isize;
+            let pitch = infer_pitch(len as usize, width, height, default_stride);
             // Bottom-up rows: the top row is the last one in memory.
             let base = if pitch < 0 { len as isize + pitch } else { 0 };
             let result = copy(data, len as usize, base, pitch);
@@ -330,6 +330,27 @@ fn rows_in_bounds(len: usize, base: isize, pitch: isize, x0: usize, y0: usize, r
     })
 }
 
+/// The row pitch of a plain (not 2D) buffer: the media type's stride, unless the buffer is
+/// larger, as when the decoder pads rows and lines to 16 pixels; then the pitch that divides
+/// the buffer into at least `height` whole rows. The sign (bottom-up) is the type's.
+fn infer_pitch(len: usize, width: u32, height: u32, default_stride: i32) -> isize {
+    let sign: isize = if default_stride < 0 { -1 } else { 1 };
+    let base = match default_stride.unsigned_abs() as usize {
+        0 => width as usize * 4,
+        b => b,
+    };
+    if height == 0 || len <= base * height as usize {
+        return sign * base as isize;
+    }
+    for align in [16usize, 32, 64, 128, 256] {
+        let pitch = (width as usize).div_ceil(align) * align * 4;
+        if pitch >= base && len.is_multiple_of(pitch) && len / pitch >= height as usize {
+            return sign * pitch as isize;
+        }
+    }
+    sign * base as isize
+}
+
 /// Integer frame rate from a ratio: 30000/1001 gives 30.
 fn fps_from_ratio(num: u32, den: u32) -> u32 {
     if den == 0 {
@@ -410,6 +431,35 @@ mod tests {
         // The last row must be picture, not padding.
         let last = &f[(201 * 330 * 4) as usize..];
         assert!(near([last[2], last[1], last[0]], [255, 0, 0]), "{:?}", &last[..4]);
+    }
+
+    #[test]
+    fn the_real_row_pitch_is_found_from_the_buffer_length() {
+        // 180x180 RGB32 comes padded to 192x192 rows of 768 bytes although the type says 720.
+        assert_eq!(infer_pitch(768 * 192, 180, 180, 720), 768);
+        assert_eq!(infer_pitch(704 * 176, 176, 176, 704), 704, "no padding");
+        assert_eq!(infer_pitch(768 * 192, 180, 180, -720), -768, "bottom-up keeps its sign");
+        assert_eq!(infer_pitch(1344 * 208, 330, 202, 1320), 1344, "330 wide padded to 336, 202 rows to 208");
+        assert_eq!(infer_pitch(100, 180, 180, 720), 720, "a short buffer is left to the bounds check");
+    }
+
+    #[test]
+    fn widths_that_are_not_multiples_of_16_are_not_skewed() {
+        for (w, h) in [(180u32, 180u32), (330, 202), (100, 180)] {
+            let path = temp_path(&format!("dec-skew-{w}x{h}"), "a.mp4");
+            make_quadrants(&path, 1, w, h);
+            let (mut dec, info) = VideoDecoder::open(&path).unwrap();
+            assert_eq!((info.width, info.height), (w, h));
+            let f = dec.frame_at(500).unwrap();
+            let px = |x: u32, y: u32| {
+                let i = ((y * w + x) * 4) as usize;
+                [f[i + 2], f[i + 1], f[i]]
+            };
+            let (qx, qy) = (w / 4, h / 4);
+            for (x, y, want) in [(qx, qy, [255, 0, 0]), (3 * qx, qy, [0, 255, 0]), (qx, 3 * qy, [0, 0, 255]), (3 * qx, 3 * qy, [255, 255, 255])] {
+                assert!(near(px(x, y), want), "{w}x{h} at ({x},{y}): {:?} want {want:?}", px(x, y));
+            }
+        }
     }
 
     #[test]
