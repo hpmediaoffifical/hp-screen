@@ -7,6 +7,15 @@ pub const MAX_LINE_CHARS: usize = 42;
 pub const MAX_LINES: usize = 2;
 pub const MIN_CUE_MS: i64 = 1000;
 pub const MAX_CUE_MS: i64 = 6000;
+/// Burned-in subtitles: text height, bottom margin and widest box, as fractions of the frame.
+pub const BURN_FONT: f32 = 0.045;
+pub const BURN_BOTTOM: f32 = 0.06;
+pub const BURN_MAX_WIDTH: f32 = 0.8;
+
+/// Height of a burned-in cue of `lines` lines, as a fraction of the frame height.
+pub fn burned_height(lines: usize) -> f32 {
+    lines.max(1) as f32 * BURN_FONT * 1.3 + 2.0 * BURN_FONT * 0.3
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Cue {

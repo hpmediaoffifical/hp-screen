@@ -4,6 +4,7 @@ use crate::edit::EditDoc;
 use crate::edit::EffectToggles;
 use crate::effects::{Draw, Effects, draws_at};
 use crate::layout::{Layout, layout, source_view};
+use crate::subtitle::{BURN_BOTTOM, Cue, burned_height, cue_at};
 use crate::zoom::{Camera, camera_at, camera_track};
 
 /// Camera samples per second for zoom.
@@ -37,6 +38,8 @@ pub struct Plan {
     /// Zoom camera over source time; `None` when zoom is off.
     track: Option<Vec<(i64, Camera)>>,
     layout: Layout,
+    /// Cues drawn into the video; `None` when not burned in.
+    burned: Option<Vec<Cue>>,
 }
 
 impl Plan {
@@ -48,7 +51,8 @@ impl Plan {
             camera_track(&doc.zoom, &cursor, src.duration_ms, CAMERA_STEP_MS)
         });
         let layout = layout(src.width, src.height, &doc.frame);
-        Plan { src, cuts: doc.cuts(src.duration_ms), effects, toggles: doc.effects, track, layout }
+        let burned = doc.subtitles.burn.then(|| doc.subtitles.cues.clone());
+        Plan { src, cuts: doc.cuts(src.duration_ms), effects, toggles: doc.effects, track, layout, burned }
     }
 
     /// The same edit as a GIF: `fps` frames per second, `width` pixels wide.
@@ -86,10 +90,20 @@ impl Plan {
         }
         let out_ms = (n * 1000 / self.fps() as u64) as i64;
         let src_ms = self.cuts.to_source(out_ms)?;
-        let draws = match &self.effects {
+        let mut draws = match &self.effects {
             Some(e) => draws_at(e, src_ms, &self.toggles, self.src.height),
             None => Vec::new(),
         };
+        if let Some(cue) = self.burned.as_deref().and_then(|c| cue_at(c, src_ms)) {
+            // Shortcut chips move up above the subtitle.
+            let above = BURN_BOTTOM + burned_height(cue.text.lines().count()) + 0.02;
+            for d in draws.iter_mut() {
+                if let Draw::Chip { bottom, .. } = d {
+                    *bottom = above;
+                }
+            }
+            draws.push(Draw::Subtitle { text: cue.text.clone() });
+        }
         let camera = self.track.as_deref().map_or(Camera::WHOLE, |t| camera_at(t, src_ms));
         let view = source_view(camera, self.src.width, self.src.height, self.layout.fill_aspect);
         Some(FramePlan { out_ms, src_ms, draws, camera, view })
@@ -187,6 +201,31 @@ mod tests {
         assert_eq!(p.fps(), 10);
         assert_eq!(p.frames(), 60, "6 s kept at 10 fps");
         assert_eq!(p.out_size(), (320, 240));
+    }
+
+    #[test]
+    fn burned_subtitle_is_in_the_frame_plan() {
+        use crate::subtitle::{Cue, SubtitleDoc};
+        let cues = vec![Cue { start_ms: 1000, end_ms: 2000, text: "Xin chào".into() }];
+        let on = EditDoc { subtitles: SubtitleDoc { cues: cues.clone(), burn: true }, ..EditDoc::default() };
+        let p = Plan::new(src(640, 480), &on, None);
+        assert!(p.frame(45).unwrap().draws.contains(&Draw::Subtitle { text: "Xin chào".into() }), "1.5 s");
+        assert!(!p.frame(0).unwrap().draws.iter().any(|d| matches!(d, Draw::Subtitle { .. })));
+        let off = EditDoc { subtitles: SubtitleDoc { cues, burn: false }, ..EditDoc::default() };
+        assert!(Plan::new(src(640, 480), &off, None).frame(45).unwrap().draws.is_empty());
+    }
+
+    #[test]
+    fn chips_move_above_a_burned_subtitle() {
+        use crate::input_log::{Event, ParsedLog};
+        use crate::subtitle::{Cue, SubtitleDoc};
+        let log = ParsedLog { header: None, events: vec![Event::Key { t: 1000, k: "Ctrl+S".into() }] };
+        let fx = crate::effects::build_effects(&log, 640, 480);
+        let doc = EditDoc { subtitles: SubtitleDoc { cues: vec![Cue { start_ms: 1000, end_ms: 2000, text: "Lưu".into() }], burn: true }, ..EditDoc::default() };
+        let p = Plan::new(src(640, 480), &doc, Some(fx));
+        let chip = p.frame(36).unwrap().draws.into_iter().find_map(|d| if let Draw::Chip { bottom, .. } = d { Some(bottom) } else { None });
+        let top_of_subtitle = crate::subtitle::BURN_BOTTOM + crate::subtitle::burned_height(1);
+        assert!(chip.unwrap() > top_of_subtitle, "the chip sits above the subtitle box: {chip:?}");
     }
 
     #[test]

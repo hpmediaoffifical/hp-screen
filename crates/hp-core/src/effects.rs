@@ -72,6 +72,8 @@ pub enum Draw {
     Dot { x: f32, y: f32, radius: f32, alpha: f32, button: Button },
     Wheel { x: f32, y: f32, up: bool, alpha: f32 },
     Chip { text: String, alpha: f32, bottom: f32 },
+    /// A burned-in subtitle cue, placed in the output frame.
+    Subtitle { text: String },
 }
 
 pub fn build_effects(log: &ParsedLog, video_w: u32, video_h: u32) -> Effects {

@@ -3,6 +3,7 @@
 use hp_core::effects::{Draw, RIPPLE_RADIUS};
 use hp_core::input_log::Button;
 use hp_core::layout::{Background, Layout, SHADOW_OFFSET};
+use hp_core::subtitle::{BURN_BOTTOM, BURN_FONT, BURN_MAX_WIDTH};
 use std::mem::ManuallyDrop;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -36,6 +37,8 @@ pub struct Compositor {
     chip_format: IDWriteTextFormat,
     /// Chip font size in pixels.
     chip_size: f32,
+    sub_format: IDWriteTextFormat,
+    sub_size: f32,
 }
 
 /// Chip text height as a fraction of the output height.
@@ -132,6 +135,19 @@ impl Compositor {
                     &HSTRING::from("vi-VN"),
                 )
                 .map_err(err("Không tạo được phông chữ"))?;
+            let sub_size = (BURN_FONT * out_h as f32).max(10.0);
+            let sub_format = text
+                .CreateTextFormat(
+                    &HSTRING::from("Segoe UI"),
+                    None,
+                    DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                    DWRITE_FONT_STYLE_NORMAL,
+                    DWRITE_FONT_STRETCH_NORMAL,
+                    sub_size,
+                    &HSTRING::from("vi-VN"),
+                )
+                .map_err(err("Không tạo được phông chữ"))?;
+            let _ = sub_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
             Ok(Compositor {
                 ctx,
                 target,
@@ -143,6 +159,8 @@ impl Compositor {
                 text,
                 chip_format,
                 chip_size,
+                sub_format,
+                sub_size,
             })
         }
     }
@@ -300,6 +318,7 @@ impl Compositor {
                         self.draw_wheel(px, py, full_ring, *up, *alpha)?
                     }
                     Draw::Chip { text, alpha, bottom } if *alpha > 0.0 => self.draw_chip(text, *alpha, *bottom)?,
+                    Draw::Subtitle { text } => self.draw_subtitle(text)?,
                     _ => {}
                 }
             }
@@ -362,6 +381,33 @@ impl Compositor {
             let bg = D2D1_ROUNDED_RECT { rect, radiusX: h / 2.0, radiusY: h / 2.0 };
             self.ctx.FillRoundedRectangle(&bg, &self.brush((20.0 / 255.0, 20.0 / 255.0, 24.0 / 255.0), 0.85 * alpha)?);
             let white = self.brush((1.0, 1.0, 1.0), alpha)?;
+            self.ctx.DrawTextLayout(point(left + pad_x - m.left, rect.top + pad_y - m.top), &layout, &white, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        }
+        Ok(())
+    }
+}
+
+impl Compositor {
+    /// A burned-in subtitle: white text on a dark rounded box, centred, above the bottom margin.
+    unsafe fn draw_subtitle(&self, text: &str) -> Result<(), String> {
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        let (ow, oh) = (self.out_w as f32, self.out_h as f32);
+        let pad_x = self.sub_size * 0.6;
+        let pad_y = self.sub_size * 0.3;
+        // SAFETY: DirectWrite and drawing calls with valid pointers, between BeginDraw and EndDraw.
+        unsafe {
+            let max_w = (BURN_MAX_WIDTH * ow - 2.0 * pad_x).max(10.0);
+            let layout = self.text.CreateTextLayout(&wide, &self.sub_format, max_w, oh).map_err(err("Không dựng được chữ"))?;
+            let mut m = DWRITE_TEXT_METRICS::default();
+            layout.GetMetrics(&mut m).map_err(err("Không dựng được chữ"))?;
+            let (w, h) = (m.width + 2.0 * pad_x, m.height + 2.0 * pad_y);
+            let bottom = oh * (1.0 - BURN_BOTTOM);
+            let left = (ow - w) / 2.0;
+            let rect = D2D_RECT_F { left, top: bottom - h, right: left + w, bottom };
+            let radius = self.sub_size * 0.35;
+            self.ctx.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect, radiusX: radius, radiusY: radius }, &self.brush((0.0, 0.0, 0.0), 0.72)?);
+            let white = self.brush((1.0, 1.0, 1.0), 1.0)?;
+            // The layout is `max_w` wide with centred lines: shift it so its text sits in the box.
             self.ctx.DrawTextLayout(point(left + pad_x - m.left, rect.top + pad_y - m.top), &layout, &white, D2D1_DRAW_TEXT_OPTIONS_NONE);
         }
         Ok(())
@@ -489,6 +535,18 @@ mod tests {
         let k = vw / 160.0;
         let (px, py) = ((vx + vw / 2.0 + 10.0 * k) as u32, (vy + vh / 2.0) as u32);
         assert!(rgb_at(out, l.out_w, px, py)[2] > 200, "ring on the video at ({px},{py}): {:?}", rgb_at(out, l.out_w, px, py));
+    }
+
+    #[test]
+    fn subtitle_is_drawn_near_the_bottom() {
+        let src = solid(400, 300, |_, _| [255, 255, 255]);
+        let mut c = Compositor::new(400, 300, Device::Warp).unwrap();
+        let sub = Draw::Subtitle { text: "Xin chào các bạn".into() };
+        let out = c.render(&src, 400, 300, None, None, &[sub]).unwrap();
+        let dark = (255..282).any(|y| (190..210).any(|x| rgb_at(out, 400, x, y)[0] < 80));
+        assert!(dark, "subtitle box above the bottom 6%");
+        assert_eq!(rgb_at(out, 400, 200, 40), [255, 255, 255]);
+        assert!((0..400).all(|x| rgb_at(out, 400, x, 299)[0] > 240), "6% margin kept free");
     }
 
     #[test]
