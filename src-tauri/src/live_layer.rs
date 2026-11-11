@@ -133,11 +133,20 @@ impl LiveLayer {
         let Some(area) = area else { return };
         let mut painter = lock(&self.painter);
         if painter.as_ref().is_none_or(|p| (p.w, p.h) != (w, h)) {
-            *painter = Painter::new(self.device, w, h).ok();
+            *painter = match Painter::new(self.device, w, h) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    #[cfg(debug_assertions)]
+                    eprintln!("[hp] live layer painter for {w}x{h} failed: {e}");
+                    None
+                }
+            };
         }
         if let Some(p) = painter.as_mut()
-            && p.paint(canvas, area, &visible, cam).is_err()
+            && let Err(e) = p.paint(canvas, area, &visible, cam)
         {
+            #[cfg(debug_assertions)]
+            eprintln!("[hp] live layer paint failed for {area:?} on {w}x{h}: {e}");
             // A lost device is made again on the next frame.
             *painter = None;
         }
@@ -440,6 +449,40 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "uses the GPU"]
+    fn like_the_pipeline() {
+        let run = |mta: bool| {
+            std::thread::spawn(move || {
+                if mta {
+                    crate::encoder::init_thread();
+                }
+                let live = LiveLayer::new();
+                live.upsert_stroke(red_line(vec![(1180.0, 800.0), (1380.0, 800.0)], 14.0));
+                let mut c = [25u8, 25, 25, 255].repeat(2560 * 1600);
+                live.apply(&mut c, 2560, 1600, now_ms());
+                rgb(&c, 2560, 1280, 800)
+            })
+            .join()
+            .unwrap()
+        };
+        let plain = run(false);
+        let mta = run(true);
+        println!("plain thread {plain:?}, after init_thread {mta:?}");
+        assert!(plain[0] > 200 && mta[0] > 200);
+    }
+
+    #[test]
+    #[ignore = "uses the GPU"]
+    fn stroke_is_drawn_on_the_gpu_too() {
+        let live = LiveLayer::with_device(Device::Hardware);
+        live.upsert_stroke(red_line(vec![(20.0, 100.0), (180.0, 100.0)], 8.0));
+        let mut c = grey(200, 200);
+        live.apply(&mut c, 200, 200, 0);
+        let [r, g, _] = rgb(&c, 200, 100, 100);
+        assert!(r > 200 && g < 80, "stroke pixel on the GPU {:?}", rgb(&c, 200, 100, 100));
+    }
+
+    #[test]
     #[ignore]
     fn apply_cost_on_a_big_frame() {
         let live = LiveLayer::with_device(Device::Hardware);
@@ -451,5 +494,9 @@ mod tests {
             live.apply(&mut c, 2560, 1600, 0);
         }
         println!("live layer apply on 2560x1600: {:.2} ms per frame", start.elapsed().as_secs_f64() * 1000.0 / 30.0);
+        let mut fresh = grey(2560, 1600);
+        live.apply(&mut fresh, 2560, 1600, 0);
+        // The first segment runs from (300, 800) to (310, 820): (305, 810) is on it.
+        assert!(rgb(&fresh, 2560, 305, 810)[0] > 200, "stroke pixel on a big frame {:?}", rgb(&fresh, 2560, 305, 810));
     }
 }

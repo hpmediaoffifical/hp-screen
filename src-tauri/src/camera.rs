@@ -143,16 +143,14 @@ unsafe fn read_camera(id: Option<&str>, latest: &SharedFrame, stop: &AtomicBool,
             let attrs = attrs.ok_or("Không mở được camera")?;
             attrs.SetUINT32(&MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, 1).map_err(|e| camera_error(e.code()))?;
             let reader = MFCreateSourceReaderFromMediaSource(&source, &attrs).map_err(|e| camera_error(e.code()))?;
-            let (w, h, rate) = best_native_size(&reader);
+            // Video processing converts colours but does not resize: pick the device's own
+            // format first, then ask for RGB32 in that size.
+            if let Some(native) = best_native_type(&reader) {
+                let _ = reader.SetCurrentMediaType(VIDEO, None, &native);
+            }
             let out = MFCreateMediaType().map_err(|e| camera_error(e.code()))?;
             out.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video).map_err(|e| camera_error(e.code()))?;
             out.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32).map_err(|e| camera_error(e.code()))?;
-            if w > 0 && h > 0 {
-                let _ = out.SetUINT64(&MF_MT_FRAME_SIZE, ((w as u64) << 32) | h as u64);
-                if let Some(rate) = rate {
-                    let _ = out.SetUINT64(&MF_MT_FRAME_RATE, rate);
-                }
-            }
             reader.SetCurrentMediaType(VIDEO, None, &out).map_err(|e| camera_error(e.code()))?;
             let current = reader.GetCurrentMediaType(VIDEO).map_err(|e| camera_error(e.code()))?;
             let size = current.GetUINT64(&MF_MT_FRAME_SIZE).map_err(|e| camera_error(e.code()))?;
@@ -188,25 +186,21 @@ unsafe fn read_camera(id: Option<&str>, latest: &SharedFrame, stop: &AtomicBool,
     }
 }
 
-/// The native picture to read (see `pick_native`), with its packed frame rate.
-unsafe fn best_native_size(reader: &IMFSourceReader) -> (u32, u32, Option<u64>) {
+/// The device format to read (see `pick_native`).
+unsafe fn best_native_type(reader: &IMFSourceReader) -> Option<IMFMediaType> {
     unsafe {
-        let mut found: Vec<(u32, u32, f64, Option<u64>)> = Vec::new();
+        let mut found: Vec<(IMFMediaType, (u32, u32, f64))> = Vec::new();
         for i in 0..256 {
             let Ok(t) = reader.GetNativeMediaType(VIDEO, i) else { break };
             let Ok(size) = t.GetUINT64(&MF_MT_FRAME_SIZE) else { continue };
-            let rate = t.GetUINT64(&MF_MT_FRAME_RATE).ok();
-            let fps = rate.map_or(0.0, |r| {
+            let fps = t.GetUINT64(&MF_MT_FRAME_RATE).map_or(0.0, |r| {
                 let (num, den) = ((r >> 32) as u32, r as u32);
                 if den == 0 { 0.0 } else { num as f64 / den as f64 }
             });
-            found.push(((size >> 32) as u32, size as u32, fps, rate));
+            found.push((t, ((size >> 32) as u32, size as u32, fps)));
         }
-        let sizes: Vec<(u32, u32, f64)> = found.iter().map(|&(w, h, fps, _)| (w, h, fps)).collect();
-        match pick_native(&sizes) {
-            Some(i) => (found[i].0, found[i].1, found[i].3),
-            None => (0, 0, None),
-        }
+        let sizes: Vec<(u32, u32, f64)> = found.iter().map(|(_, s)| *s).collect();
+        pick_native(&sizes).map(|i| found.swap_remove(i).0)
     }
 }
 

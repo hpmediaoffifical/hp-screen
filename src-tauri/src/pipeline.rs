@@ -381,6 +381,12 @@ mod desktop_tests {
     #[ignore = "needs a desktop session"]
     fn recorded_frames_contain_strokes() {
         use hp_core::stroke::{COLORS, Stroke, Tool};
+        use windows::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext};
+        // Like the app: physical pixels, so the area matches the captured frame on a scaled display.
+        // SAFETY: plain process setting; failing (already set) is harmless.
+        unsafe {
+            let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        }
         let path = temp_file("live-stroke.mp4");
         let live = LiveLayer::new();
         let target = Target::Monitor { index: 0 };
