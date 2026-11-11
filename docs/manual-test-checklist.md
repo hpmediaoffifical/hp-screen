@@ -141,3 +141,28 @@ Cột "Máy" ghi những gì kiểm thử tự động đã phủ (video mẫu d
 | W6 | Rút dây camera giữa lúc quay: thanh gọn báo lỗi, việc quay vẫn tiếp tục | — | |
 | W7 | Mở camera bằng app khác (Camera của Windows) rồi bật webcam trong HP Screen: báo "Camera đang được ứng dụng khác dùng" | Đạt cho thông báo (`camera_errors_are_explained`) | |
 | R1 | Quay một **vùng chọn**: quanh vùng có viền trắng nét đứt (từ lúc đếm ngược tới khi dừng); chuột bấm xuyên qua viền; video quay ra không có viền | Đạt cho vị trí (`the_border_sits_just_outside_the_region`) | |
+
+## Zoom (giai đoạn 2, bước 5)
+
+| # | Việc cần thử | Máy | Người |
+|---|---|---|---|
+| Z1 | Thẻ Zoom → "Bật zoom" trên một video có click: rãnh Zoom hiện các đoạn tự tạo quanh chỗ click | Đạt (`clicks_close_in_time_and_place_make_one_segment`) | |
+| Z2 | Phát xem trước: khung phóng to mượt vào chỗ click rồi thu về, không giật, không nảy | Đạt (`zoom_eases_in_and_out`) | |
+| Z3 | Kéo trên chỗ trống của rãnh Zoom để thêm một đoạn; kéo mép để đổi thời gian; kéo giữa để dời | — | |
+| Z4 | Chọn một đoạn: đổi mức phóng bằng thanh trượt (trên 2× có cảnh báo); "Chọn tâm trên video" rồi bấm lên video | — | |
+| Z5 | Delete xóa đoạn zoom đang chọn; Ctrl+Z khôi phục; "Tự tạo lại theo click" giữ các đoạn bạn đã sửa | Đạt (`regenerate_keeps_manual_segments`) | |
+| Z6 | Xuất MP4: chỗ zoom giống hệt xem trước; vòng click phóng theo, chip phím thì không | Đạt cho khung hình (`zoomed_export_shows_the_zoomed_area`) | |
+| Z7 | Zoom sát mép hoặc góc màn hình: không lộ phần ngoài video | Đạt (`corner_center_is_kept_inside_the_video`) | |
+| Z8 | Video không có nhật ký thao tác: vẫn thêm zoom bằng tay được | — | |
+
+## Khung hình và GIF (giai đoạn 2, bước 6)
+
+| # | Việc cần thử | Máy | Người |
+|---|---|---|---|
+| F1 | Thẻ Khung → 9:16, "Vừa khung": xem trước có nền trên và dưới, video ở giữa | Đạt (`tall_export_has_the_frame_size_and_background`) | |
+| F2 | 9:16, "Lấp đầy": video kín khung; bật zoom thì vùng cắt đi theo zoom | Đạt (`fill_export_crops`) | |
+| F3 | Đổi nền (6 mẫu), khoảng đệm, bo góc, bóng đổ: xem trước và bản xuất giống nhau | Đạt cho bản xuất (test vẽ của compositor) | |
+| F4 | Xuất MP4 ở 1:1 và 9:16: file có đúng tỉ lệ | Đạt (`tall_export_has_the_frame_size_and_background`) | |
+| F5 | Thẻ Xuất → GIF, 15 fps, 720 px: file `_edit.gif` mở được trong trình duyệt, chạy lặp, đúng tốc độ | Đạt (`gif_has_the_frames_and_size`, `frames_size_timing_and_colour_survive`) | |
+| F6 | GIF hiện trong Thư viện (loại Ảnh) | Đạt cho cách xếp loại (`gif_names_do_not_overwrite`) | |
+| F7 | Quay một vùng chọn có kích thước bất kỳ (ví dụ 301×201), xuất ra: hình không bị lệch hay xéo | Đạt (`widths_that_are_not_multiples_of_16_are_not_skewed`) | |
