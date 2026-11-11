@@ -144,7 +144,7 @@ pub fn finish(app: &AppHandle, action: SnipAction, png: &str) -> Result<Option<S
         events::library_changed(app);
     }
     if matches!(action, SnipAction::Copy | SnipAction::Both) {
-        screenshot::copy_to_clipboard(&image);
+        screenshot::copy_to_clipboard(&image)?;
     }
     close(app);
     Ok(saved)

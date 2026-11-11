@@ -29,7 +29,20 @@ type Drag =
   | { kind: "select"; start: Point }
   | { kind: "move"; start: Point; origin: Box }
   | { kind: "resize"; handle: Handle; origin: Box }
-  | { kind: "draw"; shape: Shape };
+  | { kind: "draw"; shape: Shape }
+  | { kind: "moveText"; index: number; start: Point; origin: Point; moved: boolean };
+
+type TextShape = Extract<Shape, { kind: "text" }>;
+
+const measureContext = document.createElement("canvas").getContext("2d")!;
+
+/** Area covered by a text annotation, in image pixels. */
+function textBox(s: TextShape): Box {
+  measureContext.font = `600 ${s.size}px "Segoe UI", sans-serif`;
+  const lines = s.text.split("\n");
+  const width = Math.max(...lines.map((l) => measureContext.measureText(l).width));
+  return { x: s.at.x, y: s.at.y, w: width, h: lines.length * s.size * 1.25 };
+}
 
 const COLORS = ["#ff3b30", "#ffcc00", "#34c759", "#0a84ff", "#ffffff", "#111111"];
 const COLOR_NAMES = ["Đỏ", "Vàng", "Xanh lá", "Xanh dương", "Trắng", "Đen"];
@@ -264,8 +277,23 @@ export default function SnipOverlay() {
     setTextValue("");
   }, [textAt, textValue, color, sizeIndex, scale]);
 
+  /** Index of the top-most text annotation under `p`, if any. */
+  const hitText = (p: Point): number => {
+    const pad = 4 * scale;
+    for (let i = shapes.length - 1; i >= 0; i--) {
+      const s = shapes[i];
+      if (s.kind !== "text") continue;
+      const b = textBox(s);
+      if (p.x >= b.x - pad && p.x <= b.x + b.w + pad && p.y >= b.y - pad && p.y <= b.y + b.h + pad) return i;
+    }
+    return -1;
+  };
+
   function onPointerDown(e: ReactPointerEvent<HTMLCanvasElement>) {
     if (e.button !== 0 || !image || busy) return;
+    // Without this the browser moves keyboard focus to the page after the press, which
+    // immediately closed a text box that this press had just opened.
+    e.preventDefault();
     if (textAt) {
       commitText();
       return;
@@ -273,7 +301,11 @@ export default function SnipOverlay() {
     const p = toImage(e);
     e.currentTarget.setPointerCapture(e.pointerId);
     const handle = hitHandle(p);
-    if (tool && selection && inside(p, selection) && !handle) {
+    const textIndex = (tool === null || tool === "text") && selection && !handle ? hitText(p) : -1;
+    if (textIndex >= 0) {
+      const s = shapes[textIndex] as TextShape;
+      setDrag({ kind: "moveText", index: textIndex, start: p, origin: s.at, moved: false });
+    } else if (tool && selection && inside(p, selection) && !handle) {
       const width = SIZES[sizeIndex].stroke * scale;
       if (tool === "text") {
         setTextAt(p);
@@ -317,6 +349,16 @@ export default function SnipOverlay() {
         y: Math.min(Math.max(o.y + p.y - drag.start.y, 0), image.naturalHeight - o.h),
       });
     }
+    if (drag.kind === "moveText") {
+      const dx = p.x - drag.start.x;
+      const dy = p.y - drag.start.y;
+      const moved = drag.moved || Math.hypot(dx, dy) > 3 * scale;
+      if (moved) {
+        const at = { x: drag.origin.x + dx, y: drag.origin.y + dy };
+        setShapes((list) => list.map((s, i) => (i === drag.index && s.kind === "text" ? { ...s, at } : s)));
+      }
+      if (moved !== drag.moved) setDrag({ ...drag, moved });
+    }
     if (drag.kind === "draw") {
       const s = drag.shape;
       setDrag({ kind: "draw", shape: s.kind === "pen" ? { ...s, points: [...s.points, q] } : s.kind === "text" ? s : { ...s, to: q } });
@@ -330,6 +372,14 @@ export default function SnipOverlay() {
       setSelection({ x: 0, y: 0, w: image.naturalWidth, h: image.naturalHeight });
     }
     if (drag.kind === "draw") setShapes((s) => [...s, drag.shape]);
+    if (drag.kind === "moveText" && !drag.moved && tool === "text") {
+      // A click (not a drag) on existing text with the text tool edits it.
+      const s = shapes[drag.index] as TextShape;
+      setShapes((list) => list.filter((_, i) => i !== drag.index));
+      setColor(s.color);
+      setTextAt(s.at);
+      setTextValue(s.text);
+    }
     setDrag(null);
   }
 
@@ -402,6 +452,7 @@ export default function SnipOverlay() {
   if (hover && selection && !drag) {
     const handle = hitHandle(hover);
     if (handle) cursor = CURSORS[handle];
+    else if ((tool === null || tool === "text") && hitText(hover) >= 0) cursor = "move";
     else if (inside(hover, selection)) cursor = tool === "text" ? "text" : tool ? "crosshair" : "move";
   }
 
@@ -442,6 +493,11 @@ export default function SnipOverlay() {
         <textarea
           className="snip-text"
           autoFocus
+          ref={(el) => {
+            // Focus after the press that opened the box has finished.
+            if (el && document.activeElement !== el) requestAnimationFrame(() => el.focus());
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
           rows={1}
           aria-label="Nội dung chữ"
           placeholder="Nhập chữ…"
