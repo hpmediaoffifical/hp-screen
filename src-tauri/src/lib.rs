@@ -18,6 +18,7 @@ mod decoder;
 mod compositor;
 mod export;
 mod edit_cmds;
+mod live_layer;
 #[cfg(test)]
 mod test_media;
 

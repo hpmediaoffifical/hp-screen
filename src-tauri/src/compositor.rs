@@ -19,7 +19,6 @@ pub enum Device {
     /// The GPU, falling back to WARP when no hardware device can be made.
     Hardware,
     /// Software rendering (tests).
-    #[cfg_attr(not(test), allow(dead_code))]
     Warp,
 }
 
@@ -76,23 +75,36 @@ unsafe fn d3d_device(driver: D3D_DRIVER_TYPE) -> windows::core::Result<ID3D11Dev
     }
 }
 
+/// A Direct2D device context on a new Direct3D device (single-threaded: use it on one thread).
+pub(crate) fn d2d_context(device: Device) -> Result<ID2D1DeviceContext, String> {
+    // SAFETY: plain Direct3D/Direct2D object creation; all pointers are valid.
+    unsafe {
+        let d3d = match device {
+            Device::Hardware => d3d_device(D3D_DRIVER_TYPE_HARDWARE).or_else(|_| d3d_device(D3D_DRIVER_TYPE_WARP)),
+            Device::Warp => d3d_device(D3D_DRIVER_TYPE_WARP),
+        }
+        .map_err(err("Không tạo được thiết bị đồ họa"))?;
+        let dxgi: IDXGIDevice = d3d.cast().map_err(err("Không tạo được thiết bị đồ họa"))?;
+        let factory: ID2D1Factory1 =
+            D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None).map_err(err("Không khởi động được Direct2D"))?;
+        let d2d = factory.CreateDevice(&dxgi).map_err(err("Không khởi động được Direct2D"))?;
+        d2d.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE).map_err(err("Không khởi động được Direct2D"))
+    }
+}
+
+/// Bitmap properties for 32-bit BGRA bitmaps.
+pub(crate) fn bgra_props(options: D2D1_BITMAP_OPTIONS, alpha: D2D1_ALPHA_MODE) -> D2D1_BITMAP_PROPERTIES1 {
+    bitmap_props(options, alpha)
+}
+
 impl Compositor {
     pub fn new(out_w: u32, out_h: u32, device: Device) -> Result<Compositor, String> {
         if out_w == 0 || out_h == 0 {
             return Err(format!("Kích thước khung xuất không hợp lệ: {out_w}x{out_h}"));
         }
-        // SAFETY: plain Direct3D/Direct2D object creation; all pointers are valid.
+        // SAFETY: plain Direct2D object creation; all pointers are valid.
         unsafe {
-            let d3d = match device {
-                Device::Hardware => d3d_device(D3D_DRIVER_TYPE_HARDWARE).or_else(|_| d3d_device(D3D_DRIVER_TYPE_WARP)),
-                Device::Warp => d3d_device(D3D_DRIVER_TYPE_WARP),
-            }
-            .map_err(err("Không tạo được thiết bị đồ họa"))?;
-            let dxgi: IDXGIDevice = d3d.cast().map_err(err("Không tạo được thiết bị đồ họa"))?;
-            let factory: ID2D1Factory1 =
-                D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None).map_err(err("Không khởi động được Direct2D"))?;
-            let d2d = factory.CreateDevice(&dxgi).map_err(err("Không khởi động được Direct2D"))?;
-            let ctx = d2d.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE).map_err(err("Không khởi động được Direct2D"))?;
+            let ctx = d2d_context(device)?;
             let size = D2D_SIZE_U { width: out_w, height: out_h };
             let target = ctx
                 .CreateBitmap(size, None, 0, &bitmap_props(D2D1_BITMAP_OPTIONS_TARGET, D2D1_ALPHA_MODE_PREMULTIPLIED))
