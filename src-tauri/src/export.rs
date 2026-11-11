@@ -31,7 +31,16 @@ pub fn part_path(out: &Path) -> PathBuf {
     dir.join(DATA_DIR).join(format!("{name}.part"))
 }
 
-/// Exports `plan` of `source` to `out`. `progress(done, total)` is called every few frames.
+/// Moves `from` to `to`, failing (instead of replacing) when `to` exists.
+fn move_no_replace(from: &Path, to: &Path) -> Result<(), String> {
+    use windows::Win32::Storage::FileSystem::{MOVE_FILE_FLAGS, MoveFileExW};
+    use windows::core::HSTRING;
+    // SAFETY: two valid wide strings; no flags means "fail if the target exists".
+    unsafe { MoveFileExW(&HSTRING::from(from.as_os_str()), &HSTRING::from(to.as_os_str()), MOVE_FILE_FLAGS(0)) }.map_err(|e| e.to_string())
+}
+
+/// Exports `plan` of `source` to `out`, or to the next free name if `out` was taken while
+/// exporting; returns the file written. `progress(done, total)` is called every few frames.
 pub fn run_export(
     source: &Path,
     out: &Path,
@@ -39,7 +48,7 @@ pub fn run_export(
     bitrate: u32,
     progress: &mut dyn FnMut(u64, u64),
     cancel: &AtomicBool,
-) -> Result<(), String> {
+) -> Result<PathBuf, String> {
     let part = part_path(out);
     if let Some(dir) = part.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("Không tạo được thư mục tạm: {e}"))?;
@@ -52,16 +61,28 @@ pub fn run_export(
             return Err(e);
         }
     };
-    if let Err(e) = std::fs::rename(&part, out) {
-        let _ = std::fs::remove_file(&part);
-        return Err(format!("Không lưu được file xuất: {e}"));
+    // The planned name may have been taken while exporting: never replace that file.
+    let mut out = out.to_path_buf();
+    let mut tries = 0;
+    loop {
+        match move_no_replace(&part, &out) {
+            Ok(()) => break,
+            Err(_) if out.exists() && tries < 50 => {
+                tries += 1;
+                out = export_path(source);
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&part);
+                return Err(format!("Không lưu được file xuất: {e}"));
+            }
+        }
     }
     let (w, h) = plan.out_size();
     if let Some(frame) = first_frame {
-        crate::pipeline::save_thumbnail(&frame, w, h, &thumb_path(out));
+        crate::pipeline::save_thumbnail(&frame, w, h, &thumb_path(&out));
     }
-    write_meta(out, &MediaMeta::from_frames(plan.frames(), plan.fps(), w, h));
-    Ok(())
+    write_meta(&out, &MediaMeta::from_frames(plan.frames(), plan.fps(), w, h));
+    Ok(out)
 }
 
 /// Encodes every planned frame into `part`; returns the first output frame for the thumbnail.
@@ -216,7 +237,7 @@ mod tests {
 
     fn export(source: &Path, plan: &Plan) -> Result<PathBuf, String> {
         let out = export_path(source);
-        run_export(source, &out, plan, 2_000_000, &mut |_, _| {}, &AtomicBool::new(false)).map(|_| out)
+        run_export(source, &out, plan, 2_000_000, &mut |_, _| {}, &AtomicBool::new(false))
     }
 
     #[test]
@@ -257,6 +278,19 @@ mod tests {
         // The red frame gets a blue hold dot at the click point.
         let [_, _, b] = centre_rgb(dec.frame_at(500).unwrap(), 640, 480);
         assert!(b > 80, "blue from the right-click dot, got {b}");
+    }
+
+    #[test]
+    fn a_file_that_appears_during_export_is_never_overwritten() {
+        let source = temp_path("exp-race", "a.mp4");
+        make_sample(&source, 1, 320, 240, false);
+        let planned = export_path(&source);
+        // Someone takes the planned name while the export runs (e.g. a rename in the library).
+        std::fs::write(&planned, b"precious").unwrap();
+        let written = run_export(&source, &planned, &plan_for(&source, vec![]), 2_000_000, &mut |_, _| {}, &AtomicBool::new(false)).unwrap();
+        assert_eq!(std::fs::read(&planned).unwrap(), b"precious");
+        assert_eq!(written, source.with_file_name("a_edit_2.mp4"));
+        assert!(written.exists());
     }
 
     #[test]

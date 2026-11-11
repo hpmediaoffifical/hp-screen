@@ -113,7 +113,8 @@ fn effects_for(media: &Path, info: &VideoInfo) -> Option<Effects> {
 }
 
 /// Removes `.part` files an export left behind when the app was closed while exporting.
-fn remove_stale_parts(dir: &Path) {
+/// Called at start-up and before each export (never while one is running).
+pub(crate) fn remove_stale_parts(dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir.join(DATA_DIR)) else { return };
     for e in entries.flatten() {
         if e.path().extension().is_some_and(|x| x == "part") {
@@ -186,8 +187,8 @@ pub async fn export_start(
             *exports.running.lock().unwrap_or_else(|e| e.into_inner()) = None;
         }
         match result {
-            Ok(()) => {
-                let _ = app.emit(EXPORT_DONE, Done { path: out.to_string_lossy().into_owned() });
+            Ok(written) => {
+                let _ = app.emit(EXPORT_DONE, Done { path: written.to_string_lossy().into_owned() });
                 crate::events::library_changed(&app);
             }
             Err(message) => {
@@ -228,6 +229,21 @@ mod tests {
 ").unwrap();
         let fx = effects_for(&media, &info()).expect("effects from the log");
         assert_eq!(fx.ripples.len(), 1);
+    }
+
+    #[test]
+    fn stale_parts_are_removed_and_nothing_else() {
+        let media = temp_path("edit-parts", "a.mp4");
+        let dir = media.parent().unwrap();
+        let data = dir.join(DATA_DIR);
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("a_edit.mp4.part"), b"half").unwrap();
+        std::fs::write(data.join("a.edit.json"), b"{}").unwrap();
+        std::fs::write(dir.join("b.part"), b"user file").unwrap();
+        remove_stale_parts(dir);
+        assert!(!data.join("a_edit.mp4.part").exists());
+        assert!(data.join("a.edit.json").exists());
+        assert!(dir.join("b.part").exists(), "only the data folder is cleaned");
     }
 
     #[test]

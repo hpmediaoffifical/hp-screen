@@ -41,6 +41,10 @@ pub fn run() {
             app.manage(picker::PickerState::default());
             app.manage(snip::SnipState::default());
             app.manage(edit_cmds::ExportState::default());
+            // An export cut short by quitting leaves a hidden .part file; remove it.
+            if let Ok(dir) = paths::output_dir(handle, &settings) {
+                edit_cmds::remove_stale_parts(&dir);
+            }
             app.manage(AppState { settings: Mutex::new(settings.clone()), recorder: Recorder::new(handle.clone()) });
             shell::setup(handle)?;
             let _registered = hotkeys::register_hotkeys(handle, &settings);
