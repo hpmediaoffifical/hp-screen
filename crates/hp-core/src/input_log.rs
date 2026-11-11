@@ -1,12 +1,12 @@
 //! Format of the per-recording input log (`<stem>.input.jsonl`) and the privacy filter that
 //! decides which key presses may be written to it.
 use crate::geometry::Rect;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub const LOG_VERSION: u32 = 1;
 
 /// First line of every log.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Header {
     pub v: u32,
     /// "monitor", "window" or "region".
@@ -18,7 +18,7 @@ pub struct Header {
     pub fps: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Button {
     Left,
@@ -27,7 +27,7 @@ pub enum Button {
 }
 
 /// One log line. `t` is video time in milliseconds (pauses removed).
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "e", rename_all = "lowercase")]
 pub enum Event {
     Move { t: i64, x: i32, y: i32 },
@@ -35,6 +35,43 @@ pub enum Event {
     Up { t: i64, b: Button, x: i32, y: i32 },
     Wheel { t: i64, dx: i32, dy: i32, x: i32, y: i32 },
     Key { t: i64, k: String },
+}
+
+impl Event {
+    /// Video time of the event in milliseconds.
+    pub fn t(&self) -> i64 {
+        match self {
+            Event::Move { t, .. } | Event::Down { t, .. } | Event::Up { t, .. } | Event::Wheel { t, .. } | Event::Key { t, .. } => *t,
+        }
+    }
+}
+
+/// A log read back from disk.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ParsedLog {
+    pub header: Option<Header>,
+    /// Sorted by time.
+    pub events: Vec<Event>,
+}
+
+/// Reads a log. Lines that cannot be read are skipped; a log from a newer version gives
+/// nothing, because its events may not mean what this version thinks.
+pub fn parse_log(text: &str) -> ParsedLog {
+    let mut log = ParsedLog::default();
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        if let Ok(event) = serde_json::from_str::<Event>(line) {
+            log.events.push(event);
+        } else if log.header.is_none() && log.events.is_empty()
+            && let Ok(header) = serde_json::from_str::<Header>(line)
+        {
+            if header.v > LOG_VERSION {
+                return ParsedLog::default();
+            }
+            log.header = Some(header);
+        }
+    }
+    log.events.sort_by_key(Event::t);
+    log
 }
 
 /// Serializes a header or event as one JSON line without the trailing newline.
@@ -249,5 +286,70 @@ mod altgr_tests {
         assert_eq!(loggable_combo(&key(true, true, false, true, 0x44)), Some("Ctrl+Alt+Win+D".into()));
         assert_eq!(loggable_combo(&key(true, false, false, false, 0x31)), Some("Ctrl+1".into()));
         assert_eq!(loggable_combo(&key(false, true, false, false, 0x31)), Some("Alt+1".into()));
+    }
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::*;
+
+    fn header(v: u32) -> Header {
+        Header { v, mode: "region".into(), region: Rect { x: 10, y: 20, w: 200, h: 100 }, width: 200, height: 100, fps: 30 }
+    }
+
+    fn events() -> Vec<Event> {
+        vec![
+            Event::Move { t: 0, x: 1, y: 2 },
+            Event::Down { t: 10, b: Button::Left, x: 1, y: 2 },
+            Event::Up { t: 20, b: Button::Left, x: 1, y: 2 },
+            Event::Key { t: 30, k: "Ctrl+S".into() },
+        ]
+    }
+
+    fn text(lines: &[String]) -> String {
+        lines.join("
+") + "
+"
+    }
+
+    #[test]
+    fn log_round_trips() {
+        let mut lines = vec![to_line(&header(LOG_VERSION))];
+        lines.extend(events().iter().map(to_line));
+        let log = parse_log(&text(&lines));
+        assert_eq!(log.header, Some(header(LOG_VERSION)));
+        assert_eq!(log.events, events());
+    }
+
+    #[test]
+    fn bad_and_unknown_lines_are_skipped() {
+        let mut lines = vec![to_line(&header(LOG_VERSION))];
+        lines.extend(events().iter().map(to_line));
+        lines.insert(2, "{oops".into());
+        lines.insert(3, r#"{"e":"teleport","t":5}"#.into());
+        lines.insert(4, String::new());
+        assert_eq!(parse_log(&text(&lines)).events, events());
+    }
+
+    #[test]
+    fn newer_log_version_gives_nothing() {
+        let mut lines = vec![to_line(&header(LOG_VERSION + 1))];
+        lines.extend(events().iter().map(to_line));
+        assert_eq!(parse_log(&text(&lines)), ParsedLog::default());
+    }
+
+    #[test]
+    fn events_are_sorted_by_time() {
+        let mut lines = vec![to_line(&header(LOG_VERSION))];
+        lines.extend(events().iter().rev().map(to_line));
+        assert_eq!(parse_log(&text(&lines)).events, events());
+    }
+
+    #[test]
+    fn a_log_without_header_still_gives_its_events() {
+        let lines: Vec<String> = events().iter().map(to_line).collect();
+        let log = parse_log(&text(&lines));
+        assert_eq!(log.header, None);
+        assert_eq!(log.events, events());
     }
 }
