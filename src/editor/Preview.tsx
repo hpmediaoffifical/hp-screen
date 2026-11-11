@@ -1,7 +1,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { keptTime, playFrom, type Camera, type Layout, type Span } from "../editApi";
-import { pickInView, sourceView, type View } from "./layoutMath";
+import { gradientAngle, pickInView, sourceView, type View } from "./layoutMath";
 import { WHOLE } from "./zoomMath";
 
 export interface PreviewHandle {
@@ -201,7 +201,7 @@ const Preview = forwardRef<PreviewHandle, Props>(function Preview(props, ref) {
   const l = props.layout;
   const k = frame.w > 0 ? frame.w / outW : 0;
   const [vx, vy, vw, vh] = l ? l.video : [0, 0, outW, outH];
-  const background = !l || !l.decorated ? "#000" : l.background.kind === "solid" ? css(l.background.color) : `linear-gradient(to bottom right, ${css(l.background.from)}, ${css(l.background.to)})`;
+  const background = !l || !l.decorated ? "#000" : l.background.kind === "solid" ? css(l.background.color) : `linear-gradient(${gradientAngle(outW, outH)}deg, ${css(l.background.from)}, ${css(l.background.to)})`;
   const shadow = l?.shadow ? `0 ${0.015 * Math.min(outW, outH) * k}px ${0.04 * Math.min(outW, outH) * k}px rgba(0, 0, 0, 0.45)` : "none";
 
   return (

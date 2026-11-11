@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { pickInView, sourceView } from "./layoutMath.ts";
+import { gradientAngle, pickInView, sourceView } from "./layoutMath.ts";
 
 const whole = { cx: 0.5, cy: 0.5, scale: 1 };
 const near = (a: number[], b: number[]) => a.every((v, i) => Math.abs(v - b[i]) < 0.01);
@@ -17,4 +17,10 @@ test("fill crops to the frame aspect, like the core", () => {
 test("a click in the window picks the source point under it", () => {
   assert.deepEqual(pickInView([0, 0, 1920, 1080], 960, 540, 1920, 1080, 1920, 1080), [0.5, 0.5]);
   assert.deepEqual(pickInView([480, 270, 960, 540], 0, 0, 480, 270, 1920, 1080), [0.25, 0.25]);
+});
+
+test("the CSS gradient runs along the frame diagonal like Direct2D", () => {
+  assert.ok(Math.abs(gradientAngle(1000, 1000) - 135) < 1e-9);
+  assert.ok(Math.abs(gradientAngle(608, 1080) - (180 - (Math.atan(608 / 1080) * 180) / Math.PI)) < 1e-9);
+  assert.ok(gradientAngle(1920, 1080) < 135 && gradientAngle(608, 1080) > 135);
 });

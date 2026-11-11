@@ -202,7 +202,7 @@ impl Compositor {
                     Ok(())
                 }
             }
-            .and_then(|_| self.draw_effects(draws, view, video));
+            .and_then(|_| self.draw_effects(draws, view, video, src_h));
             self.ctx.EndDraw(None, None).map_err(err("Vẽ khung hình thất bại"))?;
             drawn?;
             self.readback.CopyFromBitmap(None, &self.target, None).map_err(err("Không đọc được khung hình"))?;
@@ -292,13 +292,36 @@ impl Compositor {
         Ok(())
     }
 
-    unsafe fn draw_effects(&mut self, draws: &[Draw], view: (f32, f32, f32, f32), video: (f32, f32, f32, f32)) -> Result<(), String> {
+    unsafe fn draw_effects(&mut self, draws: &[Draw], view: (f32, f32, f32, f32), video: (f32, f32, f32, f32), src_h: u32) -> Result<(), String> {
         let (vx, vy, vw, vh) = view;
         let (sx, sy) = (video.2 / vw.max(1.0), video.3 / vh.max(1.0));
         let at = |x: f32, y: f32| (video.0 + (x - vx) * sx, video.1 + (y - vy) * sy);
-        let full_ring = RIPPLE_RADIUS * self.out_h as f32;
+        // Sized like the picture they sit on (as in the preview), zoom included.
+        let full_ring = ripple_px(src_h as f32, vh, video.3);
         let stroke = (0.12 * full_ring).max(2.0);
-        // SAFETY: drawing calls on the device context between BeginDraw and EndDraw.
+        let clip = D2D_RECT_F { left: video.0, top: video.1, right: video.0 + video.2, bottom: video.1 + video.3 };
+        // SAFETY: drawing calls on the device context between BeginDraw and EndDraw; the clip
+        // is pushed and popped around the marks drawn on the video.
+        unsafe {
+            // Marks on the picture stay inside the video window, as in the preview.
+            self.ctx.PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            let on_video = self.draw_marks(draws, &at, sx, full_ring, stroke);
+            self.ctx.PopAxisAlignedClip();
+            on_video?;
+            for d in draws {
+                match d {
+                    Draw::Chip { text, alpha, bottom } if *alpha > 0.0 => self.draw_chip(text, *alpha, *bottom)?,
+                    Draw::Subtitle { text } => self.draw_subtitle(text)?,
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Rings, hold dots and wheel marks.
+    unsafe fn draw_marks(&mut self, draws: &[Draw], at: &dyn Fn(f32, f32) -> (f32, f32), sx: f32, full_ring: f32, stroke: f32) -> Result<(), String> {
+        // SAFETY: drawing calls between BeginDraw and EndDraw.
         unsafe {
             for d in draws {
                 match d {
@@ -317,8 +340,6 @@ impl Compositor {
                         let (px, py) = at(*x, *y);
                         self.draw_wheel(px, py, full_ring, *up, *alpha)?
                     }
-                    Draw::Chip { text, alpha, bottom } if *alpha > 0.0 => self.draw_chip(text, *alpha, *bottom)?,
-                    Draw::Subtitle { text } => self.draw_subtitle(text)?,
                     _ => {}
                 }
             }
@@ -412,6 +433,11 @@ impl Compositor {
         }
         Ok(())
     }
+}
+
+/// Full ripple radius in output pixels: 2.5% of the source height as the video is shown.
+fn ripple_px(src_h: f32, view_h: f32, video_h: f32) -> f32 {
+    RIPPLE_RADIUS * src_h * video_h / view_h.max(1.0)
 }
 
 fn rgb(c: [u8; 3]) -> (f32, f32, f32) {
@@ -535,6 +561,26 @@ mod tests {
         let k = vw / 160.0;
         let (px, py) = ((vx + vw / 2.0 + 10.0 * k) as u32, (vy + vh / 2.0) as u32);
         assert!(rgb_at(out, l.out_w, px, py)[2] > 200, "ring on the video at ({px},{py}): {:?}", rgb_at(out, l.out_w, px, py));
+    }
+
+    #[test]
+    fn effects_stay_inside_the_video() {
+        // 9:16 frame with bars: a ring at the source's top edge must not paint the bar above.
+        let l = tall(hp_core::layout::Fit::Fit, 0.0);
+        let src = solid(160, 90, |_, _| [128, 128, 128]);
+        let mut c = Compositor::new(l.out_w, l.out_h, Device::Warp).unwrap();
+        let ring = Draw::Ring { x: 80.0, y: 0.0, radius: 30.0, alpha: 1.0, button: Button::Left };
+        let out = c.render(&src, 160, 90, None, Some(&l), &[ring]).unwrap();
+        let bar = (l.video.1 as u32).saturating_sub(1);
+        let dirty = (0..bar).flat_map(|y| (0..l.out_w).map(move |x| (x, y))).find(|&(x, y)| rgb_at(out, l.out_w, x, y) != [255, 255, 255]);
+        assert_eq!(dirty, None, "the white bar above the video stays clean");
+    }
+
+    #[test]
+    fn ring_size_follows_the_video_not_the_frame() {
+        // The full ripple radius is 2.5% of the video as shown, in output pixels.
+        assert!((ripple_px(1080.0, 1080.0, 342.0) - 0.025 * 342.0).abs() < 1e-3);
+        assert!((ripple_px(1080.0, 540.0, 1080.0) - 0.025 * 2160.0).abs() < 1e-3, "zoom 2x doubles it, as in the preview");
     }
 
     #[test]

@@ -409,7 +409,15 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
               )}
             </div>
           )}
-          {tab === "frame" && <FramePanel frame={doc.frame} onChange={(frame) => change({ ...doc, frame })} />}
+          {tab === "frame" && (
+            <FramePanel
+              frame={doc.frame}
+              onChange={(patch, merge) => {
+                const d = latest.current;
+                if (d) change({ ...d, frame: { ...d.frame, ...patch } }, merge);
+              }}
+            />
+          )}
           {/* Always mounted, so a running export keeps its progress and result across tabs. */}
           <ExportPanel
             hidden={tab !== "export"}
@@ -512,9 +520,20 @@ const BACKGROUNDS: { id: string; label: string; css: string }[] = [
 ];
 
 /** The "Khung" tab: output aspect, fit or fill, and the decoration around the video. */
-function FramePanel(props: { frame: FrameDoc; onChange: (f: FrameDoc) => void }) {
+function FramePanel(props: { frame: FrameDoc; onChange: (patch: Partial<FrameDoc>, merge: boolean) => void }) {
   const f = props.frame;
-  const set = (patch: Partial<FrameDoc>) => props.onChange({ ...f, ...patch });
+  // Dragging a slider is one undo step, not one per tick.
+  const run = useRef<{ key: string; at: number } | null>(null);
+  const set = (patch: Partial<FrameDoc>) => {
+    run.current = null;
+    props.onChange(patch, false);
+  };
+  const slide = (key: "padding" | "radius", value: number) => {
+    const now = performance.now();
+    const merge = run.current?.key === key && now - run.current.at < 1000;
+    run.current = { key, at: now };
+    props.onChange({ [key]: value }, merge);
+  };
   const chip = (on: boolean) => "chip chip-toggle" + (on ? " on" : "");
   return (
     <div className="panel-body">
@@ -557,11 +576,11 @@ function FramePanel(props: { frame: FrameDoc; onChange: (f: FrameDoc) => void })
       </div>
       <label className="zoom-scale">
         Khoảng đệm: <strong>{Math.round(f.padding * 100)}%</strong>
-        <input type="range" min={0} max={0.2} step={0.01} value={f.padding} onChange={(e) => set({ padding: Number(e.target.value) })} />
+        <input type="range" min={0} max={0.2} step={0.01} value={f.padding} onChange={(e) => slide("padding", Number(e.target.value))} />
       </label>
       <label className="zoom-scale">
         Bo góc: <strong>{Math.round(f.radius)} px</strong>
-        <input type="range" min={0} max={40} step={1} value={f.radius} onChange={(e) => set({ radius: Number(e.target.value) })} />
+        <input type="range" min={0} max={40} step={1} value={f.radius} onChange={(e) => slide("radius", Number(e.target.value))} />
       </label>
       <label className="check">
         <input type="checkbox" checked={f.shadow} onChange={(e) => set({ shadow: e.target.checked })} />

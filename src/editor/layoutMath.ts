@@ -20,6 +20,14 @@ export function sourceView(cam: Camera, srcW: number, srcH: number, fillAspect: 
   return [x, clamp(cam.cy * srcH - nh / 2, 0, srcH - nh), w, nh];
 }
 
+/**
+ * CSS angle (deg) of a linear gradient from the top-left to the bottom-right corner of a w×h
+ * box, matching Direct2D's (0,0)→(w,h) gradient ("to bottom right" in CSS is a different line).
+ */
+export function gradientAngle(w: number, h: number): number {
+  return 180 - (Math.atan(w / Math.max(1e-9, h)) * 180) / Math.PI;
+}
+
 /** The frame point (0–1) under a click at (px, py) on a window of ww×wh showing `view`. */
 export function pickInView(view: View, px: number, py: number, ww: number, wh: number, srcW: number, srcH: number): [number, number] {
   const clamp = (v: number) => Math.min(1, Math.max(0, v));
