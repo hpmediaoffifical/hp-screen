@@ -1684,6 +1684,7 @@ dependencies = [
  "trash",
  "windows",
  "windows-capture",
+ "windows-numerics",
 ]
 
 [[package]]

@@ -211,7 +211,7 @@ mod tests {
     fn plan_for(path: &Path, cuts: Vec<Span>) -> Plan {
         let (_, info) = VideoDecoder::open(path).unwrap();
         let src = Source { width: info.width, height: info.height, duration_ms: info.duration_ms, fps: info.fps };
-        Plan::new(src, &EditDoc { cuts, ..EditDoc::default() })
+        Plan::new(src, &EditDoc { cuts, ..EditDoc::default() }, None)
     }
 
     fn export(source: &Path, plan: &Plan) -> Result<PathBuf, String> {
@@ -237,6 +237,26 @@ mod tests {
             assert!(!near(centre_rgb(dec.frame_at(ms).unwrap(), 320, 240), [0, 255, 0]), "green frame at {ms} ms");
             ms += 33;
         }
+    }
+
+    #[test]
+    fn export_draws_click_effects() {
+        use hp_core::effects::build_effects;
+        use hp_core::input_log::{Button, Event, ParsedLog};
+        let source = temp_path("exp-fx", "a.mp4");
+        make_sample(&source, 1, 640, 480, false);
+        let (_, info) = VideoDecoder::open(&source).unwrap();
+        let log = ParsedLog {
+            header: None,
+            events: vec![Event::Down { t: 0, b: Button::Right, x: 320, y: 240 }, Event::Up { t: 900, b: Button::Right, x: 320, y: 240 }],
+        };
+        let src = Source { width: info.width, height: info.height, duration_ms: info.duration_ms, fps: info.fps };
+        let plan = Plan::new(src, &EditDoc::default(), Some(build_effects(&log, 640, 480)));
+        let out = export(&source, &plan).unwrap();
+        let (mut dec, _) = VideoDecoder::open(&out).unwrap();
+        // The red frame gets a blue hold dot at the click point.
+        let [_, _, b] = centre_rgb(dec.frame_at(500).unwrap(), 640, 480);
+        assert!(b > 80, "blue from the right-click dot, got {b}");
     }
 
     #[test]

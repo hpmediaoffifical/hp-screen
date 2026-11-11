@@ -4,6 +4,8 @@ use crate::decoder::{VideoDecoder, VideoInfo};
 use crate::export::{export_path, run_export};
 use hp_core::cut::Span;
 use hp_core::edit::{EditDoc, LoadError, load_edit, save_edit};
+use hp_core::effects::{Effects, build_effects};
+use hp_core::input_log::parse_log;
 use hp_core::library::{DATA_DIR, Kind, edit_path, kind_of, sidecar_path};
 use hp_core::plan::{Plan, Source};
 use hp_core::state::RecState;
@@ -93,9 +95,19 @@ fn open_video(media: &Path) -> Result<VideoInfo, String> {
     VideoDecoder::open(media).map(|(_, info)| info).map_err(|_| "Không đọc được video này".to_string())
 }
 
-fn plan_for(info: &VideoInfo, doc: &EditDoc) -> Plan {
+fn plan_for(info: &VideoInfo, doc: &EditDoc, effects: Option<Effects>) -> Plan {
     let src = Source { width: info.width, height: info.height, duration_ms: info.duration_ms, fps: info.fps };
-    Plan::new(src, doc)
+    Plan::new(src, doc, effects)
+}
+
+/// Effects from the input log next to `media`, or `None` when it has no (readable) log.
+fn effects_for(media: &Path, info: &VideoInfo) -> Option<Effects> {
+    let text = std::fs::read_to_string(sidecar_path(media)).ok()?;
+    let log = parse_log(&text);
+    if log.events.is_empty() {
+        return None;
+    }
+    Some(build_effects(&log, info.width, info.height))
 }
 
 /// Removes `.part` files an export left behind when the app was closed while exporting.
@@ -148,7 +160,7 @@ pub async fn export_start(
         return Err("Đang xuất một video khác".to_string());
     }
     let info = open_video(&media)?;
-    let plan = plan_for(&info, &doc);
+    let plan = plan_for(&info, &doc, effects_for(&media, &info));
     if !plan.can_export() {
         return Err("Phần giữ lại quá ngắn để xuất".to_string());
     }
@@ -198,6 +210,22 @@ mod tests {
     use super::*;
     use crate::test_media::temp_path;
     use hp_core::cut::Span;
+
+    fn info() -> VideoInfo {
+        VideoInfo { width: 640, height: 480, duration_ms: 1000, fps: 30, has_audio: false }
+    }
+
+    #[test]
+    fn effects_come_from_the_input_log() {
+        let media = temp_path("edit-log", "a.mp4");
+        assert_eq!(effects_for(&media, &info()), None);
+        let log = sidecar_path(&media);
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        std::fs::write(&log, "{\"e\":\"down\",\"t\":100,\"b\":\"right\",\"x\":5,\"y\":6}
+").unwrap();
+        let fx = effects_for(&media, &info()).expect("effects from the log");
+        assert_eq!(fx.ripples.len(), 1);
+    }
 
     #[test]
     fn missing_file_gives_a_fresh_edit() {

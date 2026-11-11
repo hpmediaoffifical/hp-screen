@@ -1,15 +1,18 @@
 //! Builds export frames with Direct2D: the source picture scaled into the output, then the
 //! effects drawn over it, read back as top-down BGRA for the encoder.
-use hp_core::effects::Draw;
+use hp_core::effects::{Draw, RIPPLE_RADIUS};
+use hp_core::input_log::Button;
 use std::mem::ManuallyDrop;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D11::*;
+use windows::Win32::Graphics::DirectWrite::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
-use windows::core::Interface;
+use windows::core::{HSTRING, Interface};
+use windows_numerics::Vector2;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Device {
@@ -28,7 +31,14 @@ pub struct Compositor {
     out_w: u32,
     out_h: u32,
     out: Vec<u8>,
+    text: IDWriteFactory,
+    chip_format: IDWriteTextFormat,
+    /// Chip font size in pixels.
+    chip_size: f32,
 }
+
+/// Chip text height as a fraction of the output height.
+const CHIP_FONT: f32 = 0.032;
 
 // SAFETY: a Compositor is created and used on one export thread at a time; Direct2D objects
 // from a single-threaded factory are never touched by two threads at once.
@@ -95,7 +105,31 @@ impl Compositor {
                     &bitmap_props(D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_ALPHA_MODE_PREMULTIPLIED),
                 )
                 .map_err(err("Thiếu bộ nhớ đồ họa"))?;
-            Ok(Compositor { ctx, target, readback, source: None, out_w, out_h, out: vec![0; (out_w * out_h * 4) as usize] })
+            let text: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).map_err(err("Không khởi động được DirectWrite"))?;
+            let chip_size = (CHIP_FONT * out_h as f32).max(9.0);
+            let chip_format = text
+                .CreateTextFormat(
+                    &HSTRING::from("Segoe UI"),
+                    None,
+                    DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                    DWRITE_FONT_STYLE_NORMAL,
+                    DWRITE_FONT_STRETCH_NORMAL,
+                    chip_size,
+                    &HSTRING::from("vi-VN"),
+                )
+                .map_err(err("Không tạo được phông chữ"))?;
+            Ok(Compositor {
+                ctx,
+                target,
+                readback,
+                source: None,
+                out_w,
+                out_h,
+                out: vec![0; (out_w * out_h * 4) as usize],
+                text,
+                chip_format,
+                chip_size,
+            })
         }
     }
 
@@ -115,8 +149,10 @@ impl Compositor {
             self.ctx.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }));
             let dest = D2D_RECT_F { left: 0.0, top: 0.0, right: self.out_w as f32, bottom: self.out_h as f32 };
             self.ctx.DrawBitmap(&source, Some(&dest), 1.0, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, None, None);
-            self.draw_effects(draws, src_w, src_h)?;
+            // EndDraw must follow BeginDraw even when an effect failed.
+            let drawn = self.draw_effects(draws, src_w, src_h);
             self.ctx.EndDraw(None, None).map_err(err("Vẽ khung hình thất bại"))?;
+            drawn?;
             self.readback.CopyFromBitmap(None, &self.target, None).map_err(err("Không đọc được khung hình"))?;
             let mapped = self.readback.Map(D2D1_MAP_OPTIONS_READ).map_err(err("Không đọc được khung hình"))?;
             let row = self.out_w as usize * 4;
@@ -145,12 +181,110 @@ impl Compositor {
         Ok(bmp)
     }
 
-    unsafe fn draw_effects(&mut self, draws: &[Draw], _src_w: u32, _src_h: u32) -> Result<(), String> {
-        match draws.first() {
-            None => Ok(()),
-            Some(d) => match *d {},
+    /// Draws the effects of one frame. Positions of rings, dots and wheel marks are in source
+    /// pixels and scale with the picture; chips are placed in the output frame.
+    unsafe fn draw_effects(&mut self, draws: &[Draw], src_w: u32, src_h: u32) -> Result<(), String> {
+        let (sx, sy) = (self.out_w as f32 / src_w as f32, self.out_h as f32 / src_h as f32);
+        let full_ring = RIPPLE_RADIUS * self.out_h as f32;
+        let stroke = (0.12 * full_ring).max(2.0);
+        // SAFETY: drawing calls on the device context between BeginDraw and EndDraw.
+        unsafe {
+            for d in draws {
+                match d {
+                    Draw::Ring { x, y, radius, alpha, button } if *alpha > 0.0 => {
+                        let brush = self.brush(button_colour(*button), *alpha)?;
+                        let e = ellipse(x * sx, y * sy, radius * sx);
+                        self.ctx.DrawEllipse(&e, &brush, stroke, None::<&ID2D1StrokeStyle>);
+                    }
+                    Draw::Dot { x, y, radius, alpha, button } if *alpha > 0.0 => {
+                        let brush = self.brush(button_colour(*button), *alpha)?;
+                        self.ctx.FillEllipse(&ellipse(x * sx, y * sy, radius * sx), &brush);
+                    }
+                    Draw::Wheel { x, y, up, alpha } if *alpha > 0.0 => self.draw_wheel(x * sx, y * sy, full_ring, *up, *alpha)?,
+                    Draw::Chip { text, alpha, bottom } if *alpha > 0.0 => self.draw_chip(text, *alpha, *bottom)?,
+                    _ => {}
+                }
+            }
         }
+        Ok(())
     }
+
+    unsafe fn brush(&self, (r, g, b): (f32, f32, f32), alpha: f32) -> Result<ID2D1SolidColorBrush, String> {
+        // SAFETY: plain brush creation on a valid device context.
+        unsafe { self.ctx.CreateSolidColorBrush(&D2D1_COLOR_F { r, g, b, a: alpha.clamp(0.0, 1.0) }, None) }
+            .map_err(err("Không tạo được màu vẽ"))
+    }
+
+    /// A small mouse beside the cursor with an arrow showing the scroll direction.
+    unsafe fn draw_wheel(&self, x: f32, y: f32, r: f32, up: bool, alpha: f32) -> Result<(), String> {
+        let (w, h) = (0.9 * r, 1.3 * r);
+        let (left, top) = (x + r, y + r);
+        let line = (r * 0.08).max(1.0);
+        // SAFETY: drawing calls between BeginDraw and EndDraw.
+        unsafe {
+            let white = self.brush((1.0, 1.0, 1.0), alpha)?;
+            let black = self.brush((0.0, 0.0, 0.0), alpha * 0.8)?;
+            let body = D2D1_ROUNDED_RECT {
+                rect: D2D_RECT_F { left, top, right: left + w, bottom: top + h },
+                radiusX: w / 2.0,
+                radiusY: w / 2.0,
+            };
+            self.ctx.FillRoundedRectangle(&body, &white);
+            self.ctx.DrawRoundedRectangle(&body, &black, line, None::<&ID2D1StrokeStyle>);
+            let cx = left + w / 2.0;
+            self.ctx.DrawLine(point(cx, top + h * 0.15), point(cx, top + h * 0.4), &black, line * 1.5, None::<&ID2D1StrokeStyle>);
+            // Chevron above (up) or below (down) the mouse.
+            let (tip, base) = if up { (top - r * 0.55, top - r * 0.2) } else { (top + h + r * 0.55, top + h + r * 0.2) };
+            let half = w * 0.45;
+            for side in [-half, half] {
+                self.ctx.DrawLine(point(cx + side, base), point(cx, tip), &white, line * 2.5, None::<&ID2D1StrokeStyle>);
+                self.ctx.DrawLine(point(cx + side, base), point(cx, tip), &black, line, None::<&ID2D1StrokeStyle>);
+            }
+        }
+        Ok(())
+    }
+
+    /// A rounded chip with the shortcut, centred, its bottom edge `bottom` of the height up.
+    unsafe fn draw_chip(&self, text: &str, alpha: f32, bottom: f32) -> Result<(), String> {
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        // SAFETY: DirectWrite and drawing calls with valid pointers, between BeginDraw and EndDraw.
+        unsafe {
+            let layout = self
+                .text
+                .CreateTextLayout(&wide, &self.chip_format, self.out_w as f32, self.out_h as f32)
+                .map_err(err("Không dựng được chữ"))?;
+            let mut m = DWRITE_TEXT_METRICS::default();
+            layout.GetMetrics(&mut m).map_err(err("Không dựng được chữ"))?;
+            let pad_x = self.chip_size * 0.8;
+            let pad_y = self.chip_size * 0.3;
+            let (w, h) = (m.width + 2.0 * pad_x, m.height + 2.0 * pad_y);
+            let bottom_y = self.out_h as f32 * (1.0 - bottom);
+            let left = (self.out_w as f32 - w) / 2.0;
+            let rect = D2D_RECT_F { left, top: bottom_y - h, right: left + w, bottom: bottom_y };
+            let bg = D2D1_ROUNDED_RECT { rect, radiusX: h / 2.0, radiusY: h / 2.0 };
+            self.ctx.FillRoundedRectangle(&bg, &self.brush((20.0 / 255.0, 20.0 / 255.0, 24.0 / 255.0), 0.85 * alpha)?);
+            let white = self.brush((1.0, 1.0, 1.0), alpha)?;
+            self.ctx.DrawTextLayout(point(left + pad_x - m.left, rect.top + pad_y - m.top), &layout, &white, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        }
+        Ok(())
+    }
+}
+
+fn button_colour(b: Button) -> (f32, f32, f32) {
+    let hex = match b {
+        Button::Left => 0xFF5A36,
+        Button::Right => 0x3B82F6,
+        Button::Middle => 0x22C55E,
+    };
+    (((hex >> 16) & 0xFF) as f32 / 255.0, ((hex >> 8) & 0xFF) as f32 / 255.0, (hex & 0xFF) as f32 / 255.0)
+}
+
+fn point(x: f32, y: f32) -> Vector2 {
+    Vector2 { X: x, Y: y }
+}
+
+fn ellipse(x: f32, y: f32, r: f32) -> D2D1_ELLIPSE {
+    D2D1_ELLIPSE { point: point(x, y), radiusX: r, radiusY: r }
 }
 
 #[cfg(test)]
@@ -196,6 +330,64 @@ mod tests {
         for (x, y) in [(0, 0), (127, 0), (64, 48), (0, 95), (127, 95)] {
             assert!(close(rgb_at(out, 128, x, y), [0, 255, 0]), "({x},{y}) {:?}", rgb_at(out, 128, x, y));
         }
+    }
+
+    #[test]
+    fn ring_is_drawn_in_its_colour() {
+        let src = solid(200, 200, |_, _| [128, 128, 128]);
+        let mut c = Compositor::new(200, 200, Device::Warp).unwrap();
+        let ring = Draw::Ring { x: 100.0, y: 100.0, radius: 40.0, alpha: 1.0, button: Button::Left };
+        let out = c.render(&src, 200, 200, &[ring]).unwrap();
+        let [r, _, b] = rgb_at(out, 200, 140, 100);
+        assert!(r > 200 && b < 120, "ring pixel {:?}", rgb_at(out, 200, 140, 100));
+        assert!(close(rgb_at(out, 200, 100, 100), [128, 128, 128]), "centre stays grey");
+    }
+
+    #[test]
+    fn ring_position_scales_with_the_output() {
+        let src = solid(100, 100, |_, _| [128, 128, 128]);
+        let mut c = Compositor::new(200, 200, Device::Warp).unwrap();
+        let ring = Draw::Ring { x: 50.0, y: 50.0, radius: 20.0, alpha: 1.0, button: Button::Right };
+        let out = c.render(&src, 100, 100, &[ring]).unwrap();
+        let [r, _, b] = rgb_at(out, 200, 140, 100);
+        assert!(b > 200 && r < 120, "right-click ring is blue at the scaled spot: {:?}", rgb_at(out, 200, 140, 100));
+    }
+
+    #[test]
+    fn chip_is_drawn_at_the_bottom_centre() {
+        let src = solid(400, 300, |_, _| [255, 255, 255]);
+        let mut c = Compositor::new(400, 300, Device::Warp).unwrap();
+        let chip = Draw::Chip { text: "Ctrl + S".into(), alpha: 1.0, bottom: 0.08 };
+        let out = c.render(&src, 400, 300, &[chip]).unwrap();
+        let dark = (262..276).any(|y| (180..220).any(|x| rgb_at(out, 400, x, y)[0] < 60));
+        assert!(dark, "chip background under the bottom centre");
+        assert!(close(rgb_at(out, 400, 200, 100), [255, 255, 255]), "rest untouched");
+    }
+
+    #[test]
+    fn wheel_mark_and_dot_draw_something() {
+        let src = solid(200, 200, |_, _| [128, 128, 128]);
+        let mut c = Compositor::new(200, 200, Device::Warp).unwrap();
+        let before = c.render(&src, 200, 200, &[]).unwrap().to_vec();
+        let draws = [
+            Draw::Wheel { x: 50.0, y: 50.0, up: true, alpha: 1.0 },
+            Draw::Dot { x: 150.0, y: 150.0, radius: 6.0, alpha: 0.55, button: Button::Middle },
+        ];
+        let out = c.render(&src, 200, 200, &draws).unwrap();
+        assert_ne!(before, out);
+        assert!(rgb_at(out, 200, 150, 150)[1] > 140, "middle-button dot is green: {:?}", rgb_at(out, 200, 150, 150));
+    }
+
+    #[test]
+    fn alpha_zero_draws_nothing() {
+        let src = solid(200, 200, |_, _| [128, 128, 128]);
+        let mut c = Compositor::new(200, 200, Device::Warp).unwrap();
+        let before = c.render(&src, 200, 200, &[]).unwrap().to_vec();
+        let draws = [
+            Draw::Ring { x: 100.0, y: 100.0, radius: 40.0, alpha: 0.0, button: Button::Left },
+            Draw::Chip { text: "Ctrl + S".into(), alpha: 0.0, bottom: 0.08 },
+        ];
+        assert_eq!(before, c.render(&src, 200, 200, &draws).unwrap());
     }
 
     #[test]
