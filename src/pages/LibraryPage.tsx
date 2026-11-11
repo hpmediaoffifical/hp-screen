@@ -21,7 +21,7 @@ const FILTERS: { value: MediaKind | null; label: string }[] = [
 
 const stemOf = (name: string) => name.replace(/\.[^.]+$/, "");
 
-export default function LibraryPage() {
+export default function LibraryPage(props: { onEdit?: (path: string) => void } = {}) {
   const [filter, setFilter] = useState<MediaKind | null>(null);
   const { items, error } = useLibrary(filter);
   const [selected, setSelected] = useState<string | null>(null);
@@ -121,6 +121,9 @@ export default function LibraryPage() {
                 <button className="btn btn-small" onClick={() => run(() => libraryOpen(item.path))}>
                   {item.kind === "video" ? "Phát" : "Mở"}
                 </button>
+                {item.kind === "video" && props.onEdit && (
+                  <button className="btn btn-small" onClick={() => props.onEdit?.(item.path)}>Chỉnh sửa</button>
+                )}
                 <button className="btn btn-small" onClick={() => run(() => libraryReveal(item.path))}>Thư mục</button>
                 <button className="btn btn-small" onClick={() => setRenaming(item.path)}>Đổi tên</button>
                 <button className="btn btn-small btn-danger" onClick={() => setConfirming(item)}>Xóa</button>
