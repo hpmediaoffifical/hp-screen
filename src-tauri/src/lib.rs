@@ -71,6 +71,7 @@ pub fn run() {
             commands::snip_ready,
             commands::snip_finish,
             commands::snip_cancel,
+            commands::snip_frozen,
             commands::compact_show,
             commands::compact_hide,
             commands::open_main,

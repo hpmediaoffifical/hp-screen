@@ -36,8 +36,12 @@ export const onLibraryChanged = (handler: () => void): Promise<UnlistenFn> =>
   listen("library-changed", () => handler());
 
 /** Commands reject with a Vietnamese message string; anything else gets a generic one. */
-export const errorMessage = (e: unknown): string =>
-  typeof e === "string" ? e : "Đã xảy ra lỗi không xác định.";
+export const errorMessage = (e: unknown): string => {
+  if (typeof e === "string") return e;
+  // Show what actually went wrong instead of a generic message.
+  if (e instanceof Error && e.message) return `Đã xảy ra lỗi: ${e.message}`;
+  return "Đã xảy ra lỗi không xác định.";
+};
 
 export type RecState = "idle" | "countdown" | "recording" | "paused" | "finalizing";
 
@@ -176,3 +180,5 @@ export const onTargetChanged = (handler: (t: Target) => void): Promise<UnlistenF
   listen<Target>("target-changed", (e) => handler(e.payload));
 export const onSettingsChanged = (handler: (s: Settings) => void): Promise<UnlistenFn> =>
   listen<Settings>("settings-changed", (e) => handler(e.payload));
+/** The frozen screen's image bytes (BMP). */
+export const snipFrozen = () => invoke<ArrayBuffer>("snip_frozen");

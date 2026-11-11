@@ -1,6 +1,6 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
+
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { errorMessage, snipCancel, snipContext, snipFinish, snipReady, type SnipAction } from "../api";
+import { errorMessage, snipCancel, snipContext, snipFinish, snipFrozen, snipReady, type SnipAction } from "../api";
 
 /**
  * "Capture and annotate": the frozen screen fills this window. Drag to choose an area, adjust
@@ -23,7 +23,7 @@ type Shape =
   | { kind: "pen"; color: string; width: number; points: Point[] }
   | { kind: "rect" | "ellipse" | "arrow" | "line"; color: string; width: number; from: Point; to: Point }
   | { kind: "mosaic"; from: Point; to: Point }
-  | { kind: "text"; color: string; size: number; at: Point; text: string };
+  | { kind: "text"; color: string; size: number; at: Point; text: string; bg: TextBg };
 type Handle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 type Drag =
   | { kind: "select"; start: Point }
@@ -33,6 +33,27 @@ type Drag =
   | { kind: "moveText"; index: number; start: Point; origin: Point; moved: boolean };
 
 type TextShape = Extract<Shape, { kind: "text" }>;
+
+/** Box behind text so it stands out: none, black, white, or the chosen colour. */
+type TextBg = "none" | "dark" | "light" | "color";
+const TEXT_BGS: { value: TextBg; label: string }[] = [
+  { value: "none", label: "Không nền" },
+  { value: "dark", label: "Nền đen" },
+  { value: "light", label: "Nền trắng" },
+  { value: "color", label: "Nền theo màu" },
+];
+
+/** Text and box colours for a text annotation. */
+function textColors(color: string, bg: TextBg): { fill: string; box: string | null } {
+  if (bg === "dark") return { fill: color === "#111111" ? "#ffffff" : color, box: "rgba(0, 0, 0, 0.78)" };
+  if (bg === "light") return { fill: color === "#ffffff" ? "#111111" : color, box: "rgba(255, 255, 255, 0.92)" };
+  if (bg === "color") {
+    // Light swatches get dark text, dark ones white text.
+    const light = ["#ffcc00", "#34c759", "#ffffff"].includes(color);
+    return { fill: light ? "#111111" : "#ffffff", box: color };
+  }
+  return { fill: color, box: null };
+}
 
 const measureContext = document.createElement("canvas").getContext("2d")!;
 
@@ -179,9 +200,20 @@ function drawShape(ctx: CanvasRenderingContext2D, s: Shape, image: HTMLImageElem
       break;
     }
     case "text": {
-      ctx.fillStyle = s.color;
+      const { fill, box } = textColors(s.color, s.bg);
       ctx.font = `600 ${s.size}px "Segoe UI", sans-serif`;
       ctx.textBaseline = "top";
+      if (box) {
+        const b = textBox(s);
+        const pad = s.size * 0.3;
+        ctx.fillStyle = box;
+        ctx.beginPath();
+        ctx.roundRect(b.x - pad, b.y - pad * 0.6, b.w + pad * 2, b.h + pad * 1.2, pad * 0.8);
+        ctx.fill();
+        ctx.font = `600 ${s.size}px "Segoe UI", sans-serif`;
+        ctx.textBaseline = "top";
+      }
+      ctx.fillStyle = fill;
       s.text.split("\n").forEach((line, i) => ctx.fillText(line, s.at.x, s.at.y + i * s.size * 1.25));
       break;
     }
@@ -202,23 +234,33 @@ export default function SnipOverlay() {
   const [hover, setHover] = useState<Point | null>(null);
   const [textAt, setTextAt] = useState<Point | null>(null);
   const [textValue, setTextValue] = useState("");
+  const [textBg, setTextBg] = useState<TextBg>("none");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   // Load the frozen screen, then show the window once it is drawn (no flash of an empty window).
   useEffect(() => {
+    // The bytes come through IPC and become a same-origin blob URL. Loading the file through a
+    // file URL made the picture "cross-origin", which locks the canvas: every export (copy,
+    // save) then failed.
+    let url = "";
     snipContext()
-      .then((ctx) => {
+      .then(async (ctx) => {
         if (!ctx) return snipCancel();
+        const bytes = await snipFrozen();
+        url = URL.createObjectURL(new Blob([bytes], { type: "image/bmp" }));
         const img = new Image();
         img.onload = () => {
           setScale(img.naturalWidth / window.innerWidth || 1);
           setImage(img);
         };
         img.onerror = () => snipCancel();
-        img.src = convertFileSrc(ctx.frozen) + `?t=${Date.now()}`;
+        img.src = url;
       })
       .catch(() => snipCancel());
+    return () => {
+      if (url) URL.revokeObjectURL(url);
+    };
   }, []);
 
   const block = MOSAIC_BLOCK_CSS * scale;
@@ -271,11 +313,11 @@ export default function SnipOverlay() {
 
   const commitText = useCallback(() => {
     if (textAt && textValue.trim()) {
-      setShapes((s) => [...s, { kind: "text", color, size: SIZES[sizeIndex].font * scale, at: textAt, text: textValue }]);
+      setShapes((s) => [...s, { kind: "text", color, size: SIZES[sizeIndex].font * scale, at: textAt, text: textValue, bg: textBg }]);
     }
     setTextAt(null);
     setTextValue("");
-  }, [textAt, textValue, color, sizeIndex, scale]);
+  }, [textAt, textValue, color, sizeIndex, scale, textBg]);
 
   /** Index of the top-most text annotation under `p`, if any. */
   const hitText = (p: Point): number => {
@@ -379,6 +421,7 @@ export default function SnipOverlay() {
       setColor(s.color);
       setTextAt(s.at);
       setTextValue(s.text);
+      setTextBg(s.bg);
     }
     setDrag(null);
   }
@@ -388,7 +431,7 @@ export default function SnipOverlay() {
       if (!image || !selection || selection.w < 1 || selection.h < 1 || busy) return;
       const pending: Shape[] =
         textAt && textValue.trim()
-          ? [...shapes, { kind: "text", color, size: SIZES[sizeIndex].font * scale, at: textAt, text: textValue }]
+          ? [...shapes, { kind: "text", color, size: SIZES[sizeIndex].font * scale, at: textAt, text: textValue, bg: textBg }]
           : shapes;
       const sel = {
         x: Math.round(selection.x),
@@ -410,7 +453,7 @@ export default function SnipOverlay() {
         setBusy(false);
       }
     },
-    [image, selection, shapes, textAt, textValue, color, sizeIndex, scale, block, busy],
+    [image, selection, shapes, textAt, textValue, color, sizeIndex, scale, block, busy, textBg],
   );
 
   // Keyboard: Esc closes, Ctrl+Z undoes, Ctrl+C copies, Ctrl+S saves, Enter does both.
@@ -502,7 +545,13 @@ export default function SnipOverlay() {
           aria-label="Nội dung chữ"
           placeholder="Nhập chữ…"
           value={textValue}
-          style={{ left: css(textAt.x), top: css(textAt.y), color, fontSize: SIZES[sizeIndex].font }}
+          style={{
+            left: css(textAt.x),
+            top: css(textAt.y),
+            fontSize: SIZES[sizeIndex].font,
+            color: textColors(color, textBg).fill,
+            background: textColors(color, textBg).box ?? "rgba(0, 0, 0, 0.25)",
+          }}
           onChange={(e) => setTextValue(e.target.value)}
           onBlur={commitText}
           onKeyDown={(e) => {
@@ -581,6 +630,25 @@ export default function SnipOverlay() {
                   onClick={() => setSizeIndex(i)}
                 >
                   <span className="snip-dot" style={{ width: 4 + s.stroke * 1.5, height: 4 + s.stroke * 1.5, background: color }} />
+                </button>
+              ))}
+            </div>
+          )}
+          {tool === "text" && (
+            <div className="snip-row" role="radiogroup" aria-label="Nền chữ">
+              <span className="snip-label">Nền chữ</span>
+              {TEXT_BGS.map((b) => (
+                <button
+                  key={b.value}
+                  role="radio"
+                  aria-checked={textBg === b.value}
+                  className={"snip-btn snip-bg-btn" + (textBg === b.value ? " on" : "")}
+                  title={b.label}
+                  onClick={() => setTextBg(b.value)}
+                >
+                  <span className={"snip-bg-sample snip-bg-" + b.value} style={b.value === "color" ? { background: color, color: textColors(color, "color").fill } : undefined}>
+                    Aa
+                  </span>
                 </button>
               ))}
             </div>

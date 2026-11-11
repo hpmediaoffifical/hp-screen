@@ -272,3 +272,12 @@ pub fn open_main(app: AppHandle) {
 pub fn get_target(state: State<'_, AppState>) -> Target {
     state.recorder.last_target().unwrap_or_else(crate::hotkeys::default_target)
 }
+
+/// The frozen screen as raw image bytes. Sent through IPC rather than loaded from a file URL:
+/// a picture from another origin would lock the drawing canvas and block exporting it.
+#[tauri::command]
+pub fn snip_frozen(app: AppHandle) -> Result<tauri::ipc::Response, String> {
+    let ctx = crate::snip::context(&app).ok_or("Công cụ chụp ảnh chưa được mở")?;
+    let bytes = std::fs::read(&ctx.frozen).map_err(|e| format!("Không đọc được ảnh màn hình: {e}"))?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
