@@ -36,6 +36,39 @@ export interface Camera {
   scale: number;
 }
 
+export type Aspect = "source" | "16:9" | "9:16" | "1:1";
+export type Fit = "fit" | "fill";
+
+export interface FrameDoc {
+  aspect: Aspect;
+  fit: Fit;
+  background: string;
+  /** Fraction of the short side, each side (0–0.2). */
+  padding: number;
+  /** Corner radius in output pixels (0–40). */
+  radius: number;
+  shadow: boolean;
+}
+
+export type Background = { kind: "solid"; color: [number, number, number] } | { kind: "gradient"; from: [number, number, number]; to: [number, number, number] };
+
+/** hp-core::layout::Layout */
+export interface Layout {
+  out_w: number;
+  out_h: number;
+  video: [number, number, number, number];
+  radius: number;
+  shadow: boolean;
+  background: Background;
+  fill_aspect: number | null;
+  decorated: boolean;
+}
+
+export interface GifOptions {
+  fps: number;
+  width: number;
+}
+
 export interface EditDoc {
   v: number;
   trim: { start_ms: number; end_ms: number | null };
@@ -43,6 +76,7 @@ export interface EditDoc {
   cuts: Span[];
   effects: EffectToggles;
   zoom: ZoomDoc;
+  frame: FrameDoc;
 }
 
 /** The video's size and length, sent with zoom commands. */
@@ -89,7 +123,8 @@ export interface KeepInfo {
 export const editOpen = (path: string) => invoke<EditSession>("edit_open", { path });
 export const editSave = (path: string, doc: EditDoc) => invoke<void>("edit_save", { path, doc });
 export const editKeep = (doc: EditDoc, durationMs: number) => invoke<KeepInfo>("edit_keep", { doc, durationMs });
-export const exportStart = (path: string, doc: EditDoc) => invoke<string>("export_start", { path, doc });
+export const exportStart = (path: string, doc: EditDoc, gif: GifOptions | null = null) => invoke<string>("export_start", { path, doc, gif });
+export const editLayout = (doc: EditDoc, frame: Frame) => invoke<Layout>("edit_layout", { doc, frame });
 export const exportCancel = () => invoke<void>("export_cancel");
 export const zoomAuto = (path: string, doc: EditDoc, frame: Frame) => invoke<ZoomSegment[]>("zoom_auto", { path, doc, frame });
 export const zoomTrack = (path: string, doc: EditDoc, frame: Frame) => invoke<[number, Camera][]>("zoom_track", { path, doc, frame });

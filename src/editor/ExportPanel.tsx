@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { errorMessage, formatElapsed, libraryOpen, libraryReveal } from "../api";
-import { exportCancel, exportStart, onExportDone, onExportError, onExportProgress, type EditDoc } from "../editApi";
+import { exportCancel, exportStart, onExportDone, onExportError, onExportProgress, type EditDoc, type GifOptions } from "../editApi";
 
 type Job = { kind: "idle" } | { kind: "running"; done: number; total: number } | { kind: "done"; path: string } | { kind: "error"; message: string };
 
@@ -16,6 +16,8 @@ export default function ExportPanel(props: {
   beforeExport: () => Promise<void>;
 }) {
   const [job, setJob] = useState<Job>({ kind: "idle" });
+  const [format, setFormat] = useState<"mp4" | "gif">("mp4");
+  const [gif, setGif] = useState<GifOptions>({ fps: 15, width: 720 });
   const { path } = props;
 
   useEffect(() => {
@@ -31,7 +33,7 @@ export default function ExportPanel(props: {
     try {
       await props.beforeExport();
       setJob({ kind: "running", done: 0, total: 1 });
-      await exportStart(props.path, props.doc);
+      await exportStart(props.path, props.doc, format === "gif" ? gif : null);
     } catch (e) {
       setJob({ kind: "error", message: errorMessage(e) });
     }
@@ -41,11 +43,38 @@ export default function ExportPanel(props: {
   return (
     <div className="panel-body" hidden={props.hidden}>
       <p className="hint">
-        Video mới dài {formatElapsed(props.outputMs)}, lưu cạnh video gốc với hậu tố <code>_edit</code>. Video gốc giữ nguyên.
+        Dài {formatElapsed(props.outputMs)}, lưu cạnh video gốc với hậu tố <code>_edit</code>. Video gốc giữ nguyên.
       </p>
+      <div className="row" role="radiogroup" aria-label="Định dạng">
+        {(["mp4", "gif"] as const).map((f) => (
+          <button key={f} className={"chip chip-toggle" + (format === f ? " on" : "")} aria-pressed={format === f} onClick={() => setFormat(f)}>
+            {f.toUpperCase()}
+          </button>
+        ))}
+      </div>
+      {format === "gif" && (
+        <>
+          <div className="row" role="radiogroup" aria-label="Số khung mỗi giây">
+            {[10, 15].map((fps) => (
+              <button key={fps} className={"chip chip-toggle" + (gif.fps === fps ? " on" : "")} aria-pressed={gif.fps === fps} onClick={() => setGif({ ...gif, fps })}>
+                {fps} fps
+              </button>
+            ))}
+          </div>
+          <div className="row" role="radiogroup" aria-label="Chiều rộng">
+            {[480, 720, 960].map((width) => (
+              <button key={width} className={"chip chip-toggle" + (gif.width === width ? " on" : "")} aria-pressed={gif.width === width} onClick={() => setGif({ ...gif, width })}>
+                {width} px
+              </button>
+            ))}
+          </div>
+          <p className="hint">GIF không có tiếng.</p>
+          {props.outputMs > 60_000 && <p className="hint bar-warn">GIF dài hơn 1 phút sẽ rất nặng. Nên cắt ngắn bớt.</p>}
+        </>
+      )}
       <div className="row">
         <button className="btn btn-rec" disabled={!props.canExport || running} onClick={start}>
-          Xuất MP4
+          Xuất {format.toUpperCase()}
         </button>
         {running && (
           <button className="btn" onClick={() => exportCancel().catch(() => {})}>

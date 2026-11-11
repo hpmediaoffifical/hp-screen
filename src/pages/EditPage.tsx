@@ -1,6 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorMessage, formatElapsed } from "../api";
-import { addCut, editKeep, editOpen, editSave, zoomAuto, zoomTrack, type Camera, type EditDoc, type EditSession, type KeepInfo, type Span, type ZoomSegment } from "../editApi";
+import {
+  addCut,
+  editKeep,
+  editLayout,
+  editOpen,
+  editSave,
+  zoomAuto,
+  zoomTrack,
+  type Camera,
+  type EditDoc,
+  type EditSession,
+  type FrameDoc,
+  type KeepInfo,
+  type Layout,
+  type Span,
+  type ZoomSegment,
+} from "../editApi";
 import ExportPanel from "../editor/ExportPanel";
 import Preview, { type PreviewHandle } from "../editor/Preview";
 import Timeline from "../editor/Timeline";
@@ -8,11 +24,12 @@ import { drawEffects } from "../editor/drawEffects";
 import ZoomTrack from "../editor/ZoomTrack";
 import { cameraAt } from "../editor/zoomMath";
 
-type Tab = "cut" | "effects" | "zoom" | "export";
+type Tab = "cut" | "effects" | "zoom" | "frame" | "export";
 const TABS: { id: Tab; label: string }[] = [
   { id: "cut", label: "Cắt" },
   { id: "effects", label: "Hiệu ứng" },
   { id: "zoom", label: "Zoom" },
+  { id: "frame", label: "Khung" },
   { id: "export", label: "Xuất" },
 ];
 
@@ -32,6 +49,7 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
   const [tab, setTab] = useState<Tab>("cut");
   const [message, setMessage] = useState("");
   const [track, setTrack] = useState<[number, Camera][]>([]);
+  const [layout, setLayout] = useState<Layout | null>(null);
   const [zoomSel, setZoomSel] = useState<number | null>(null);
   const [picking, setPicking] = useState(false);
   const preview = useRef<PreviewHandle>(null);
@@ -86,6 +104,18 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
       alive = false;
     };
   }, [doc, session]);
+
+  // The output frame layout, worked out by the core.
+  useEffect(() => {
+    if (!doc || !session) return;
+    let alive = true;
+    editLayout(doc, frameOf(session))
+      .then((l) => alive && setLayout(l))
+      .catch((e) => alive && setMessage(errorMessage(e)));
+    return () => {
+      alive = false;
+    };
+  }, [doc?.frame, session]);
 
   // The zoom camera path, worked out by the core, refreshed shortly after zoom edits.
   useEffect(() => {
@@ -264,6 +294,9 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
         <Preview
           ref={preview}
           path={props.path}
+          srcW={session.info.width}
+          srcH={session.info.height}
+          layout={layout}
           keep={keep?.keep ?? []}
           onTime={setPlayhead}
           onPlaying={setPlaying}
@@ -376,6 +409,7 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
               )}
             </div>
           )}
+          {tab === "frame" && <FramePanel frame={doc.frame} onChange={(frame) => change({ ...doc, frame })} />}
           {/* Always mounted, so a running export keeps its progress and result across tabs. */}
           <ExportPanel
             hidden={tab !== "export"}
@@ -464,6 +498,76 @@ function ZoomControls(props: {
         )}
       </div>
       <button className="btn btn-small btn-danger" onClick={props.onDelete}>Xóa đoạn zoom</button>
+    </div>
+  );
+}
+
+const BACKGROUNDS: { id: string; label: string; css: string }[] = [
+  { id: "slate", label: "Xám đậm", css: "#1e293b" },
+  { id: "black", label: "Đen", css: "#000000" },
+  { id: "white", label: "Trắng", css: "#ffffff" },
+  { id: "ocean", label: "Biển", css: "linear-gradient(135deg, #0ea5e9, #6366f1)" },
+  { id: "sunset", label: "Hoàng hôn", css: "linear-gradient(135deg, #f97316, #ec4899)" },
+  { id: "forest", label: "Rừng", css: "linear-gradient(135deg, #10b981, #0f766e)" },
+];
+
+/** The "Khung" tab: output aspect, fit or fill, and the decoration around the video. */
+function FramePanel(props: { frame: FrameDoc; onChange: (f: FrameDoc) => void }) {
+  const f = props.frame;
+  const set = (patch: Partial<FrameDoc>) => props.onChange({ ...f, ...patch });
+  const chip = (on: boolean) => "chip chip-toggle" + (on ? " on" : "");
+  return (
+    <div className="panel-body">
+      <span className="label">Tỉ lệ</span>
+      <div className="row" role="radiogroup" aria-label="Tỉ lệ khung">
+        {(
+          [
+            ["source", "Gốc"],
+            ["16:9", "16:9"],
+            ["9:16", "9:16"],
+            ["1:1", "1:1"],
+          ] as const
+        ).map(([v, label]) => (
+          <button key={v} className={chip(f.aspect === v)} aria-pressed={f.aspect === v} onClick={() => set({ aspect: v })}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="row" role="radiogroup" aria-label="Cách đặt video">
+        <button className={chip(f.fit === "fit")} aria-pressed={f.fit === "fit"} onClick={() => set({ fit: "fit" })} title="Cả video nằm trong khung, chỗ trống là nền">
+          Vừa khung
+        </button>
+        <button className={chip(f.fit === "fill")} aria-pressed={f.fit === "fill"} onClick={() => set({ fit: "fill" })} title="Cắt video cho kín khung; tâm đi theo zoom">
+          Lấp đầy
+        </button>
+      </div>
+      <span className="label">Nền</span>
+      <div className="row">
+        {BACKGROUNDS.map((b) => (
+          <button
+            key={b.id}
+            className={"bg-swatch" + (f.background === b.id ? " on" : "")}
+            style={{ background: b.css }}
+            title={b.label}
+            aria-label={`Nền ${b.label}`}
+            aria-pressed={f.background === b.id}
+            onClick={() => set({ background: b.id })}
+          />
+        ))}
+      </div>
+      <label className="zoom-scale">
+        Khoảng đệm: <strong>{Math.round(f.padding * 100)}%</strong>
+        <input type="range" min={0} max={0.2} step={0.01} value={f.padding} onChange={(e) => set({ padding: Number(e.target.value) })} />
+      </label>
+      <label className="zoom-scale">
+        Bo góc: <strong>{Math.round(f.radius)} px</strong>
+        <input type="range" min={0} max={40} step={1} value={f.radius} onChange={(e) => set({ radius: Number(e.target.value) })} />
+      </label>
+      <label className="check">
+        <input type="checkbox" checked={f.shadow} onChange={(e) => set({ shadow: e.target.checked })} />
+        <span>Bóng đổ</span>
+      </label>
+      <p className="hint">Nền, khoảng đệm, bo góc và bóng chỉ thấy khi video không phủ kín khung.</p>
     </div>
   );
 }

@@ -336,3 +336,12 @@ html[data-window="region-border"], html[data-window="region-border"] body { back
 .zoom-controls { display: flex; flex-direction: column; gap: 8px; width: 100%; }
 .zoom-scale { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
 .zoom-scale input { width: 100%; accent-color: var(--accent); }
+
+/* Output frame in the preview (aspect, background, video window) */
+.preview-frame { position: relative; flex: none; overflow: hidden; }
+.preview-frame .preview-stage { position: absolute; max-width: none; max-height: none; display: block; overflow: hidden; }
+.preview-frame .preview-zoom { position: absolute; left: 0; top: 0; display: block; }
+.preview-frame .preview-video { max-width: none; max-height: none; }
+.preview-frame > .preview-overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
+.bg-swatch { width: 26px; height: 26px; border-radius: 6px; border: 2px solid var(--border); cursor: pointer; padding: 0; }
+.bg-swatch.on { border-color: #fff; outline: 2px solid var(--accent); }
