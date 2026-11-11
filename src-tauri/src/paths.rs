@@ -35,7 +35,8 @@ pub fn now_local() -> LocalTime {
 /// A file path in `dir` that does not exist yet, named from the user's pattern and the time now.
 pub fn new_media_path(dir: &Path, settings: &Settings, ext: &str) -> PathBuf {
     let stem = render_pattern(&settings.name_pattern, now_local());
-    unique_path(dir, &stem, ext, &|p| p.exists())
+    // Videos and screenshots share companion files by stem, so a stem is taken by either kind.
+    unique_path(dir, &stem, ext, &|p| p.with_extension("mp4").exists() || p.with_extension("png").exists())
 }
 
 fn settings_file(app: &AppHandle) -> Result<PathBuf, String> {
@@ -116,5 +117,24 @@ mod tests {
         std::fs::create_dir_all(dir.join(DATA_DIR)).unwrap();
         ensure_recordable(&dir).unwrap();
         assert_eq!(std::fs::read_dir(dir.join(DATA_DIR)).unwrap().count(), 0, "the write probe is removed");
+    }
+}
+
+#[cfg(test)]
+mod shared_stem_tests {
+    use super::*;
+
+    /// A screenshot taken in the second a recording starts must not get the video's name,
+    /// because both would then share the same companion files.
+    #[test]
+    fn a_new_screenshot_never_takes_the_stem_of_an_existing_video() {
+        let dir = std::env::temp_dir().join("hp-screen-tests").join(format!("newpath-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let settings = Settings { name_pattern: "cung-ten".to_string(), ..Settings::default() };
+        std::fs::write(dir.join("cung-ten.mp4"), b"video").unwrap();
+        assert_eq!(new_media_path(&dir, &settings, "png"), dir.join("cung-ten_2.png"));
+        std::fs::write(dir.join("cung-ten_2.png"), b"image").unwrap();
+        assert_eq!(new_media_path(&dir, &settings, "mp4"), dir.join("cung-ten_3.mp4"));
     }
 }

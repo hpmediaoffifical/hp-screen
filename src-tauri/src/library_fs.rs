@@ -75,6 +75,14 @@ pub fn write_meta(media: &Path, meta: &MediaMeta) {
     }
 }
 
+/// Whether any video or screenshot in `dir` is already called `stem` (ignoring case).
+pub fn stem_in_use(dir: &Path, stem: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else { return false };
+    entries.flatten().map(|e| e.path()).any(|p| {
+        kind_of(&p).is_some() && p.file_stem().is_some_and(|s| s.to_string_lossy().to_lowercase() == stem.to_lowercase())
+    })
+}
+
 /// Renames `path` to `new_stem` (extension kept) along with its companion files.
 pub fn rename(path: &Path, new_stem: &str) -> Result<PathBuf, String> {
     if new_stem.trim().is_empty() {
@@ -86,8 +94,10 @@ pub fn rename(path: &Path, new_stem: &str) -> Result<PathBuf, String> {
     if target == path {
         return Ok(target);
     }
-    if target.exists() {
-        return Err(format!("Đã có file tên \"{stem}.{ext}\" trong thư mục"));
+    let same_item = path.file_stem().is_some_and(|s| s.to_string_lossy().to_lowercase() == stem.to_lowercase());
+    let taken = !same_item && path.parent().is_some_and(|dir| stem_in_use(dir, &stem));
+    if taken || (!same_item && target.exists()) {
+        return Err(format!("Đã có video hoặc ảnh tên \"{stem}\" trong thư mục"));
     }
     std::fs::rename(path, &target).map_err(|e| format!("Không đổi tên được: {e}"))?;
     for (from, to) in companion_paths(path).iter().zip(companion_paths(&target)) {
@@ -167,5 +177,28 @@ mod tests {
         let dir = fixture("rename-same");
         assert_eq!(rename(&dir.join("hp_a.mp4"), "hp_a").unwrap(), dir.join("hp_a.mp4"));
         assert!(dir.join("hp_a.mp4").exists());
+    }
+}
+
+#[cfg(test)]
+mod shared_stem_tests {
+    use super::*;
+
+    /// A video and a screenshot with the same name would share `.hpscreen` companion files,
+    /// so renaming or deleting one would damage the other's input log.
+    #[test]
+    fn rename_refuses_a_stem_used_by_the_other_kind() {
+        let dir = std::env::temp_dir().join("hp-screen-tests").join(format!("stem-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".hpscreen")).unwrap();
+        std::fs::write(dir.join("bai1.mp4"), b"video").unwrap();
+        std::fs::write(dir.join("anh.png"), b"image").unwrap();
+        std::fs::write(hp_core::library::sidecar_path(&dir.join("bai1.mp4")), b"log").unwrap();
+
+        assert!(rename(&dir.join("anh.png"), "bai1").is_err());
+        assert!(dir.join("anh.png").exists());
+        assert_eq!(std::fs::read(hp_core::library::sidecar_path(&dir.join("bai1.mp4"))).unwrap(), b"log");
+        assert!(stem_in_use(&dir, "BAI1"), "Windows file names ignore case");
+        assert!(!stem_in_use(&dir, "bai2"));
     }
 }

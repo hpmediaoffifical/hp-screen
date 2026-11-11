@@ -33,7 +33,7 @@ pub struct Recorder {
 }
 
 struct Inner {
-    app: AppHandle,
+    host: Arc<dyn Host>,
     state: Mutex<RecState>,
     pipeline: Mutex<Option<Pipeline>>,
     input_hook: Mutex<Option<InputHook>>,
@@ -50,9 +50,13 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl Recorder {
     pub fn new(app: AppHandle) -> Self {
+        Self::with_host(Arc::new(AppHost(app)))
+    }
+
+    pub fn with_host(host: Arc<dyn Host>) -> Self {
         Self {
             inner: Arc::new(Inner {
-                app,
+                host,
                 state: Mutex::new(RecState::Idle),
                 pipeline: Mutex::new(None),
                 input_hook: Mutex::new(None),
@@ -68,8 +72,19 @@ impl Recorder {
         self.inner.status(None, None)
     }
 
+    /// What the hotkeys and the tray record: the last selection made in the UI or last recorded.
     pub fn last_target(&self) -> Option<Target> {
         lock(&self.inner.last_target).clone()
+    }
+
+    /// Remembers the UI selection so hotkeys and the tray act on it.
+    pub fn set_target(&self, target: Target) {
+        *lock(&self.inner.last_target) = Some(target);
+    }
+
+    #[cfg(test)]
+    fn has_pipeline(&self) -> bool {
+        lock(&self.inner.pipeline).is_some() || lock(&self.inner.input_hook).is_some()
     }
 
     /// Starts the countdown and then the recording. Returns as soon as the countdown begins.
@@ -139,7 +154,7 @@ impl Inner {
     }
 
     fn emit(&self, countdown: Option<u32>, warning: Option<String>) {
-        events::rec_state(&self.app, &self.status(countdown, warning));
+        self.host.state(&self.status(countdown, warning));
     }
 
     fn count_down_and_begin(self: Arc<Self>, generation: u64, target: Target, settings: Settings) {
@@ -155,19 +170,33 @@ impl Inner {
                 }
             }
         }
+        // Held from before the state says Recording until the pipeline is stored. A stop, pause
+        // or failure arriving while the recording starts up waits here and then finds the real
+        // pipeline, instead of finding nothing and leaving a recording running behind an idle UI.
+        let mut slot = lock(&self.pipeline);
         if !still_ours(&self) || self.apply(Command::CountdownDone).is_err() {
             return;
         }
-        if let Err(message) = self.clone().begin(target, &settings) {
-            *lock(&self.state) = RecState::Idle;
-            *lock(&self.file) = None;
-            events::rec_error(&self.app, &message);
+        match self.clone().begin(target, &settings) {
+            Ok(pipeline) => *slot = Some(pipeline),
+            Err(message) => {
+                // If a stop already arrived, its thread finishes the session; otherwise end it here.
+                let mut state = lock(&self.state);
+                if matches!(*state, RecState::Recording | RecState::Paused) {
+                    *state = RecState::Idle;
+                }
+                drop(state);
+                *lock(&self.file) = None;
+                self.host.error(&message);
+            }
         }
+        drop(slot);
         self.emit(None, None);
     }
 
-    fn begin(self: Arc<Self>, target: Target, settings: &Settings) -> Result<(), String> {
-        let dir = output_dir(&self.app, settings)?;
+    /// Starts capturing. The caller holds the pipeline slot and stores the returned pipeline.
+    fn begin(self: Arc<Self>, target: Target, settings: &Settings) -> Result<Pipeline, String> {
+        let dir = self.host.output_dir(settings)?;
         crate::paths::ensure_recordable(&dir)?;
         let space_dir = dir.clone();
         let ticks = std::sync::atomic::AtomicU32::new(0);
@@ -204,7 +233,7 @@ impl Inner {
                     let low = ticks.fetch_add(1, Ordering::SeqCst) % 10 == 9
                         && crate::paths::free_space(&space_dir).is_some_and(|free| free < crate::paths::MIN_FREE_BYTES);
                     if low {
-                        events::rec_error(&inner.app, "Ổ đĩa sắp đầy (còn dưới 500 MB) nên HP Screen đã dừng quay và lưu video.");
+                        inner.host.error("Ổ đĩa sắp đầy (còn dưới 500 MB) nên HP Screen đã dừng quay và lưu video.");
                         std::thread::spawn(move || {
                             let _ = inner.stop();
                         });
@@ -228,16 +257,17 @@ impl Inner {
         *lock(&self.input_hook) =
             log_header.and_then(|header| start_input_hook(&sidecar_path(&path), header, pipeline.timeline(), own_hotkeys).ok());
         *lock(&self.file) = Some(path);
-        *lock(&self.pipeline) = Some(pipeline);
-        Ok(())
+        Ok(pipeline)
     }
 
     fn stop(self: Arc<Self>) -> Result<(), String> {
         self.apply(Command::Stop)?;
         self.emit(None, None);
         std::thread::spawn(move || {
-            lock(&self.input_hook).take(); // remove the hooks as soon as recording ends
+            // Take the pipeline first: this waits for a recording that is still starting up,
+            // so the hooks it installs are the ones removed on the next line.
             let pipeline = lock(&self.pipeline).take();
+            lock(&self.input_hook).take(); // remove the hooks as soon as recording ends
             let result = match pipeline {
                 Some(pipeline) => pipeline.finish().map(|stats| {
                     if let Some(path) = lock(&self.file).clone() {
@@ -254,8 +284,8 @@ impl Inner {
 
     /// The pipeline reported an unrecoverable error while recording.
     fn fail(self: Arc<Self>, message: &str) {
-        lock(&self.input_hook).take();
         let pipeline = lock(&self.pipeline).take();
+        lock(&self.input_hook).take();
         if pipeline.is_none() {
             return; // a stop is already closing the file and will report the outcome
         }
@@ -268,9 +298,100 @@ impl Inner {
         let _ = self.apply(Command::Finalized);
         *lock(&self.file) = None;
         if let Some(message) = error {
-            events::rec_error(&self.app, &message);
+            self.host.error(&message);
         }
-        events::library_changed(&self.app);
+        self.host.library_changed();
         self.emit(None, None);
+    }
+}
+
+#[cfg(test)]
+mod desktop_tests {
+    //! Need a real desktop session: `cargo test -p hp-screen --lib -- --ignored --test-threads=1`
+    use super::*;
+    use std::time::Instant;
+
+    fn wait_for_idle(recorder: &Recorder) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while recorder.status().state != RecState::Idle {
+            assert!(Instant::now() < deadline, "stuck in {:?}", recorder.status().state);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// With the countdown off, a stop can arrive while the recording is still starting up.
+    /// The session must end completely: nothing may keep capturing behind an idle UI.
+    #[test]
+    #[ignore = "needs a desktop session"]
+    fn a_stop_during_startup_leaves_nothing_running() {
+        let host = Arc::new(FakeHost::default());
+        let recorder = Recorder::with_host(host.clone());
+        let dir = std::env::temp_dir().join("hp-screen-tests").join(format!("recorder-{}", std::process::id()));
+        let settings = Settings {
+            output_dir: Some(dir),
+            countdown_secs: 0,
+            system_audio: false,
+            mic: false,
+            ..Settings::default()
+        };
+        for round in 0..6 {
+            recorder.start(Target::Monitor { index: 0 }, settings.clone()).unwrap();
+            // Stop as early as the state machine allows it.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while recorder.stop().is_err() {
+                assert!(Instant::now() < deadline, "round {round}: never became stoppable");
+                std::thread::yield_now();
+            }
+            wait_for_idle(&recorder);
+            std::thread::sleep(Duration::from_millis(600)); // a late begin() would have stored its pipeline by now
+            assert!(!recorder.has_pipeline(), "round {round}: a recording is still running while the state is Idle");
+        }
+    }
+}
+
+/// What the recorder needs from the application around it. Keeping this behind a trait lets
+/// the session logic be exercised without a running Tauri app.
+pub trait Host: Send + Sync {
+    fn state(&self, status: &RecStatus);
+    fn error(&self, message: &str);
+    fn library_changed(&self);
+    fn output_dir(&self, settings: &Settings) -> Result<PathBuf, String>;
+}
+
+struct AppHost(AppHandle);
+
+impl Host for AppHost {
+    fn state(&self, status: &RecStatus) {
+        events::rec_state(&self.0, status);
+    }
+    fn error(&self, message: &str) {
+        events::rec_error(&self.0, message);
+    }
+    fn library_changed(&self) {
+        events::library_changed(&self.0);
+    }
+    fn output_dir(&self, settings: &Settings) -> Result<PathBuf, String> {
+        output_dir(&self.0, settings)
+    }
+}
+
+/// Test host: remembers errors and saves into the folder named in the settings.
+#[cfg(test)]
+#[derive(Default)]
+struct FakeHost {
+    errors: Mutex<Vec<String>>,
+}
+
+#[cfg(test)]
+impl Host for FakeHost {
+    fn state(&self, _status: &RecStatus) {}
+    fn error(&self, message: &str) {
+        lock(&self.errors).push(message.to_string());
+    }
+    fn library_changed(&self) {}
+    fn output_dir(&self, settings: &Settings) -> Result<PathBuf, String> {
+        let dir = settings.output_dir.clone().ok_or("no folder")?;
+        std::fs::create_dir_all(dir.join(hp_core::library::DATA_DIR)).map_err(|e| e.to_string())?;
+        Ok(dir)
     }
 }

@@ -63,6 +63,7 @@ pub fn run() {
             commands::preview_name,
             commands::pick_folder,
             commands::output_folder,
+            commands::set_target,
         ])
         .run(tauri::generate_context!())
         .expect("error while running HP Screen");

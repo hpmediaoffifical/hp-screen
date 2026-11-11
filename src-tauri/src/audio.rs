@@ -65,19 +65,25 @@ impl Drop for AudioSession {
     }
 }
 
+/// Returns once the devices have been opened (or found missing), so the caller can start the
+/// recording clock knowing sound is already flowing.
 pub fn start_audio(cfg: AudioConfig, timeline: Arc<Mutex<Timeline>>, sink: AudioSink) -> Result<AudioSession, String> {
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
     let stop = Arc::new(AtomicBool::new(false));
     let thread = {
         let stop = stop.clone();
         std::thread::Builder::new()
             .name("hp-audio".into())
-            .spawn(move || run(cfg, &stop, &timeline, sink))
+            .spawn(move || run(cfg, &stop, &timeline, sink, ready_tx))
             .map_err(|e| format!("Không tạo được luồng thu âm: {e}"))?
     };
+    // A device that takes too long must not block recording; it joins in when it is ready.
+    let _ = ready_rx.recv_timeout(Duration::from_secs(3));
     Ok(AudioSession { stop, thread: Some(thread) })
 }
 
-fn run(cfg: AudioConfig, stop: &AtomicBool, timeline: &Mutex<Timeline>, mut sink: AudioSink) {
+fn run(cfg: AudioConfig, stop: &AtomicBool, timeline: &Mutex<Timeline>, mut sink: AudioSink, ready: std::sync::mpsc::Sender<()>) {
+    crate::encoder::init_thread();
     let host = cpal::default_host();
     let mut sources: Vec<Source> = [(SourceKind::System, cfg.system), (SourceKind::Mic, cfg.mic)]
         .into_iter()
@@ -93,6 +99,7 @@ fn run(cfg: AudioConfig, stop: &AtomicBool, timeline: &Mutex<Timeline>, mut sink
             for source in &mut sources {
                 source.supervise(&host);
             }
+            let _ = ready.send(()); // the first pass tells the caller the devices are open
         }
 
         let video_time = timeline.lock().unwrap_or_else(|e| e.into_inner()).video_100ns(clock::now_100ns());

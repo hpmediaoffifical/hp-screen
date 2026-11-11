@@ -152,3 +152,5 @@ export function formatSize(bytes: number): string {
 export const previewName = (pattern: string) => invoke<string>("preview_name", { pattern });
 export const pickFolder = () => invoke<string | null>("pick_folder");
 export const outputFolder = () => invoke<string>("output_folder");
+
+export const setTarget = (target: Target) => invoke<void>("set_target", { target });

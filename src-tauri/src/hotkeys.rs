@@ -41,7 +41,7 @@ pub fn register_hotkeys(app: &AppHandle, settings: &Settings) -> Vec<HotkeyStatu
     ]
     .into_iter()
     .map(|(action, hotkey)| {
-        let registered = shortcuts.on_shortcut(hotkey.as_str(), move |app, _shortcut, event| {
+        let registered = shortcuts.on_shortcut(plugin_format(hotkey).as_str(), move |app, _shortcut, event| {
             #[cfg(debug_assertions)]
             eprintln!("[hp] hotkey event {action:?} {:?}", event.state);
             if event.state == ShortcutState::Pressed {
@@ -92,5 +92,25 @@ pub fn run_action(app: &AppHandle, action: HotkeyAction) {
     };
     if let Err(message) = result {
         events::rec_error(app, &message);
+    }
+}
+
+/// The hotkey text in the form the shortcut plugin parses: it calls the Windows key "Super".
+fn plugin_format(hotkey: &str) -> String {
+    hotkey.replace("Win+", "Super+")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tauri_plugin_global_shortcut::Shortcut;
+
+    #[test]
+    fn every_hotkey_the_settings_accept_is_understood_by_the_plugin() {
+        for hotkey in ["Ctrl+Alt+R", "Win+Shift+5", "Ctrl+Win+F9", "F9", "Alt+Z", "Ctrl+Alt+Shift+Win+0", "Ctrl+F24"] {
+            let canonical = hp_core::hotkey::format_hotkey(&hp_core::hotkey::parse_hotkey(hotkey).unwrap());
+            let parsed: Result<Shortcut, _> = plugin_format(&canonical).parse();
+            assert!(parsed.is_ok(), "{canonical} is rejected by the plugin: {:?}", parsed.err());
+        }
     }
 }

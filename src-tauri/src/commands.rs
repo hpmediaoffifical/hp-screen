@@ -33,7 +33,12 @@ pub fn list_windows() -> Vec<WindowInfo> {
 #[tauri::command]
 pub async fn take_screenshot(app: AppHandle, state: State<'_, AppState>, target: Target) -> Result<String, String> {
     let settings = state.settings();
-    let path = screenshot::take_screenshot(&app, &settings, &target)?;
+    // The screenshot is asked for from the main window: keep that window out of the picture.
+    crate::shell::set_main_hidden_from_capture(&app, true);
+    std::thread::sleep(std::time::Duration::from_millis(150)); // let the compositor apply it
+    let result = screenshot::take_screenshot(&app, &settings, &target);
+    crate::shell::set_main_hidden_from_capture(&app, false);
+    let path = result?;
     events::library_changed(&app);
     Ok(path.to_string_lossy().into_owned())
 }
@@ -101,8 +106,12 @@ pub fn settings_get(state: State<'_, AppState>) -> Settings {
 pub fn settings_set(app: AppHandle, state: State<'_, AppState>, settings: Settings) -> Result<Settings, String> {
     let settings = hp_core::settings::normalize(settings);
     crate::paths::write_settings(&app, &settings)?;
-    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = settings.clone();
-    crate::hotkeys::register_hotkeys(&app, &settings);
+    let previous = std::mem::replace(&mut *state.settings.lock().unwrap_or_else(|e| e.into_inner()), settings.clone());
+    // Re-registering briefly drops the hotkeys, so only do it when one of them changed.
+    let hotkeys = |s: &Settings| [s.hotkey_toggle.clone(), s.hotkey_pause.clone(), s.hotkey_screenshot.clone()];
+    if hotkeys(&previous) != hotkeys(&settings) {
+        crate::hotkeys::register_hotkeys(&app, &settings);
+    }
     {
         use tauri_plugin_autostart::ManagerExt;
         let autostart = app.autolaunch();
@@ -193,4 +202,10 @@ pub async fn pick_folder(app: AppHandle) -> Option<String> {
 #[tauri::command]
 pub fn output_folder(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
     library_dir(&app, &state).map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Tells the core what is selected on the record page, so hotkeys and the tray act on it.
+#[tauri::command]
+pub fn set_target(state: State<'_, AppState>, target: Target) {
+    state.recorder.set_target(target);
 }

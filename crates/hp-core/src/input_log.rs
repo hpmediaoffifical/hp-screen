@@ -62,6 +62,8 @@ pub fn loggable_combo(k: &KeyStroke) -> Option<String> {
     let has_command_modifier = k.ctrl || k.alt || k.win;
     let name = match special_key_name(k.vk) {
         Some(name) => name,
+        // Ctrl+Alt is how AltGr arrives, and AltGr plus a character key types text.
+        None if k.ctrl && k.alt && !k.win => return None,
         None if has_command_modifier => character_key_name(k.vk)?,
         None => return None,
     };
@@ -218,5 +220,34 @@ mod tests {
         assert!(s.accept(17));
         assert!(!s.accept(30));
         assert!(s.accept(34));
+    }
+}
+
+#[cfg(test)]
+mod altgr_tests {
+    use super::*;
+
+    fn key(ctrl: bool, alt: bool, shift: bool, win: bool, vk: u32) -> KeyStroke {
+        KeyStroke { ctrl, alt, shift, win, vk }
+    }
+
+    /// AltGr reaches the hook as Ctrl+Alt. On the Windows Vietnamese layout digits are typed
+    /// with AltGr, and other layouts type letters and symbols that way, so Ctrl+Alt plus a
+    /// character key is text, not a shortcut.
+    #[test]
+    fn ctrl_alt_with_a_character_key_is_treated_as_typing() {
+        assert_eq!(loggable_combo(&key(true, true, false, false, 0x31)), None); // AltGr+1
+        assert_eq!(loggable_combo(&key(true, true, false, false, 0x45)), None); // AltGr+E
+        assert_eq!(loggable_combo(&key(true, true, true, false, 0x51)), None); // AltGr+Shift+Q
+        assert_eq!(loggable_combo(&key(true, true, false, false, 0x20)), None); // AltGr+Space
+    }
+
+    #[test]
+    fn ctrl_alt_with_other_keys_is_still_a_shortcut() {
+        assert_eq!(loggable_combo(&key(true, true, false, false, 0x2E)), Some("Ctrl+Alt+Delete".into()));
+        assert_eq!(loggable_combo(&key(true, true, false, false, 0x74)), Some("Ctrl+Alt+F5".into()));
+        assert_eq!(loggable_combo(&key(true, true, false, true, 0x44)), Some("Ctrl+Alt+Win+D".into()));
+        assert_eq!(loggable_combo(&key(true, false, false, false, 0x31)), Some("Ctrl+1".into()));
+        assert_eq!(loggable_combo(&key(false, true, false, false, 0x31)), Some("Alt+1".into()));
     }
 }

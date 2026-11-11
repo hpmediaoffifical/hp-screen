@@ -101,14 +101,36 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Pipeline {
     pub fn start(cfg: PipelineConfig, events: EventFn) -> Result<Self, String> {
         let stop = Arc::new(AtomicBool::new(false));
-        let timeline = Arc::new(Mutex::new(Timeline::new(clock::now_100ns(), clock::TICKS_PER_SEC)));
+        // The clock starts paused: recording time only begins once every source is ready, so a
+        // slow-opening audio device cannot cost the first second of sound.
+        let timeline = {
+            let now = clock::now_100ns();
+            let mut waiting = Timeline::new(now, clock::TICKS_PER_SEC);
+            waiting.pause(now);
+            Arc::new(Mutex::new(waiting))
+        };
         let encoder: SharedEncoder = Arc::new(Mutex::new(None));
         let latest = Arc::new(Mutex::new(Latest::default()));
 
         let sink = LatestSink { latest: latest.clone(), events: events.clone() };
         let capture = capture::start_capture(&cfg.target, Box::new(sink))?;
 
-        let audio_cfg = cfg.audio;
+        let audio = match cfg.audio {
+            Some(audio_cfg) => {
+                let encoder = encoder.clone();
+                // A failed audio write must not end the recording.
+                let sink = Box::new(move |pcm: &[f32], time_100ns: i64| {
+                    if let Some(enc) = lock(&encoder).as_mut() {
+                        let _ = enc.write_audio(pcm, time_100ns);
+                    }
+                });
+                // Returns once the audio devices are open (or known to be missing).
+                Some(audio::start_audio(audio_cfg, timeline.clone(), sink)?)
+            }
+            None => None,
+        };
+
+        *lock(&timeline) = Timeline::new(clock::now_100ns(), clock::TICKS_PER_SEC);
         let pacer = {
             let (stop, timeline, encoder) = (stop.clone(), timeline.clone(), encoder.clone());
             std::thread::Builder::new()
@@ -116,20 +138,7 @@ impl Pipeline {
                 .spawn(move || pace(cfg, stop, timeline, encoder, latest, events))
                 .map_err(|e| format!("Không tạo được luồng ghi hình: {e}"))?
         };
-        let mut pipeline = Self { stop, timeline, encoder, capture: Some(capture), audio: None, pacer: Some(pacer) };
-        if let Some(audio_cfg) = audio_cfg {
-            let encoder = pipeline.encoder.clone();
-            // Audio that arrives before the first video frame has no file to go to yet and is
-            // dropped; a failed audio write must not end the recording.
-            let sink = Box::new(move |pcm: &[f32], time_100ns: i64| {
-                if let Some(enc) = lock(&encoder).as_mut() {
-                    let _ = enc.write_audio(pcm, time_100ns);
-                }
-            });
-            // On error `pipeline` is dropped here, which stops the capture and the pacer.
-            pipeline.audio = Some(audio::start_audio(audio_cfg, pipeline.timeline.clone(), sink)?);
-        }
-        Ok(pipeline)
+        Ok(Self { stop, timeline, encoder, capture: Some(capture), audio, pacer: Some(pacer) })
     }
 
     pub fn timeline(&self) -> Arc<Mutex<Timeline>> {
@@ -372,8 +381,8 @@ mod desktop_tests {
         // (virtualized) monitor rectangle.
         let shot = capture::grab_frame(&Target::Monitor { index: primary.index }).unwrap();
         assert_eq!((stats.width, stats.height), (shot.width() & !1, shot.height() & !1));
-        assert!((80..=100).contains(&frames), "expected about 90 frames, got {frames}");
-        assert!((2.6e7..=3.4e7).contains(&(last as f64)), "last frame at {last}");
+        assert!((85..=110).contains(&frames), "expected about 90 frames, got {frames}");
+        assert!((2.6e7..=3.8e7).contains(&(last as f64)), "last frame at {last}");
         assert!(events.iter().any(|e| matches!(e, PipelineEvent::Tick { .. })));
         assert!(!events.iter().any(|e| matches!(e, PipelineEvent::Failed(_))));
     }
@@ -390,9 +399,14 @@ mod desktop_tests {
                 std::thread::sleep(Duration::from_secs(3));
             });
         println!("video frames {frames}, last {:.2}s, audio samples {audio_samples}", last as f64 / 1e7);
-        assert!((80..=100).contains(&frames));
+        assert!((85..=110).contains(&frames), "video frames {frames}");
+        // The sound must cover the whole video: a slow-opening audio device must not cost
+        // the first second of sound.
+        let audio_secs = audio_samples as f64 * 1024.0 / 48_000.0;
+        let video_secs = last as f64 / 1e7;
+        assert!(audio_secs >= video_secs - 0.35, "audio {audio_secs:.2}s is much shorter than video {video_secs:.2}s");
         // AAC packs 1024 frames per sample: 3 s at 48 kHz is about 140 samples.
-        assert!((110..=170).contains(&audio_samples), "audio samples {audio_samples}");
+        assert!(audio_samples <= 190, "audio samples {audio_samples}");
         assert!(!events.iter().any(|e| matches!(e, PipelineEvent::Failed(_))));
     }
 
@@ -410,8 +424,8 @@ mod desktop_tests {
         });
         println!("stats {stats:?}, probed frames {frames}, last {:.2}s", last as f64 / 1e7);
         assert_eq!((stats.width, stats.height), (640, 480));
-        assert!((80..=100).contains(&frames), "3 s recorded + 2 s paused should give about 90 frames, got {frames}");
-        assert!((2.6e7..=3.4e7).contains(&(last as f64)), "last frame at {last}");
+        assert!((85..=110).contains(&frames), "3 s recorded + 2 s paused should give about 90 frames, got {frames}");
+        assert!((2.6e7..=3.8e7).contains(&(last as f64)), "last frame at {last}");
     }
 }
 

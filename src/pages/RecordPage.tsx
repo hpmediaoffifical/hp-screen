@@ -11,6 +11,7 @@ import {
   recTogglePause,
   settingsGet,
   settingsSet,
+  setTarget,
   takeScreenshot,
   type AudioStatus,
   type MonitorInfo,
@@ -65,6 +66,13 @@ export default function RecordPage() {
 
   const target: Target | null =
     mode === "monitor" ? { kind: "monitor", index: monitorIndex } : mode === "window" ? windowTarget : regionTarget;
+
+  // Hotkeys and the tray record whatever is selected here.
+  const targetKey = JSON.stringify(target);
+  useEffect(() => {
+    if (target) setTarget(target).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetKey]);
 
   async function run(action: () => Promise<unknown>, done?: (r: unknown) => string) {
     clearError();

@@ -129,3 +129,14 @@ fn place_bar(bar: &WebviewWindow) {
     let y = origin.y + area.height as i32 - size.height as i32 - BAR_MARGIN_BOTTOM;
     let _ = bar.set_position(PhysicalPosition::new(x, y));
 }
+
+/// Keeps the main window out of captures (or lets it back in). Used around screenshots taken
+/// from the main window, which would otherwise photograph HP Screen itself.
+pub fn set_main_hidden_from_capture(app: &AppHandle, hidden: bool) {
+    use windows::Win32::UI::WindowsAndMessaging::WDA_NONE;
+    let Some(hwnd) = app.get_webview_window(MAIN).and_then(|w| w.hwnd().ok()) else { return };
+    // SAFETY: the handle belongs to a live window of this process.
+    unsafe {
+        let _ = SetWindowDisplayAffinity(HWND(hwnd.0), if hidden { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE });
+    }
+}
