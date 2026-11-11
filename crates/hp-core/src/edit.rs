@@ -39,11 +39,12 @@ pub struct EditDoc {
     /// Removed spans in source time.
     pub cuts: Vec<Span>,
     pub effects: EffectToggles,
+    pub zoom: crate::zoom::ZoomDoc,
 }
 
 impl Default for EditDoc {
     fn default() -> Self {
-        EditDoc { v: EDIT_VERSION, trim: Trim::default(), cuts: Vec::new(), effects: EffectToggles::default() }
+        EditDoc { v: EDIT_VERSION, trim: Trim::default(), cuts: Vec::new(), effects: EffectToggles::default(), zoom: crate::zoom::ZoomDoc::default() }
     }
 }
 
