@@ -140,3 +140,4 @@ Cột "Máy" ghi những gì kiểm thử tự động đã phủ (video mẫu d
 | W5 | Dừng quay: bong bóng đóng, đèn camera tắt | — | Đạt (người dùng xác nhận 2026-11-12) |
 | W6 | Rút dây camera giữa lúc quay: thanh gọn báo lỗi, việc quay vẫn tiếp tục | — | |
 | W7 | Mở camera bằng app khác (Camera của Windows) rồi bật webcam trong HP Screen: báo "Camera đang được ứng dụng khác dùng" | Đạt cho thông báo (`camera_errors_are_explained`) | |
+| R1 | Quay một **vùng chọn**: quanh vùng có viền trắng nét đứt (từ lúc đếm ngược tới khi dừng); chuột bấm xuyên qua viền; video quay ra không có viền | Đạt cho vị trí (`the_border_sits_just_outside_the_region`) | |
