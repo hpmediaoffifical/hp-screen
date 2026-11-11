@@ -25,6 +25,8 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| shell::show_main(app)))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .setup(|app| {
             let handle = app.handle();
             let settings = paths::read_settings(handle);
@@ -58,6 +60,9 @@ pub fn run() {
             commands::library_delete,
             commands::library_open,
             commands::library_reveal,
+            commands::preview_name,
+            commands::pick_folder,
+            commands::output_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running HP Screen");

@@ -103,6 +103,12 @@ pub fn settings_set(app: AppHandle, state: State<'_, AppState>, settings: Settin
     crate::paths::write_settings(&app, &settings)?;
     *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = settings.clone();
     crate::hotkeys::register_hotkeys(&app, &settings);
+    {
+        use tauri_plugin_autostart::ManagerExt;
+        let autostart = app.autolaunch();
+        // Best effort: a failure here must not lose the other settings.
+        let _ = if settings.autostart { autostart.enable() } else { autostart.disable() };
+    }
     Ok(settings)
 }
 
@@ -167,4 +173,24 @@ pub fn library_reveal(app: AppHandle, state: State<'_, AppState>, path: Option<S
             .open_path(library_dir(&app, &state)?.to_string_lossy(), None::<&str>)
             .map_err(|e| format!("Không mở được thư mục: {e}")),
     }
+}
+
+/// The file name the pattern would give right now, for the live preview in Settings.
+#[tauri::command]
+pub fn preview_name(pattern: String) -> String {
+    format!("{}.mp4", hp_core::naming::render_pattern(&pattern, crate::paths::now_local()))
+}
+
+/// Folder chooser for the output folder; `None` when the user cancels.
+#[tauri::command]
+pub async fn pick_folder(app: AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = app.dialog().file().set_title("Chọn thư mục lưu video và ảnh").blocking_pick_folder()?;
+    picked.into_path().ok().map(|p| p.to_string_lossy().into_owned())
+}
+
+/// The folder recordings currently go to (the default when none is set).
+#[tauri::command]
+pub fn output_folder(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
+    library_dir(&app, &state).map(|p| p.to_string_lossy().into_owned())
 }

@@ -148,3 +148,7 @@ export function formatSize(bytes: number): string {
   const text = unit === 0 ? String(value) : value.toFixed(1).replace(".", ",");
   return `${text} ${units[unit]}`;
 }
+
+export const previewName = (pattern: string) => invoke<string>("preview_name", { pattern });
+export const pickFolder = () => invoke<string | null>("pick_folder");
+export const outputFolder = () => invoke<string>("output_folder");

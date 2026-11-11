@@ -168,6 +168,9 @@ impl Inner {
 
     fn begin(self: Arc<Self>, target: Target, settings: &Settings) -> Result<(), String> {
         let dir = output_dir(&self.app, settings)?;
+        crate::paths::ensure_recordable(&dir)?;
+        let space_dir = dir.clone();
+        let ticks = std::sync::atomic::AtomicU32::new(0);
         let path = new_media_path(&dir, settings, "mp4");
         let log_header = if settings.input_log {
             capture::target_rect(&target).ok().map(|region| Header {
@@ -197,6 +200,15 @@ impl Inner {
                 PipelineEvent::Tick { elapsed_ms, warning } => {
                     inner.elapsed_ms.store(elapsed_ms, Ordering::SeqCst);
                     inner.emit(None, warning);
+                    // About every five seconds: stop while there is still room to close the file.
+                    let low = ticks.fetch_add(1, Ordering::SeqCst) % 10 == 9
+                        && crate::paths::free_space(&space_dir).is_some_and(|free| free < crate::paths::MIN_FREE_BYTES);
+                    if low {
+                        events::rec_error(&inner.app, "Ổ đĩa sắp đầy (còn dưới 500 MB) nên HP Screen đã dừng quay và lưu video.");
+                        std::thread::spawn(move || {
+                            let _ = inner.stop();
+                        });
+                    }
                 }
                 // Both arrive on pipeline threads; stopping joins those threads, so hand over.
                 PipelineEvent::SourceClosed => {

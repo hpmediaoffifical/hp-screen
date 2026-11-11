@@ -24,6 +24,7 @@ pub fn rec_state(app: &AppHandle, status: &RecStatus) {
 
 /// Something went wrong while recording; `message` is shown to the user as is.
 pub fn rec_error(app: &AppHandle, message: &str) {
+    crate::paths::log_error(app, message);
     #[cfg(debug_assertions)]
     eprintln!("[hp] rec-error: {message}");
     let _ = app.emit(REC_ERROR, ErrorPayload { message });

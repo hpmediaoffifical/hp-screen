@@ -57,3 +57,64 @@ pub fn write_settings(app: &AppHandle, settings: &Settings) -> Result<(), String
     let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
     std::fs::write(settings_file(app)?, json).map_err(|e| format!("Không lưu được cài đặt: {e}"))
 }
+
+/// Below this much free space a recording is stopped (or not started) so the file can be closed.
+pub const MIN_FREE_BYTES: u64 = 500 * 1024 * 1024;
+
+/// Free bytes on the drive holding `dir`; `None` when Windows cannot tell.
+pub fn free_space(dir: &Path) -> Option<u64> {
+    use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    use windows::core::HSTRING;
+    let mut free = 0u64;
+    // SAFETY: the path is a valid wide string and the out pointer is valid.
+    unsafe { GetDiskFreeSpaceExW(&HSTRING::from(dir.as_os_str()), Some(&mut free), None, None) }.ok()?;
+    Some(free)
+}
+
+/// Checks that a recording can be saved in `dir`: it must be writable and have room.
+pub fn ensure_recordable(dir: &Path) -> Result<(), String> {
+    let probe = dir.join(DATA_DIR).join(".write-test");
+    std::fs::write(&probe, b"")
+        .map_err(|e| format!("Không ghi được vào thư mục lưu \"{}\": {e}. Hãy chọn thư mục khác trong Cài đặt.", dir.display()))?;
+    let _ = std::fs::remove_file(&probe);
+    if free_space(dir).is_some_and(|free| free < MIN_FREE_BYTES) {
+        return Err("Ổ đĩa chứa thư mục lưu còn dưới 500 MB trống. Hãy giải phóng dung lượng hoặc chọn thư mục khác.".to_string());
+    }
+    Ok(())
+}
+
+/// Appends a line to the app's log file; used for errors the user may want to send us.
+pub fn log_error(app: &AppHandle, message: &str) {
+    use std::io::Write;
+    let Ok(dir) = app.path().app_log_dir() else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("hp-screen.log")) {
+        let t = now_local();
+        let _ = writeln!(file, "{:04}-{:02}-{:02} {:02}:{:02}:{:02}  {message}", t.year, t.month, t.day, t.hour, t.minute, t.second);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn free_space_is_known_for_the_temp_folder() {
+        assert!(free_space(&std::env::temp_dir()).is_some_and(|free| free > 0));
+        assert_eq!(free_space(Path::new(r"Q:\khong\ton\tai")), None);
+    }
+
+    #[test]
+    fn a_missing_folder_is_not_recordable() {
+        let error = ensure_recordable(Path::new(r"Q:\khong\ton\tai")).unwrap_err();
+        assert!(error.contains("Cài đặt"), "the message tells the user where to fix it: {error}");
+    }
+
+    #[test]
+    fn a_normal_folder_is_recordable_and_left_clean() {
+        let dir = std::env::temp_dir().join("hp-screen-tests").join(format!("recordable-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(DATA_DIR)).unwrap();
+        ensure_recordable(&dir).unwrap();
+        assert_eq!(std::fs::read_dir(dir.join(DATA_DIR)).unwrap().count(), 0, "the write probe is removed");
+    }
+}
