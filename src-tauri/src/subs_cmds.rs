@@ -70,6 +70,11 @@ struct SubsError {
     message: String,
 }
 
+/// What the user is shown of an error: its first line. The rest (whisper's output) goes to the log.
+fn user_message(message: &str) -> &str {
+    message.lines().next().unwrap_or(message)
+}
+
 fn mb(bytes: u64) -> u64 {
     bytes.div_ceil(1_000_000)
 }
@@ -128,11 +133,9 @@ pub fn asr_install(app: AppHandle, state: State<'_, AsrState>, model: String) ->
                     let _ = app.emit(ASR_PROGRESS, Progress { phase: "cli", done, total });
                 };
                 let zip = asr::download(&CLI, &dir, &mut report, &cancel)?;
-                asr::extract_zip(&zip, &dir.join("bin"))?;
+                let installed = asr::install_cli(&zip, &dir);
                 let _ = std::fs::remove_file(&zip);
-                if asr::find_cli(&dir.join("bin")).is_none() {
-                    return Err("Gói whisper.cpp không có whisper-cli.exe".to_string());
-                }
+                installed?;
             }
             if !model_installed(&dir, &m) {
                 let mut report = |done, total| {
@@ -151,6 +154,7 @@ pub fn asr_install(app: AppHandle, state: State<'_, AsrState>, model: String) ->
                 if !cancel.load(Ordering::Relaxed) {
                     crate::paths::log_error(&app, &format!("Tải bộ nhận giọng thất bại: {message}"));
                 }
+                let message = user_message(&message).to_string();
                 let _ = app.emit(ASR_ERROR, Message { message });
             }
         }
@@ -202,6 +206,7 @@ pub fn subtitles_generate(app: AppHandle, state: State<'_, AppState>, asr_state:
                 if !cancel.load(Ordering::Relaxed) {
                     crate::paths::log_error(&app, &format!("Tạo phụ đề thất bại: {message}"));
                 }
+                let message = user_message(&message).to_string();
                 let _ = app.emit(SUBS_ERROR, SubsError { source, message });
             }
         }
@@ -258,6 +263,15 @@ mod tests {
         let b = write_srt(&media, &doc, 10_000).unwrap();
         assert_eq!(b, media.with_file_name("bài_edit_2.srt"));
         assert!(write_srt(&media, &EditDoc::default(), 10_000).is_err(), "nothing to write");
+    }
+
+    #[test]
+    fn the_user_sees_one_line_and_the_log_gets_the_details() {
+        let full = "Không tạo được phụ đề (mã lỗi 0x3).
+whisper_init: failed
+error: model";
+        assert_eq!(user_message(full), "Không tạo được phụ đề (mã lỗi 0x3).");
+        assert_eq!(user_message("Đã hủy"), "Đã hủy");
     }
 
     #[test]

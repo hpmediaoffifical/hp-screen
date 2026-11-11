@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { chipBottom, cueAt, deleteCue, mergeWithNext, setCueText, setCueTime, splitCue, wrapLines } from "./subsMath.ts";
+import { burnFontPx, chipBottom, cueAt, deleteCue, mergeWithNext, setCueText, setCueTime, splitCue, wrapLines } from "./subsMath.ts";
 
 const cue = (start_ms: number, end_ms: number, text: string) => ({ start_ms, end_ms, text });
 
@@ -44,6 +44,18 @@ test("deleting, retiming and retexting change only that cue", () => {
   // Times stay ordered and at least 100 ms long.
   assert.deepEqual(setCueTime(cues, 0, 500, 300)[0], cue(500, 600, "a"));
   assert.deepEqual(setCueTime(cues, 1, -50, 2500)[1], cue(0, 2500, "b"));
+});
+
+test("an untyped line is never shown and does not hide the line under it", () => {
+  const cues = [cue(0, 3000, "  "), cue(1000, 2000, "Chào")];
+  assert.equal(cueAt(cues, 500), null);
+  assert.equal(cueAt(cues, 1500)?.text, "Chào");
+});
+
+test("burned font size matches the core, smaller in tall frames", () => {
+  assert.ok(Math.abs(burnFontPx(1920, 1080) - 48.6) < 0.01);
+  assert.equal(burnFontPx(1080, 1920), 36);
+  assert.equal(burnFontPx(100, 50), 10);
 });
 
 test("chips move above a burned subtitle", () => {

@@ -19,7 +19,7 @@ import {
 } from "../editApi";
 import ExportPanel from "../editor/ExportPanel";
 import SubtitlesPanel from "../editor/SubtitlesPanel";
-import { chipBottom, cueAt, drawSubtitle } from "../editor/subsMath";
+import { chipAbove, cueAt, layoutSubtitle, paintSubtitle } from "../editor/subsMath";
 import Preview, { type PreviewHandle } from "../editor/Preview";
 import Timeline from "../editor/Timeline";
 import { drawEffects } from "../editor/drawEffects";
@@ -312,10 +312,12 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
           drawFixed={(ctx, ms) => {
             // Shown in the preview whether or not they are burned in, so they can be checked.
             const cue = cueAt(doc.subtitles.cues, ms);
+            const sub = cue ? layoutSubtitle(ctx, cue.text) : null;
+            const lift = sub && doc.subtitles.burn ? chipAbove(sub, ctx.canvas.height) : undefined;
             if (session.effects) {
-              drawEffects(ctx, session.effects, ms, { ...doc.effects, clicks: false }, session.info.height, ctx.canvas.height / session.info.height, chipBottom(cue && doc.subtitles.burn ? cue.text : null));
+              drawEffects(ctx, session.effects, ms, { ...doc.effects, clicks: false }, session.info.height, ctx.canvas.height / session.info.height, lift);
             } else ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-            if (cue) drawSubtitle(ctx, cue.text);
+            if (sub) paintSubtitle(ctx, sub);
           }}
           camera={doc.zoom.enabled && track.length > 0 ? (ms) => cameraAt(track, ms) : undefined}
           onPick={

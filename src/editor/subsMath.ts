@@ -19,7 +19,7 @@ export function chipBottom(subtitle: string | null): number {
 }
 
 export function cueAt(cues: Cue[], ms: number): Cue | null {
-  return cues.find((c) => c.start_ms <= ms && ms < c.end_ms) ?? null;
+  return cues.find((c) => c.start_ms <= ms && ms < c.end_ms && c.text.trim() !== "") ?? null;
 }
 
 const lenOf = (ws: string[]) => ws.reduce((n, w) => n + [...w].length, 0) + Math.max(0, ws.length - 1);
@@ -82,16 +82,27 @@ export function setCueTime(cues: Cue[], i: number, start: number, end: number): 
   return cues.map((c, j) => (j === i ? { ...c, start_ms: s, end_ms: e } : c));
 }
 
+/** Like hp-core::subtitle::burn_font_px: 4.5% of the height, smaller so 42 characters fit tall frames. */
+export const burnFontPx = (w: number, h: number) => Math.max(10, Math.min(BURN_FONT * h, (BURN_MAX_WIDTH * w) / 24));
+
+export interface SubtitleLayout {
+  lines: string[];
+  size: number;
+  left: number;
+  top: number;
+  w: number;
+  h: number;
+}
+
 /**
- * Draws `text` as the export burns it: a dark rounded box near the bottom of the frame, white
- * centred lines. `ctx`'s canvas is the whole output frame.
+ * Lays `text` out as the export burns it: a box near the bottom of the frame, lines wrapped to
+ * 80% of its width. `ctx`'s canvas is the whole output frame. Null for empty text.
  */
-export function drawSubtitle(ctx: CanvasRenderingContext2D, text: string): void {
+export function layoutSubtitle(ctx: CanvasRenderingContext2D, text: string): SubtitleLayout | null {
   const { width, height } = ctx.canvas;
-  const size = Math.max(10, BURN_FONT * height);
+  const size = burnFontPx(width, height);
   const padX = size * 0.6;
   const padY = size * 0.3;
-  const lineH = size * 1.3;
   ctx.save();
   ctx.font = `600 ${size}px "Segoe UI", sans-serif`;
   const maxW = Math.max(10, BURN_MAX_WIDTH * width - 2 * padX);
@@ -108,22 +119,30 @@ export function drawSubtitle(ctx: CanvasRenderingContext2D, text: string): void 
     }
     if (cur) lines.push(cur);
   }
-  if (lines.length === 0) {
-    ctx.restore();
-    return;
-  }
-  const textW = Math.min(maxW, Math.max(...lines.map((l) => ctx.measureText(l).width)));
+  const textW = lines.length ? Math.min(maxW, Math.max(...lines.map((l) => ctx.measureText(l).width))) : 0;
+  ctx.restore();
+  if (lines.length === 0) return null;
   const w = textW + 2 * padX;
-  const h = lines.length * lineH + 2 * padY;
-  const bottom = height * (1 - BURN_BOTTOM);
-  const left = (width - w) / 2;
+  const h = lines.length * size * 1.3 + 2 * padY;
+  return { lines, size, left: (width - w) / 2, top: height * (1 - BURN_BOTTOM) - h, w, h };
+}
+
+/** Where a chip's bottom goes (fraction of frame height) so it clears the laid-out subtitle. */
+export const chipAbove = (l: SubtitleLayout, frameH: number) => Math.max(CHIP_BOTTOM, 1 - l.top / frameH + 0.02);
+
+/** Paints a laid-out subtitle: dark rounded box, white centred lines. */
+export function paintSubtitle(ctx: CanvasRenderingContext2D, l: SubtitleLayout): void {
+  const { width } = ctx.canvas;
+  ctx.save();
+  ctx.font = `600 ${l.size}px "Segoe UI", sans-serif`;
   ctx.fillStyle = "rgba(0,0,0,.72)";
   ctx.beginPath();
-  ctx.roundRect(left, bottom - h, w, h, size * 0.35);
+  ctx.roundRect(l.left, l.top, l.w, l.h, l.size * 0.35);
   ctx.fill();
   ctx.fillStyle = "#fff";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  lines.forEach((l, n) => ctx.fillText(l, width / 2, bottom - h + padY + lineH * (n + 0.5)));
+  const lineH = l.size * 1.3;
+  l.lines.forEach((line, n) => ctx.fillText(line, width / 2, l.top + l.size * 0.3 + lineH * (n + 0.5)));
   ctx.restore();
 }

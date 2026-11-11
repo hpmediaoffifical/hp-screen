@@ -13,6 +13,12 @@ pub const BURN_BOTTOM: f32 = 0.06;
 pub const BURN_MAX_WIDTH: f32 = 0.8;
 
 /// Height of a burned-in cue of `lines` lines, as a fraction of the frame height.
+/// Burned subtitle font size in pixels for a `w`×`h` frame: 4.5% of the height, smaller in tall
+/// frames so a full 42-character line (about 24 em) fits 80% of the width.
+pub fn burn_font_px(w: u32, h: u32) -> f32 {
+    (BURN_FONT * h as f32).min(BURN_MAX_WIDTH * w as f32 / 24.0).max(10.0)
+}
+
 pub fn burned_height(lines: usize) -> f32 {
     lines.max(1) as f32 * BURN_FONT * 1.3 + 2.0 * BURN_FONT * 0.3
 }
@@ -225,7 +231,7 @@ pub fn wrap_lines(text: &str) -> Vec<String> {
 
 /// The cue showing at source time `t_ms`.
 pub fn cue_at(cues: &[Cue], t_ms: i64) -> Option<&Cue> {
-    cues.iter().find(|c| c.start_ms <= t_ms && t_ms < c.end_ms)
+    cues.iter().find(|c| c.start_ms <= t_ms && t_ms < c.end_ms && !c.text.trim().is_empty())
 }
 
 /// SRT of `cues` in output time: cues inside removed spans are dropped, cues across a cut are
@@ -377,6 +383,22 @@ mod tests {
         let cues = vec![Cue { start_ms: 0, end_ms: 1000, text: "a\n\n\nb --> c".into() }];
         let srt = to_srt(&cues, &Cuts::new(5000, 0, None, &[]));
         assert_eq!(srt, "1\n00:00:00,000 --> 00:00:01,000\na\nb -> c\n\n");
+    }
+
+    #[test]
+    fn empty_cues_are_never_shown() {
+        let cues = vec![Cue { start_ms: 0, end_ms: 3000, text: " 
+ ".into() }, Cue { start_ms: 1000, end_ms: 2000, text: "Chào".into() }];
+        assert_eq!(cue_at(&cues, 500), None, "an untyped line shows nothing");
+        assert_eq!(cue_at(&cues, 1500).map(|c| c.text.as_str()), Some("Chào"), "and does not hide the line under it");
+    }
+
+    #[test]
+    fn burn_font_fits_a_full_line_in_tall_frames() {
+        assert!((burn_font_px(1920, 1080) - 0.045 * 1080.0).abs() < 0.01, "16:9 keeps 4.5% of the height");
+        let tall = burn_font_px(1080, 1920);
+        assert!(tall < 0.045 * 1920.0 && tall * 24.0 <= 0.8 * 1080.0 + 0.01, "42 characters fit 80% of a 9:16 frame: {tall}");
+        assert_eq!(burn_font_px(100, 50), 10.0, "never below 10 px");
     }
 
     #[test]

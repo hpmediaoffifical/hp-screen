@@ -3,7 +3,7 @@
 use hp_core::effects::{Draw, RIPPLE_RADIUS};
 use hp_core::input_log::Button;
 use hp_core::layout::{Background, Layout, SHADOW_OFFSET};
-use hp_core::subtitle::{BURN_BOTTOM, BURN_FONT, BURN_MAX_WIDTH};
+use hp_core::subtitle::{BURN_BOTTOM, BURN_MAX_WIDTH, burn_font_px};
 use std::mem::ManuallyDrop;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -135,7 +135,7 @@ impl Compositor {
                     &HSTRING::from("vi-VN"),
                 )
                 .map_err(err("Không tạo được phông chữ"))?;
-            let sub_size = (BURN_FONT * out_h as f32).max(10.0);
+            let sub_size = burn_font_px(out_w, out_h);
             let sub_format = text
                 .CreateTextFormat(
                     &HSTRING::from("Segoe UI"),
@@ -308,12 +308,22 @@ impl Compositor {
             let on_video = self.draw_marks(draws, &at, sx, full_ring, stroke);
             self.ctx.PopAxisAlignedClip();
             on_video?;
+            // The subtitle box as laid out; chips sit at least 2% of the frame above it.
+            let sub = draws.iter().find_map(|d| if let Draw::Subtitle { text } = d { Some(text) } else { None });
+            let sub = match sub {
+                Some(text) => Some(self.subtitle_box(text)?),
+                None => None,
+            };
+            let lift = sub.as_ref().map_or(0.0, |(_, _, rect)| 1.0 - rect.top / self.out_h as f32 + 0.02);
             for d in draws {
-                match d {
-                    Draw::Chip { text, alpha, bottom } if *alpha > 0.0 => self.draw_chip(text, *alpha, *bottom)?,
-                    Draw::Subtitle { text } => self.draw_subtitle(text)?,
-                    _ => {}
+                if let Draw::Chip { text, alpha, bottom } = d
+                    && *alpha > 0.0
+                {
+                    self.draw_chip(text, *alpha, bottom.max(lift))?;
                 }
+            }
+            if let Some(b) = sub {
+                self.draw_subtitle(b)?;
             }
         }
         Ok(())
@@ -410,21 +420,31 @@ impl Compositor {
 
 impl Compositor {
     /// A burned-in subtitle: white text on a dark rounded box, centred, above the bottom margin.
-    unsafe fn draw_subtitle(&self, text: &str) -> Result<(), String> {
+    /// The subtitle laid out in its box near the bottom of the frame.
+    fn subtitle_box(&self, text: &str) -> Result<(IDWriteTextLayout, DWRITE_TEXT_METRICS, D2D_RECT_F), String> {
         let wide: Vec<u16> = text.encode_utf16().collect();
         let (ow, oh) = (self.out_w as f32, self.out_h as f32);
         let pad_x = self.sub_size * 0.6;
         let pad_y = self.sub_size * 0.3;
-        // SAFETY: DirectWrite and drawing calls with valid pointers, between BeginDraw and EndDraw.
+        let max_w = (BURN_MAX_WIDTH * ow - 2.0 * pad_x).max(10.0);
+        // SAFETY: DirectWrite calls with valid pointers.
         unsafe {
-            let max_w = (BURN_MAX_WIDTH * ow - 2.0 * pad_x).max(10.0);
             let layout = self.text.CreateTextLayout(&wide, &self.sub_format, max_w, oh).map_err(err("Không dựng được chữ"))?;
             let mut m = DWRITE_TEXT_METRICS::default();
             layout.GetMetrics(&mut m).map_err(err("Không dựng được chữ"))?;
             let (w, h) = (m.width + 2.0 * pad_x, m.height + 2.0 * pad_y);
             let bottom = oh * (1.0 - BURN_BOTTOM);
             let left = (ow - w) / 2.0;
-            let rect = D2D_RECT_F { left, top: bottom - h, right: left + w, bottom };
+            Ok((layout, m, D2D_RECT_F { left, top: bottom - h, right: left + w, bottom }))
+        }
+    }
+
+    unsafe fn draw_subtitle(&self, (layout, m, rect): (IDWriteTextLayout, DWRITE_TEXT_METRICS, D2D_RECT_F)) -> Result<(), String> {
+        let pad_x = self.sub_size * 0.6;
+        let pad_y = self.sub_size * 0.3;
+        let left = rect.left;
+        // SAFETY: drawing calls with valid pointers, between BeginDraw and EndDraw.
+        unsafe {
             let radius = self.sub_size * 0.35;
             self.ctx.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect, radiusX: radius, radiusY: radius }, &self.brush((0.0, 0.0, 0.0), 0.72)?);
             let white = self.brush((1.0, 1.0, 1.0), 1.0)?;
@@ -593,6 +613,32 @@ mod tests {
         assert!(dark, "subtitle box above the bottom 6%");
         assert_eq!(rgb_at(out, 400, 200, 40), [255, 255, 255]);
         assert!((0..400).all(|x| rgb_at(out, 400, x, 299)[0] > 240), "6% margin kept free");
+    }
+
+    #[test]
+    fn tall_frames_keep_two_line_subtitles_and_chips_above_them() {
+        let (w, h) = (540u32, 960u32);
+        let src = solid(w, h, |_, _| [255, 255, 255]);
+        let mut c = Compositor::new(w, h, Device::Warp).unwrap();
+        let text = "Hôm nay mình hướng dẫn các bạn cài đặt phần
+mềm ghi màn hình thật nhanh và đơn giản nhé";
+        // The plan's lift assumes the subtitle is small; the compositor must still keep them apart.
+        let draws = [Draw::Chip { text: "Ctrl + S".into(), alpha: 1.0, bottom: 0.08 }, Draw::Subtitle { text: text.into() }];
+        let out = c.render(&src, w, h, None, None, &draws).unwrap();
+        let dark_row = |y: u32| (0..w).filter(|&x| rgb_at(out, w, x, y)[0] < 120).count() > 10;
+        let mut runs: Vec<(bool, u32)> = Vec::new();
+        for y in (0..h).rev() {
+            let d = dark_row(y);
+            match runs.last_mut() {
+                Some((k, n)) if *k == d => *n += 1,
+                _ => runs.push((d, 1)),
+            }
+        }
+        // From the bottom: margin, subtitle box, gap, chip, then the clean picture.
+        assert!(runs.len() >= 5, "{runs:?}");
+        assert!(runs[1].0 && runs[1].1 <= h / 10, "a two-line box, not re-wrapped into many lines: {runs:?}");
+        assert!(!runs[2].0 && runs[2].1 >= 5, "a gap between subtitle and chip: {runs:?}");
+        assert!(runs[3].0, "the chip: {runs:?}");
     }
 
     #[test]

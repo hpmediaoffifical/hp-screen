@@ -45,6 +45,9 @@ export default function ExportPanel(props: {
       <p className="hint">
         Dài {formatElapsed(props.outputMs)}, lưu cạnh video gốc với hậu tố <code>_edit</code>. Video gốc giữ nguyên.
       </p>
+      {props.doc.subtitles.burn && props.doc.subtitles.cues.length > 0 && (
+        <p className="hint">Phụ đề được ghi cứng vào video (đổi ở thẻ Phụ đề).</p>
+      )}
       <div className="row" role="radiogroup" aria-label="Định dạng">
         {(["mp4", "gif"] as const).map((f) => (
           <button key={f} className={"chip chip-toggle" + (format === f ? " on" : "")} aria-pressed={format === f} onClick={() => setFormat(f)}>

@@ -129,6 +129,135 @@ pub fn extract_zip(zip: &Path, dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Installs the whisper.cpp package `zip` as `dir/bin`, replacing what was there only once the
+/// whole package unpacked: a half-unpacked package never counts as installed.
+pub fn install_cli(zip: &Path, dir: &Path) -> Result<(), String> {
+    let tmp = dir.join("bin.tmp");
+    let bin = dir.join("bin");
+    let _ = std::fs::remove_dir_all(&tmp);
+    let unpacked = extract_zip(zip, &tmp).and_then(|_| match find_cli(&tmp) {
+        Some(_) => Ok(()),
+        None => Err("Gói whisper.cpp không có whisper-cli.exe".to_string()),
+    });
+    if let Err(e) = unpacked {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return Err(e);
+    }
+    if bin.exists() {
+        std::fs::remove_dir_all(&bin).map_err(|e| format!("Không thay được bộ nhận giọng cũ: {e}"))?;
+    }
+    std::fs::rename(&tmp, &bin).map_err(|e| format!("Không cài được bộ nhận giọng: {e}"))
+}
+
+/// A file's text; bytes that are not UTF-8 (whisper can split a Vietnamese letter between two
+/// tokens) become U+FFFD instead of failing the whole read.
+pub fn read_text_lossy(path: &Path) -> Result<String, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("Không đọc được kết quả nhận dạng: {e}"))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Sends each line of `r` to `tx`, whatever its encoding, until `r` ends. Reading never stops
+/// early, so the child never blocks on a full pipe.
+pub fn pump_lines(r: impl Read, tx: std::sync::mpsc::Sender<String>) {
+    let mut r = BufReader::new(r);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match r.read_until(b'\n', &mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                let line = String::from_utf8_lossy(&buf).trim_end_matches(['\r', '\n']).to_string();
+                let _ = tx.send(line);
+            }
+        }
+    }
+}
+
+/// `p` in 8.3 form when it has characters outside ASCII: whisper-cli reads its arguments in
+/// the ANSI code page, which cannot hold every Vietnamese letter. Unchanged when it is plain
+/// ASCII or has no short form.
+pub fn short_path(p: &Path) -> PathBuf {
+    use windows::Win32::Storage::FileSystem::GetShortPathNameW;
+    use windows::core::PCWSTR;
+    let s = p.as_os_str().to_string_lossy();
+    if s.is_ascii() {
+        return p.to_path_buf();
+    }
+    let wide: Vec<u16> = p.as_os_str().encode_wide_nul();
+    let mut out = vec![0u16; 1024];
+    // SAFETY: `wide` is NUL-terminated; `out` is a writable buffer of its length.
+    let n = unsafe { GetShortPathNameW(PCWSTR(wide.as_ptr()), Some(&mut out)) } as usize;
+    if n == 0 || n >= out.len() {
+        return p.to_path_buf();
+    }
+    let short = PathBuf::from(String::from_utf16_lossy(&out[..n]));
+    if short.as_os_str().to_string_lossy().is_ascii() { short } else { p.to_path_buf() }
+}
+
+trait EncodeWideNul {
+    fn encode_wide_nul(&self) -> Vec<u16>;
+}
+
+impl EncodeWideNul for std::ffi::OsStr {
+    fn encode_wide_nul(&self) -> Vec<u16> {
+        use std::os::windows::ffi::OsStrExt;
+        self.encode_wide().chain(std::iter::once(0)).collect()
+    }
+}
+
+/// A Windows job object that ends its processes when it is closed, which also happens when
+/// HP Screen exits for any reason: whisper-cli never keeps running on its own.
+pub struct KillJob(windows::Win32::Foundation::HANDLE);
+
+// SAFETY: a job handle may be used and closed from any thread.
+unsafe impl Send for KillJob {}
+unsafe impl Sync for KillJob {}
+
+impl KillJob {
+    pub fn new() -> Result<KillJob, String> {
+        use windows::Win32::System::JobObjects::*;
+        // SAFETY: plain Win32 calls; the info struct outlives the call that reads it.
+        unsafe {
+            let h = CreateJobObjectW(None, windows::core::PCWSTR::null()).map_err(|e| e.to_string())?;
+            let job = KillJob(h);
+            let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            SetInformationJobObject(
+                job.0,
+                JobObjectExtendedLimitInformation,
+                &info as *const _ as *const std::ffi::c_void,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(job)
+        }
+    }
+
+    pub fn assign(&self, child: &std::process::Child) -> Result<(), String> {
+        use std::os::windows::io::AsRawHandle;
+        // SAFETY: both handles are valid for the duration of the call.
+        unsafe {
+            windows::Win32::System::JobObjects::AssignProcessToJobObject(self.0, windows::Win32::Foundation::HANDLE(child.as_raw_handle()))
+                .map_err(|e| e.to_string())
+        }
+    }
+}
+
+impl Drop for KillJob {
+    fn drop(&mut self) {
+        // SAFETY: the handle is owned and closed once.
+        unsafe {
+            let _ = windows::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+/// The job every whisper-cli run joins; it lives until the app exits.
+fn app_job() -> Option<&'static KillJob> {
+    static JOB: std::sync::OnceLock<Option<KillJob>> = std::sync::OnceLock::new();
+    JOB.get_or_init(|| KillJob::new().ok()).as_ref()
+}
+
 /// Writes the sound of `video` as 16 kHz mono 16-bit WAV; `Ok(false)` when it has no sound.
 pub fn write_wav_16k_mono(video: &Path, wav: &Path, cancel: &AtomicBool) -> Result<bool, String> {
     const RATE: u32 = 16_000;
@@ -266,13 +395,15 @@ fn http_get(url: &str, dest: &Path, expected: u64, progress: &mut dyn FnMut(u64,
 pub fn run_whisper(cli: &Path, model: &Path, wav: &Path, progress: &mut dyn FnMut(u32), cancel: &AtomicBool) -> Result<String, String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    // whisper-cli reads paths in the ANSI code page: give it short forms of non-ASCII paths.
+    let (model, wav) = (short_path(model), short_path(wav));
     let out_base = wav.with_extension("");
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 8);
     let mut child = std::process::Command::new(cli)
         .args(["-m"])
-        .arg(model)
+        .arg(&model)
         .args(["-f"])
-        .arg(wav)
+        .arg(&wav)
         .args(["-l", "vi", "-t", &threads.to_string(), "-oj", "-ojf", "-pp", "-of"])
         .arg(&out_base)
         .current_dir(cli.parent().unwrap_or_else(|| Path::new(".")))
@@ -281,15 +412,12 @@ pub fn run_whisper(cli: &Path, model: &Path, wav: &Path, progress: &mut dyn FnMu
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map_err(|e| format!("Không chạy được bộ nhận giọng: {e}"))?;
+    if let Some(job) = app_job() {
+        let _ = job.assign(&child);
+    }
     let stderr = child.stderr.take().ok_or("Không đọc được tiến độ")?;
     let (tx, rx) = std::sync::mpsc::channel::<String>();
-    let reader = std::thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            if tx.send(line).is_err() {
-                break;
-            }
-        }
-    });
+    let reader = std::thread::spawn(move || pump_lines(stderr, tx));
     let mut tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
     let status = loop {
         if cancel.load(Ordering::Relaxed) {
@@ -319,9 +447,10 @@ pub fn run_whisper(cli: &Path, model: &Path, wav: &Path, progress: &mut dyn FnMu
     let json = out_base.with_extension("json");
     if !status.success() {
         let last: Vec<String> = tail.into_iter().rev().take(20).collect::<Vec<_>>().into_iter().rev().collect();
-        return Err(format!("Không tạo được phụ đề (mã {:?}).\n{}", status.code(), last.join("\n")));
+        let code = status.code().map_or_else(|| "?".to_string(), |c| format!("{c:#x}"));
+        return Err(format!("Không tạo được phụ đề (mã lỗi {code}).\n{}", last.join("\n")));
     }
-    let text = std::fs::read_to_string(&json).map_err(|e| format!("Không đọc được kết quả nhận dạng: {e}"))?;
+    let text = read_text_lossy(&json)?;
     let _ = std::fs::remove_file(&json);
     Ok(text)
 }
@@ -414,5 +543,74 @@ mod tests {
         extract_zip(&zip_path, &dir).unwrap();
         assert_eq!(find_cli(&dir), Some(dir.join("Release").join("whisper-cli.exe")));
         assert!(!zip_path.parent().unwrap().join("escape.txt").exists(), "entries outside the folder are skipped");
+    }
+
+    #[test]
+    fn a_broken_package_is_not_left_half_installed() {
+        let zip_path = temp_path("asr-install", "cli.zip");
+        {
+            let mut z = zip::ZipWriter::new(std::fs::File::create(&zip_path).unwrap());
+            let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            z.start_file("Release/whisper-cli.exe", opts).unwrap();
+            z.write_all(b"MZ fake").unwrap();
+            z.start_file("Release/whisper.dll", opts).unwrap();
+            z.write_all(b"DLL-CONTENT-THAT-GETS-CORRUPTED").unwrap();
+            z.finish().unwrap();
+        }
+        let good = std::fs::read(&zip_path).unwrap();
+        let dir = zip_path.parent().unwrap().to_path_buf();
+        // Damage the second file's bytes: its checksum fails while unpacking.
+        let mut bad = good.clone();
+        let at = bad.windows(11).position(|w| w == b"DLL-CONTENT").unwrap();
+        bad[at] ^= 0xFF;
+        std::fs::write(&zip_path, &bad).unwrap();
+        assert!(install_cli(&zip_path, &dir).is_err());
+        assert_eq!(find_cli(&dir.join("bin")), None, "the program does not count as installed");
+        std::fs::write(&zip_path, &good).unwrap();
+        install_cli(&zip_path, &dir).unwrap();
+        assert!(find_cli(&dir.join("bin")).is_some());
+        assert!(dir.join("bin").join("Release").join("whisper.dll").exists());
+    }
+
+    #[test]
+    fn output_with_split_characters_is_still_read() {
+        let p = temp_path("asr-lossy", "out.json");
+        // "ệ" is E1 BB 87: whisper can write a token with only its first two bytes.
+        std::fs::write(&p, b"{\"t\":\"\xe1\xbb\"}").unwrap();
+        let text = read_text_lossy(&p).unwrap();
+        assert!(text.starts_with("{\"t\":\"") && text.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn progress_lines_after_a_non_utf8_line_are_read() {
+        let input: &[u8] = b"model C:\\Users\\Ph\xf9ng\\x.bin\nwhisper_print_progress_callback: progress =  50%\n";
+        let (tx, rx) = std::sync::mpsc::channel();
+        pump_lines(input, tx);
+        let lines: Vec<String> = rx.try_iter().collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(progress_percent(&lines[1]), Some(50));
+    }
+
+    #[test]
+    fn closing_the_job_ends_the_child() {
+        let job = KillJob::new().unwrap();
+        let mut child = std::process::Command::new("ping").args(["-n", "30", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().unwrap();
+        job.assign(&child).unwrap();
+        drop(job);
+        let t = std::time::Instant::now();
+        while child.try_wait().unwrap().is_none() {
+            assert!(t.elapsed().as_secs() < 5, "the child outlived the job");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
+    #[test]
+    fn non_ascii_paths_are_given_in_short_form() {
+        let dir = temp_path("asr-short", "x").parent().unwrap().join("Phụng");
+        std::fs::create_dir_all(&dir).unwrap();
+        let s = short_path(&dir);
+        assert!(s.exists());
+        assert_eq!(std::fs::canonicalize(&s).unwrap(), std::fs::canonicalize(&dir).unwrap());
+        assert_eq!(short_path(Path::new("C:\\Windows")), PathBuf::from("C:\\Windows"), "plain paths are kept");
     }
 }
