@@ -68,3 +68,9 @@ pub fn rec_status(state: State<'_, AppState>) -> RecStatus {
 pub fn audio_status() -> crate::audio::AudioStatus {
     crate::audio::audio_status()
 }
+
+/// How the last hotkey registration went, one entry per action.
+#[tauri::command]
+pub fn hotkey_status(registry: State<'_, crate::hotkeys::HotkeyRegistry>) -> Vec<crate::hotkeys::HotkeyStatus> {
+    registry.inner().0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}

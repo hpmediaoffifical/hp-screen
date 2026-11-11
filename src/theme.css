@@ -49,3 +49,25 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .rec-line { font-variant-numeric: tabular-nums; }
 .status.warn { color: var(--warn); }
 .status.err { color: #ff8589; }
+
+/* Control bar window */
+.bar {
+  height: 100%; display: flex; align-items: center; gap: 8px; padding: 0 10px;
+  background: #0c0f16; border: 1px solid var(--border); cursor: grab;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.bar-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--text-dim); flex: none; }
+.bar-recording .bar-dot { background: var(--rec); animation: bar-blink 1.2s ease-in-out infinite; }
+.bar-paused .bar-dot { background: var(--warn); }
+.bar-time { font-weight: 600; }
+.bar-warn { color: var(--warn); }
+.bar-space { flex: 1; align-self: stretch; }
+.bar-btn {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px;
+  padding: 4px 10px; cursor: pointer;
+}
+.bar-btn:hover { border-color: var(--accent); }
+.bar-btn:focus-visible { outline: 2px solid var(--accent); }
+.bar-stop { background: var(--rec); border-color: var(--rec); color: #fff; font-weight: 600; }
+@keyframes bar-blink { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .bar-recording .bar-dot { animation: none; } }

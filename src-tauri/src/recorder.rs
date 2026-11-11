@@ -1,10 +1,12 @@
 //! The recording session as the UI sees it: the state machine from `hp_core::state` driving a
 //! `Pipeline`, with every change reported to the UI as a `rec-state` event.
-use crate::capture::Target;
+use crate::capture::{self, Target};
+use crate::input_hook::{InputHook, start_input_hook};
 use crate::events;
 use crate::paths::{new_media_path, output_dir};
 use crate::pipeline::{EventFn, Pipeline, PipelineConfig, PipelineEvent};
-use hp_core::library::thumb_path;
+use hp_core::input_log::{Header, LOG_VERSION};
+use hp_core::library::{sidecar_path, thumb_path};
 use hp_core::settings::Settings;
 use hp_core::state::{Command, RecState, pause_toggle_command, toggle_command, transition};
 use serde::Serialize;
@@ -34,6 +36,7 @@ struct Inner {
     app: AppHandle,
     state: Mutex<RecState>,
     pipeline: Mutex<Option<Pipeline>>,
+    input_hook: Mutex<Option<InputHook>>,
     file: Mutex<Option<PathBuf>>,
     last_target: Mutex<Option<Target>>,
     elapsed_ms: AtomicI64,
@@ -52,6 +55,7 @@ impl Recorder {
                 app,
                 state: Mutex::new(RecState::Idle),
                 pipeline: Mutex::new(None),
+                input_hook: Mutex::new(None),
                 file: Mutex::new(None),
                 last_target: Mutex::new(None),
                 elapsed_ms: AtomicI64::new(0),
@@ -165,6 +169,18 @@ impl Inner {
     fn begin(self: Arc<Self>, target: Target, settings: &Settings) -> Result<(), String> {
         let dir = output_dir(&self.app, settings)?;
         let path = new_media_path(&dir, settings, "mp4");
+        let log_header = if settings.input_log {
+            capture::target_rect(&target).ok().map(|region| Header {
+                v: LOG_VERSION,
+                mode: target.mode_name().to_string(),
+                region,
+                width: region.w & !1,
+                height: region.h & !1,
+                fps: settings.fps,
+            })
+        } else {
+            None
+        };
         let cfg = PipelineConfig {
             target,
             path: path.clone(),
@@ -193,7 +209,12 @@ impl Inner {
                 }
             }
         });
+        let own_hotkeys =
+            vec![settings.hotkey_toggle.clone(), settings.hotkey_pause.clone(), settings.hotkey_screenshot.clone()];
         let pipeline = Pipeline::start(cfg, on_event)?;
+        // The input log is an extra: failing to start it must not stop the recording.
+        *lock(&self.input_hook) =
+            log_header.and_then(|header| start_input_hook(&sidecar_path(&path), header, pipeline.timeline(), own_hotkeys).ok());
         *lock(&self.file) = Some(path);
         *lock(&self.pipeline) = Some(pipeline);
         Ok(())
@@ -203,6 +224,7 @@ impl Inner {
         self.apply(Command::Stop)?;
         self.emit(None, None);
         std::thread::spawn(move || {
+            lock(&self.input_hook).take(); // remove the hooks as soon as recording ends
             let pipeline = lock(&self.pipeline).take();
             let result = match pipeline {
                 Some(pipeline) => pipeline.finish().map(|_| ()),
@@ -215,6 +237,7 @@ impl Inner {
 
     /// The pipeline reported an unrecoverable error while recording.
     fn fail(self: Arc<Self>, message: &str) {
+        lock(&self.input_hook).take();
         let pipeline = lock(&self.pipeline).take();
         if pipeline.is_none() {
             return; // a stop is already closing the file and will report the outcome

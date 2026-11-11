@@ -1,0 +1,90 @@
+//! Global hotkeys: start/stop, pause, screenshot. They work while another app has focus.
+use crate::capture::{self, Target};
+use crate::commands::AppState;
+use crate::{events, screenshot};
+use hp_core::settings::Settings;
+use serde::Serialize;
+use std::sync::Mutex;
+use tauri::{AppHandle, Manager};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HotkeyAction {
+    Toggle,
+    Pause,
+    Screenshot,
+}
+
+/// Outcome of registering one hotkey, shown next to its field in Settings.
+#[derive(Clone, Debug, Serialize)]
+pub struct HotkeyStatus {
+    pub action: HotkeyAction,
+    pub hotkey: String,
+    pub ok: bool,
+    pub message: Option<String>,
+}
+
+/// Last registration results, kept for the `hotkey_status` command.
+#[derive(Default)]
+pub struct HotkeyRegistry(pub Mutex<Vec<HotkeyStatus>>);
+
+/// Drops all hotkeys and registers the ones in `settings`. A hotkey another app already holds
+/// is reported, not fatal.
+pub fn register_hotkeys(app: &AppHandle, settings: &Settings) -> Vec<HotkeyStatus> {
+    let shortcuts = app.global_shortcut();
+    let _ = shortcuts.unregister_all();
+    let results: Vec<HotkeyStatus> = [
+        (HotkeyAction::Toggle, &settings.hotkey_toggle),
+        (HotkeyAction::Pause, &settings.hotkey_pause),
+        (HotkeyAction::Screenshot, &settings.hotkey_screenshot),
+    ]
+    .into_iter()
+    .map(|(action, hotkey)| {
+        let registered = shortcuts.on_shortcut(hotkey.as_str(), move |app, _shortcut, event| {
+            if event.state == ShortcutState::Pressed {
+                run_action(app, action);
+            }
+        });
+        HotkeyStatus {
+            action,
+            hotkey: hotkey.clone(),
+            ok: registered.is_ok(),
+            message: registered.err().map(|_| format!("Không đăng ký được {hotkey}: có thể ứng dụng khác đang dùng tổ hợp này.")),
+        }
+    })
+    .collect();
+    if let Some(registry) = app.try_state::<HotkeyRegistry>() {
+        *registry.0.lock().unwrap_or_else(|e| e.into_inner()) = results.clone();
+    }
+    results
+}
+
+/// The primary monitor: what a hotkey records when nothing was chosen in the UI yet.
+pub fn default_target() -> Target {
+    let index = capture::list_monitors().into_iter().find(|m| m.primary).map(|m| m.index).unwrap_or(0);
+    Target::Monitor { index }
+}
+
+pub fn run_action(app: &AppHandle, action: HotkeyAction) {
+    let Some(state) = app.try_state::<AppState>() else { return };
+    let settings = state.settings();
+    let result = match action {
+        HotkeyAction::Toggle => state.recorder.toggle(default_target(), settings),
+        // Pressing pause when nothing is recording is not an error worth showing.
+        HotkeyAction::Pause => state.recorder.toggle_pause().or(Ok(())),
+        HotkeyAction::Screenshot => {
+            let target = state.recorder.last_target().unwrap_or_else(default_target);
+            let app = app.clone();
+            // Capturing takes a moment; keep the hotkey thread free.
+            std::thread::spawn(move || match screenshot::take_screenshot(&app, &settings, &target) {
+                Ok(_) => events::library_changed(&app),
+                Err(message) => events::rec_error(&app, &message),
+            });
+            Ok(())
+        }
+    };
+    if let Err(message) = result {
+        events::rec_error(app, &message);
+    }
+}

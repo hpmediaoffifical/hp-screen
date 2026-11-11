@@ -18,6 +18,7 @@ pub fn library_changed(app: &AppHandle) {
 }
 
 pub fn rec_state(app: &AppHandle, status: &RecStatus) {
+    crate::shell::sync_windows(app, status.state);
     let _ = app.emit(REC_STATE, status);
 }
 
