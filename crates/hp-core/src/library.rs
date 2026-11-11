@@ -27,7 +27,7 @@ pub fn kind_of(path: &Path) -> Option<Kind> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     match ext.as_str() {
         "mp4" => Some(Kind::Video),
-        "png" => Some(Kind::Image),
+        "png" | "gif" => Some(Kind::Image),
         _ => None,
     }
 }

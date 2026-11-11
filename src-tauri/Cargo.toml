@@ -29,4 +29,5 @@ tauri-plugin-dialog = "2"
 tauri-plugin-autostart = "2"
 base64 = "0.23.1"
 windows-numerics = "0.3"
+gif = "0.13"
 

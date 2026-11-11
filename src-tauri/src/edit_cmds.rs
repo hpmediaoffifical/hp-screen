@@ -161,6 +161,26 @@ pub async fn zoom_track(app: AppHandle, state: State<'_, AppState>, path: String
     Ok(zoom_samples(fx.as_ref(), &doc, frame.width, frame.height, frame.duration_ms))
 }
 
+/// GIF choices offered by the edit page.
+#[derive(Clone, Copy, Debug, serde::Deserialize)]
+pub struct GifOptions {
+    pub fps: u32,
+    pub width: u32,
+}
+
+/// (fps, width) for a GIF of a video `out_w` wide: 10 or 15 fps, 480/720/960 px, at most the video's width.
+fn gif_settings(g: &GifOptions, out_w: u32) -> (u32, u32) {
+    let fps = if matches!(g.fps, 10 | 15) { g.fps } else { 15 };
+    let width = if matches!(g.width, 480 | 720 | 960) { g.width } else { 720 };
+    (fps, width.min(out_w).max(2))
+}
+
+/// The frame layout of an edit, for the preview.
+#[tauri::command]
+pub fn edit_layout(doc: EditDoc, frame: Frame) -> hp_core::layout::Layout {
+    hp_core::layout::layout(frame.width, frame.height, &doc.frame)
+}
+
 /// Removes `.part` files an export left behind when the app was closed while exporting.
 /// Called at start-up and before each export (never while one is running).
 pub(crate) fn remove_stale_parts(dir: &Path) {
@@ -203,6 +223,7 @@ pub async fn export_start(
     exports: State<'_, ExportState>,
     path: String,
     doc: EditDoc,
+    gif: Option<GifOptions>,
 ) -> Result<String, String> {
     let media = video_item(&app, &state, &path)?;
     if state.recorder.status().state != RecState::Idle {
@@ -220,7 +241,14 @@ pub async fn export_start(
     if let Some(dir) = media.parent() {
         remove_stale_parts(dir);
     }
-    let out = export_path(&media);
+    let (plan, out) = match gif {
+        Some(g) => {
+            let (fps, width) = gif_settings(&g, plan.out_size().0);
+            (plan.for_gif(fps, width), crate::export::export_path_ext(&media, "gif"))
+        }
+        None => (plan, export_path(&media)),
+    };
+    let is_gif = gif.is_some();
     let (w, h) = plan.out_size();
     let bitrate = hp_core::quality::video_bitrate(w, h, plan.fps(), state.settings().quality);
     let cancel = Arc::new(AtomicBool::new(false));
@@ -232,7 +260,11 @@ pub async fn export_start(
         let mut report = |done, total| {
             let _ = app.emit(EXPORT_PROGRESS, Progress { source: source.clone(), done, total });
         };
-        let result = run_export(&media, &out, &plan, bitrate, &mut report, &cancel);
+        let result = if is_gif {
+            crate::export::run_export_gif(&media, &out, &plan, &mut report, &cancel)
+        } else {
+            run_export(&media, &out, &plan, bitrate, &mut report, &cancel)
+        };
         if let Some(exports) = tauri::Manager::try_state::<ExportState>(&app) {
             *exports.running.lock().unwrap_or_else(|e| e.into_inner()) = None;
         }
@@ -267,6 +299,13 @@ mod tests {
 
     fn info() -> VideoInfo {
         VideoInfo { width: 640, height: 480, duration_ms: 1000, fps: 30, has_audio: false }
+    }
+
+    #[test]
+    fn gif_options_are_kept_to_the_offered_choices() {
+        assert_eq!(gif_settings(&GifOptions { fps: 15, width: 720 }, 1920), (15, 720));
+        assert_eq!(gif_settings(&GifOptions { fps: 60, width: 4000 }, 1920), (15, 720), "unknown values fall back to the defaults");
+        assert_eq!(gif_settings(&GifOptions { fps: 10, width: 960 }, 640), (10, 640), "never wider than the video");
     }
 
     #[test]

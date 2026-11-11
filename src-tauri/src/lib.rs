@@ -17,6 +17,7 @@ mod snip;
 mod decoder;
 mod compositor;
 mod export;
+mod gif_out;
 mod edit_cmds;
 mod live_layer;
 mod live_cmds;
@@ -98,6 +99,7 @@ pub fn run() {
             edit_cmds::export_cancel,
             edit_cmds::zoom_auto,
             edit_cmds::zoom_track,
+            edit_cmds::edit_layout,
             live_cmds::draw_set,
             live_cmds::draw_toggle,
             live_cmds::draw_stroke,

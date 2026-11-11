@@ -18,10 +18,68 @@ const PROGRESS_EVERY: u64 = 10;
 
 /// `<dir>/<stem>_edit.mp4`, or the next free `_edit_2`, `_edit_3`…
 pub fn export_path(source: &Path) -> PathBuf {
+    export_path_ext(source, "mp4")
+}
+
+/// As `export_path`, with another file type (`gif`).
+pub fn export_path_ext(source: &Path, ext: &str) -> PathBuf {
     let dir = source.parent().unwrap_or_else(|| Path::new(""));
     let stem = source.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let taken = |p: &Path| p.exists() || p.file_stem().is_some_and(|s| stem_in_use(dir, &s.to_string_lossy()));
-    unique_path(dir, &format!("{stem}{EDIT_SUFFIX}"), "mp4", &taken)
+    unique_path(dir, &format!("{stem}{EDIT_SUFFIX}"), ext, &taken)
+}
+
+/// Moves the finished `part` to `out`, or to the next free name if `out` was taken meanwhile.
+fn place(source: &Path, part: &Path, out: &Path) -> Result<PathBuf, String> {
+    let ext = out.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_else(|| "mp4".into());
+    let mut out = out.to_path_buf();
+    let mut tries = 0;
+    loop {
+        match move_no_replace(part, &out) {
+            Ok(()) => return Ok(out),
+            Err(_) if out.exists() && tries < 50 => {
+                tries += 1;
+                out = export_path_ext(source, &ext);
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(part);
+                return Err(format!("Không lưu được file xuất: {e}"));
+            }
+        }
+    }
+}
+
+/// Exports `plan` (made with `Plan::for_gif`) of `source` as an animated GIF; no sound.
+pub fn run_export_gif(source: &Path, out: &Path, plan: &Plan, progress: &mut dyn FnMut(u64, u64), cancel: &AtomicBool) -> Result<PathBuf, String> {
+    let part = part_path(out);
+    if let Some(dir) = part.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("Không tạo được thư mục tạm: {e}"))?;
+    }
+    let written = (|| -> Result<(), String> {
+        let (mut video, info) = VideoDecoder::open(source)?;
+        let (w, h) = plan.out_size();
+        let mut gif = crate::gif_out::GifWriter::new(&part, w, h, plan.fps())?;
+        let mut compositor = Compositor::new(w, h, Device::Hardware)?;
+        let total = plan.frames();
+        for n in 0..total {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("Đã hủy".to_string());
+            }
+            let Some(fp) = plan.frame(n) else { break };
+            let src = video.frame_at(fp.src_ms)?;
+            let frame = compositor.render(src, info.width, info.height, Some(fp.view), Some(plan.layout()), &fp.draws)?;
+            gif.write(frame)?;
+            if (n + 1) % PROGRESS_EVERY == 0 || n + 1 == total {
+                progress(n + 1, total);
+            }
+        }
+        gif.finish()
+    })();
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&part);
+        return Err(e);
+    }
+    place(source, &part, out)
 }
 
 /// The temporary file an export writes before it is renamed to `out`.
@@ -62,21 +120,7 @@ pub fn run_export(
         }
     };
     // The planned name may have been taken while exporting: never replace that file.
-    let mut out = out.to_path_buf();
-    let mut tries = 0;
-    loop {
-        match move_no_replace(&part, &out) {
-            Ok(()) => break,
-            Err(_) if out.exists() && tries < 50 => {
-                tries += 1;
-                out = export_path(source);
-            }
-            Err(e) => {
-                let _ = std::fs::remove_file(&part);
-                return Err(format!("Không lưu được file xuất: {e}"));
-            }
-        }
-    }
+    let out = place(source, &part, out)?;
     let (w, h) = plan.out_size();
     if let Some(frame) = first_frame {
         crate::pipeline::save_thumbnail(&frame, w, h, &thumb_path(&out));
@@ -362,6 +406,44 @@ mod tests {
             [f[i + 2], f[i + 1], f[i]]
         };
         assert!(near(px(20, 20), [255, 0, 0]) && near(px(160, 20), [0, 255, 0]), "the centre square of the source: {:?} {:?}", px(20, 20), px(160, 20));
+    }
+
+    fn gif_frames(path: &Path) -> (u16, u16, usize) {
+        let mut dec = gif::DecodeOptions::new().read_info(std::fs::File::open(path).unwrap()).unwrap();
+        let (w, h) = (dec.width(), dec.height());
+        let mut n = 0;
+        while dec.read_next_frame().unwrap().is_some() {
+            n += 1;
+        }
+        (w, h, n)
+    }
+
+    #[test]
+    fn gif_has_the_frames_and_size() {
+        let source = temp_path("exp-gif", "a.mp4");
+        make_sample(&source, 1, 320, 240, true);
+        let plan = plan_for(&source, vec![]).for_gif(10, 160);
+        let out = export_path_ext(&source, "gif");
+        let written = run_export_gif(&source, &out, &plan, &mut |_, _| {}, &AtomicBool::new(false)).unwrap();
+        assert_eq!(written, source.with_file_name("a_edit.gif"));
+        assert_eq!(gif_frames(&written), (160, 120, 10));
+    }
+
+    #[test]
+    fn gif_of_a_silent_video() {
+        let source = temp_path("exp-gif-silent", "a.mp4");
+        make_sample(&source, 1, 320, 240, false);
+        let plan = plan_for(&source, vec![]).for_gif(15, 120);
+        let out = run_export_gif(&source, &export_path_ext(&source, "gif"), &plan, &mut |_, _| {}, &AtomicBool::new(false)).unwrap();
+        assert_eq!(gif_frames(&out).2, 15);
+    }
+
+    #[test]
+    fn gif_names_do_not_overwrite() {
+        let source = temp_path("exp-gif-name", "a.mp4");
+        std::fs::write(source.with_file_name("a_edit.gif"), b"x").unwrap();
+        assert_eq!(export_path_ext(&source, "gif"), source.with_file_name("a_edit_2.gif"));
+        assert_eq!(hp_core::library::kind_of(&source.with_file_name("a_edit.gif")), Some(hp_core::library::Kind::Image));
     }
 
     #[test]
