@@ -19,6 +19,7 @@ pub enum Device {
     /// The GPU, falling back to WARP when no hardware device can be made.
     Hardware,
     /// Software rendering (tests).
+    #[cfg_attr(not(test), allow(dead_code))]
     Warp,
 }
 

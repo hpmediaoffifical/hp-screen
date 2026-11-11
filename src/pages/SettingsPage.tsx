@@ -13,13 +13,14 @@ import {
   type Settings,
 } from "../api";
 
-type HotkeyField = "hotkey_toggle" | "hotkey_pause" | "hotkey_screenshot" | "hotkey_quickshot";
+type HotkeyField = "hotkey_toggle" | "hotkey_pause" | "hotkey_screenshot" | "hotkey_quickshot" | "hotkey_draw";
 
 const HOTKEYS: { field: HotkeyField; action: HotkeyStatus["action"]; label: string }[] = [
   { field: "hotkey_toggle", action: "toggle", label: "Bật / tắt quay" },
   { field: "hotkey_pause", action: "pause", label: "Tạm dừng / tiếp tục" },
   { field: "hotkey_screenshot", action: "screenshot", label: "Chụp ảnh và vẽ ghi chú" },
   { field: "hotkey_quickshot", action: "quickshot", label: "Chụp nhanh (không vẽ)" },
+  { field: "hotkey_draw", action: "draw", label: "Vẽ lên màn hình khi quay" },
 ];
 
 const QUALITIES: { value: Quality; label: string; hint: string }[] = [
@@ -163,6 +164,20 @@ export default function SettingsPage() {
             value={String(settings.countdown_secs)}
             options={[{ value: "0", label: "Tắt" }, { value: "3", label: "3 giây" }, { value: "5", label: "5 giây" }]}
             onChange={(v) => save({ countdown_secs: Number(v) })}
+          />
+        </Field>
+        <Field label="Nét vẽ khi quay tự mờ sau">
+          <Choice
+            name="draw_fade"
+            value={String(settings.draw_fade_secs)}
+            options={[
+              { value: "2", label: "2 giây" },
+              { value: "3", label: "3 giây" },
+              { value: "5", label: "5 giây" },
+              { value: "10", label: "10 giây" },
+              { value: "0", label: "Không tự mờ" },
+            ]}
+            onChange={(v) => save({ draw_fade_secs: Number(v) })}
           />
         </Field>
       </Group>

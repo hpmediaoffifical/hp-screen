@@ -25,6 +25,7 @@ import {
   type Target,
 } from "../api";
 import { useRecStatus } from "../useRecStatus";
+import { drawToggle, onDrawMode } from "../liveApi";
 
 /**
  * The compact bar: one always-on-top row with the everyday controls, so recording and
@@ -39,6 +40,11 @@ export default function ControlBar() {
   const [target, setLocalTarget] = useState<Target | null>(null);
   const [note, setNote] = useState("");
   const rowRef = useRef<HTMLDivElement>(null);
+  const [drawing, setDrawing] = useState(false);
+  useEffect(() => {
+    const off = onDrawMode(setDrawing);
+    return () => void off.then((u) => u());
+  }, []);
   const { state } = status;
   const active = state !== "idle";
 
@@ -183,6 +189,9 @@ export default function ControlBar() {
       )}
       {!collapsed && (state === "recording" || state === "paused") && (
         <>
+          <BarButton on={drawing} title={`Vẽ lên màn hình (${settings?.hotkey_draw ?? ""})`} onClick={() => run(drawToggle)}>
+            ✎ Vẽ
+          </BarButton>
           <BarButton title={`Tạm dừng / tiếp tục (${settings?.hotkey_pause ?? ""})`} onClick={() => run(recTogglePause)}>
             {state === "paused" ? "▶ Tiếp tục" : "❚❚ Tạm dừng"}
           </BarButton>

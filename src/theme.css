@@ -298,3 +298,14 @@ html[data-window="control-bar"] #root { height: auto; }
 .export-done { display: flex; flex-direction: column; gap: 6px; color: var(--ok); }
 .editor-msg { margin: 0; }
 .panel-body[hidden] { display: none; }
+
+/* Drawing layer while recording (excluded from capture) */
+html[data-window="draw"], html[data-window="draw"] body { background: transparent; overflow: hidden; }
+.draw { position: fixed; inset: 0; }
+.draw-on { cursor: crosshair; }
+.draw-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.draw-bar { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 4px; padding: 6px 8px; background: #0c0f16; border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 6px 20px rgba(0, 0, 0, .45); cursor: default; }
+.draw-bar .bar-btn.on { border-color: var(--accent); color: #fff; }
+.draw-swatch { width: 20px; height: 20px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
+.draw-swatch.on { border-color: #fff; outline: 2px solid var(--accent); }
+.draw-dot { display: inline-block; border-radius: 50%; background: currentColor; }

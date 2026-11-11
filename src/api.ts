@@ -116,7 +116,7 @@ export const settingsGet = () => invoke<Settings>("settings_get");
 export const settingsSet = (settings: Settings) => invoke<Settings>("settings_set", { settings });
 
 export interface HotkeyStatus {
-  action: "toggle" | "pause" | "screenshot" | "quickshot";
+  action: "toggle" | "pause" | "screenshot" | "quickshot" | "draw";
   hotkey: string;
   ok: boolean;
   message: string | null;
