@@ -15,3 +15,4 @@ pub mod effects;
 pub mod plan;
 pub mod stroke;
 pub mod webcam;
+pub mod spring;
