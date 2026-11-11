@@ -1,0 +1,20 @@
+[package]
+name = "hp-screen"
+version = "0.1.0"
+description = "HP Screen - quay màn hình cho Windows 11"
+edition = "2024"
+
+[lib]
+name = "hp_screen_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+hp-core = { path = "../crates/hp-core" }
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
