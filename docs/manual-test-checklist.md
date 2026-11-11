@@ -124,19 +124,19 @@ Cột "Máy" ghi những gì kiểm thử tự động đã phủ (video mẫu d
 
 | # | Việc cần thử | Máy | Người |
 |---|---|---|---|
-| D1 | Đang quay, bấm "✎ Vẽ" trên thanh gọn (hoặc Ctrl+Alt+D): thanh công cụ vẽ hiện ở cạnh trên vùng quay | — | |
-| D2 | Vẽ bằng bút, mũi tên, khung với vài màu và độ dày: nét hiện ngay trên màn hình | — | |
-| D3 | Thả chuột: nét giữ 3 giây rồi mờ dần; video quay ra cũng có nét và cũng mờ y như vậy | Đạt cho khung hình (`stroke_is_drawn_onto_the_frame`); chưa thử với video quay thật | |
-| D4 | Esc hoặc "Thoát": chuột lại bấm được vào ứng dụng bên dưới; nét cũ vẫn mờ dần | — | |
+| D1 | Đang quay, bấm "✎ Vẽ" trên thanh gọn (hoặc Ctrl+Alt+D): thanh công cụ vẽ hiện ở cạnh trên vùng quay | — | Đạt (người dùng xác nhận 2026-11-12) |
+| D2 | Vẽ bằng bút, mũi tên, khung với vài màu và độ dày: nét hiện ngay trên màn hình | — | Đạt (người dùng xác nhận 2026-11-12) |
+| D3 | Thả chuột: nét giữ 3 giây rồi mờ dần; video quay ra cũng có nét và cũng mờ y như vậy | Đạt cho khung hình (`stroke_is_drawn_onto_the_frame`); chưa thử với video quay thật | Đạt (người dùng xác nhận 2026-11-12) |
+| D4 | Esc hoặc "Thoát": chuột lại bấm được vào ứng dụng bên dưới; nét cũ vẫn mờ dần | — | Đạt (người dùng xác nhận 2026-11-12) |
 | D5 | "Xóa hết": mọi nét biến mất cả trên màn hình lẫn trong video | Đạt (`clear_removes_strokes_and_upsert_replaces_by_id`) | |
-| D6 | Thử ở cả ba chế độ quay: toàn màn hình, cửa sổ, vùng | — | |
+| D6 | Thử ở cả ba chế độ quay: toàn màn hình, cửa sổ, vùng | — | Đạt (người dùng xác nhận 2026-11-12) |
 | D7 | Xuất video vừa quay có vẽ: những click lúc vẽ không thành vòng click | Đạt (`clicks_are_dropped_while_drawing`) | |
 | D8 | Cài đặt → "Nét vẽ khi quay tự mờ sau": 10 giây và "Không tự mờ" đều đúng | Đạt (`alpha_holds_then_fades`) | |
 | D9 | Dừng quay khi đang vẽ: lớp vẽ đóng; lần quay sau không còn nét cũ | Đạt (`cancelling_clears_the_live_layer`) | |
-| W1 | Đang quay, bấm "📷 Webcam": đèn camera sáng, bong bóng hiện ở góc dưới phải, thấy mặt mình (lật gương) | — | |
-| W2 | Video quay ra có webcam đúng góc đó, tròn, viền trắng mảnh | Đạt cho khung hình (`webcam_is_drawn_in_its_bubble`) | |
-| W3 | Cài đặt → Webcam: đổi sang bo góc, cỡ lớn, góc trên trái, tắt lật gương; lần quay sau đúng như vậy | Đạt (`bubble_rect`, `mirror_flips_the_picture`) | |
+| W1 | Đang quay, bấm "📷 Webcam": đèn camera sáng, bong bóng hiện ở góc dưới phải, thấy mặt mình (lật gương) | — | Đạt (người dùng xác nhận 2026-11-12) |
+| W2 | Video quay ra có webcam đúng góc đó, tròn, viền trắng mảnh | Đạt cho khung hình (`webcam_is_drawn_in_its_bubble`) | Đạt (người dùng xác nhận 2026-11-12) |
+| W3 | Cài đặt → Webcam: đổi sang bo góc, cỡ lớn, góc trên trái, tắt lật gương; lần quay sau đúng như vậy | Đạt (`bubble_rect`, `mirror_flips_the_picture`) | Đạt (người dùng xác nhận 2026-11-12) |
 | W4 | Trang Quay bật "Webcam": bấm quay thì webcam tự bật | Đạt (`webcam_starts_once_per_recording_when_enabled`) | |
-| W5 | Dừng quay: bong bóng đóng, đèn camera tắt | — | |
+| W5 | Dừng quay: bong bóng đóng, đèn camera tắt | — | Đạt (người dùng xác nhận 2026-11-12) |
 | W6 | Rút dây camera giữa lúc quay: thanh gọn báo lỗi, việc quay vẫn tiếp tục | — | |
 | W7 | Mở camera bằng app khác (Camera của Windows) rồi bật webcam trong HP Screen: báo "Camera đang được ứng dụng khác dùng" | Đạt cho thông báo (`camera_errors_are_explained`) | |
