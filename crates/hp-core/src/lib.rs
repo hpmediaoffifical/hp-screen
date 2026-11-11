@@ -11,3 +11,4 @@ pub mod mix;
 pub mod library;
 pub mod cut;
 pub mod edit;
+pub mod effects;

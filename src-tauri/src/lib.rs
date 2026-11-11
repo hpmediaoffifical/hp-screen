@@ -15,6 +15,7 @@ mod screenshot;
 mod shell;
 mod snip;
 mod decoder;
+mod compositor;
 #[cfg(test)]
 mod test_media;
 
