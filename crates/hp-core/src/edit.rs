@@ -41,11 +41,12 @@ pub struct EditDoc {
     pub effects: EffectToggles,
     pub zoom: crate::zoom::ZoomDoc,
     pub frame: crate::layout::FrameDoc,
+    pub subtitles: crate::subtitle::SubtitleDoc,
 }
 
 impl Default for EditDoc {
     fn default() -> Self {
-        EditDoc { v: EDIT_VERSION, trim: Trim::default(), cuts: Vec::new(), effects: EffectToggles::default(), zoom: crate::zoom::ZoomDoc::default(), frame: crate::layout::FrameDoc::default() }
+        EditDoc { v: EDIT_VERSION, trim: Trim::default(), cuts: Vec::new(), effects: EffectToggles::default(), zoom: crate::zoom::ZoomDoc::default(), frame: crate::layout::FrameDoc::default(), subtitles: crate::subtitle::SubtitleDoc::default() }
     }
 }
 
