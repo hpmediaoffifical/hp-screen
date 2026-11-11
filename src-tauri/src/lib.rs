@@ -14,6 +14,9 @@ mod recorder;
 mod screenshot;
 mod shell;
 mod snip;
+mod decoder;
+#[cfg(test)]
+mod test_media;
 
 use commands::AppState;
 use hotkeys::HotkeyRegistry;
