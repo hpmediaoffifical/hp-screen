@@ -167,3 +167,12 @@ export const snipContext = () => invoke<SnipContext | null>("snip_context");
 export const snipReady = () => invoke<void>("snip_ready");
 export const snipFinish = (action: SnipAction, png: string) => invoke<string | null>("snip_finish", { action, png });
 export const snipCancel = () => invoke<void>("snip_cancel");
+
+export const compactShow = () => invoke<void>("compact_show");
+export const compactHide = () => invoke<void>("compact_hide");
+export const openMain = () => invoke<void>("open_main");
+export const getTarget = () => invoke<Target>("get_target");
+export const onTargetChanged = (handler: (t: Target) => void): Promise<UnlistenFn> =>
+  listen<Target>("target-changed", (e) => handler(e.payload));
+export const onSettingsChanged = (handler: (s: Settings) => void): Promise<UnlistenFn> =>
+  listen<Settings>("settings-changed", (e) => handler(e.payload));

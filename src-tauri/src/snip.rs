@@ -80,20 +80,21 @@ fn frozen_file(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("snip-frozen.bmp"))
 }
 
-/// Freezes the monitor under the mouse and opens the overlay on it.
-/// `from_main_window`: the request came from HP Screen's own window, which is moved out of
-/// the way first so it is not in the picture.
-pub fn start(app: &AppHandle, from_main_window: bool) -> Result<(), String> {
+/// Freezes the monitor under the mouse and opens the overlay on it. HP Screen's own windows
+/// are excluded from capture, so they never appear in the frozen picture.
+pub fn start(app: &AppHandle) -> Result<(), String> {
     if app.get_webview_window(SNIP).is_some() {
         return Ok(()); // already open
     }
-    if from_main_window {
-        if let Some(main) = app.get_webview_window(shell::MAIN) {
-            let _ = main.minimize();
-        }
-        std::thread::sleep(std::time::Duration::from_millis(300)); // let the minimize animation finish
+    shell::suspend_bar(app);
+    let opened = open_overlay(app);
+    if opened.is_err() {
+        shell::resume_bar(app);
     }
+    opened
+}
 
+fn open_overlay(app: &AppHandle) -> Result<(), String> {
     let monitors = capture::list_monitors();
     let mut cursor = POINT::default();
     // SAFETY: the out pointer is valid.
@@ -155,6 +156,7 @@ pub fn close(app: &AppHandle) {
         let _ = window.destroy();
     }
     app.state::<SnipState>().0.lock().unwrap_or_else(|e| e.into_inner()).take();
+    shell::resume_bar(app);
     if let Ok(path) = frozen_file(app) {
         let _ = std::fs::remove_file(path);
     }

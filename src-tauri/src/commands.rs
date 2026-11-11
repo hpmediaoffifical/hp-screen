@@ -33,12 +33,8 @@ pub fn list_windows() -> Vec<WindowInfo> {
 #[tauri::command]
 pub async fn take_screenshot(app: AppHandle, state: State<'_, AppState>, target: Target) -> Result<String, String> {
     let settings = state.settings();
-    // The screenshot is asked for from the main window: keep that window out of the picture.
-    crate::shell::set_main_hidden_from_capture(&app, true);
-    std::thread::sleep(std::time::Duration::from_millis(150)); // let the compositor apply it
-    let result = screenshot::take_screenshot(&app, &settings, &target);
-    crate::shell::set_main_hidden_from_capture(&app, false);
-    let path = result?;
+    // HP Screen's own windows are excluded from capture, so they never appear in it.
+    let path = screenshot::take_screenshot(&app, &settings, &target)?;
     events::library_changed(&app);
     Ok(path.to_string_lossy().into_owned())
 }
@@ -120,6 +116,8 @@ pub fn settings_set(app: AppHandle, state: State<'_, AppState>, settings: Settin
         // Best effort: a failure here must not lose the other settings.
         let _ = if settings.autostart { autostart.enable() } else { autostart.disable() };
     }
+    // Every window keeps its own copy of the settings; tell them all.
+    let _ = tauri::Emitter::emit(&app, "settings-changed", &settings);
     Ok(settings)
 }
 
@@ -208,7 +206,8 @@ pub fn output_folder(app: AppHandle, state: State<'_, AppState>) -> Result<Strin
 
 /// Tells the core what is selected on the record page, so hotkeys and the tray act on it.
 #[tauri::command]
-pub fn set_target(state: State<'_, AppState>, target: Target) {
+pub fn set_target(app: AppHandle, state: State<'_, AppState>, target: Target) {
+    let _ = tauri::Emitter::emit(&app, "target-changed", &target);
     state.recorder.set_target(target);
 }
 
@@ -216,7 +215,7 @@ pub fn set_target(state: State<'_, AppState>, target: Target) {
 #[tauri::command]
 pub async fn snip_start(app: AppHandle) -> Result<(), String> {
     let handle = app.clone();
-    tauri::async_runtime::spawn_blocking(move || crate::snip::start(&handle, true))
+    tauri::async_runtime::spawn_blocking(move || crate::snip::start(&handle))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -248,4 +247,28 @@ pub async fn snip_finish(app: AppHandle, action: crate::snip::SnipAction, png: S
 #[tauri::command]
 pub fn snip_cancel(app: AppHandle) {
     crate::snip::close(&app);
+}
+
+/// Switches to the compact bar.
+#[tauri::command]
+pub fn compact_show(app: AppHandle) {
+    crate::shell::show_compact(&app);
+}
+
+/// Hides the compact bar; the app stays in the tray.
+#[tauri::command]
+pub fn compact_hide(app: AppHandle) {
+    crate::shell::hide_compact(&app);
+}
+
+/// Opens the full HP Screen window.
+#[tauri::command]
+pub fn open_main(app: AppHandle) {
+    crate::shell::show_main(&app);
+}
+
+/// What hotkeys, the tray and the compact bar record right now.
+#[tauri::command]
+pub fn get_target(state: State<'_, AppState>) -> Target {
+    state.recorder.last_target().unwrap_or_else(crate::hotkeys::default_target)
 }

@@ -3,7 +3,10 @@ import {
   audioStatus,
   errorMessage,
   formatElapsed,
+  getTarget,
   listMonitors,
+  onSettingsChanged,
+  onTargetChanged,
   listWindows,
   pickTarget,
   recCancel,
@@ -56,15 +59,38 @@ export default function RecordPage() {
   const { state } = status;
   const idle = state === "idle";
 
+  // Until the current selection has been read from the core, do not push ours over it.
+  const [synced, setSynced] = useState(false);
+
+  /** Shows a selection made here, in the compact bar, or by an earlier session. */
+  async function applyTarget(t: Target) {
+    if (t.kind === "monitor") {
+      setMode("monitor");
+      setMonitorIndex(t.index);
+    } else if (t.kind === "window") {
+      setMode("window");
+      setWindowTarget(t);
+      const chosen = (await listWindows().catch(() => [])).find((w) => w.hwnd === t.hwnd);
+      setWindowTitle(chosen ? chosen.title : "");
+    } else {
+      setMode("region");
+      setRegionTarget(t);
+    }
+  }
+
   useEffect(() => {
     settingsGet().then(setSettings).catch(() => {});
     audioStatus().then(setAudio).catch(() => {});
     listMonitors()
-      .then((list) => {
-        setMonitors(list);
-        setMonitorIndex(list.find((m) => m.primary)?.index ?? 0);
-      })
+      .then(setMonitors)
       .catch(() => {});
+    getTarget()
+      .then(applyTarget)
+      .catch(() => {})
+      .finally(() => setSynced(true));
+    const unlisten = [onSettingsChanged(setSettings), onTargetChanged(applyTarget)];
+    return () => unlisten.forEach((p) => p.then((off) => off()));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const target: Target | null =
@@ -73,9 +99,9 @@ export default function RecordPage() {
   // Hotkeys and the tray record whatever is selected here.
   const targetKey = JSON.stringify(target);
   useEffect(() => {
-    if (target) setTarget(target).catch(() => {});
+    if (target && synced) setTarget(target).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetKey]);
+  }, [targetKey, synced]);
 
   async function run(action: () => Promise<unknown>, done?: (r: unknown) => string) {
     clearError();

@@ -210,3 +210,34 @@ html[data-window="snip"], html[data-window="snip"] body { background: #000; over
   field-sizing: content;
 }
 .snip-error { color: #ff8589; margin: 0; font-size: 12px; max-width: 420px; }
+
+/* Compact bar (replaces the recording-only control bar styles above) */
+html[data-window="control-bar"], html[data-window="control-bar"] body { background: #0c0f16; overflow: hidden; }
+html[data-window="control-bar"] #root { height: auto; }
+.bar {
+  display: inline-flex; height: auto; align-items: center; gap: 4px; padding: 6px 8px;
+  background: #0c0f16; border: 1px solid var(--border); border-radius: 10px; cursor: default;
+  white-space: nowrap; font-size: 13px;
+}
+.bar-grip { color: var(--text-dim); cursor: grab; padding: 4px 2px; letter-spacing: -2px; font-size: 14px; }
+.bar-grip:active { cursor: grabbing; }
+.bar-brand { font-weight: 700; padding: 0 4px; cursor: grab; }
+.bar-status { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; padding: 0 6px; cursor: grab; font-variant-numeric: tabular-nums; }
+.bar-group { display: inline-flex; gap: 2px; background: var(--bg-card); border-radius: 8px; padding: 2px; }
+.bar-btn {
+  height: 30px; padding: 0 9px; border-radius: 7px; border: 1px solid transparent; background: transparent;
+  color: var(--text); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; font: inherit;
+}
+.bar-btn:hover { background: #1e2636; border-color: transparent; }
+.bar-btn.on { background: #1b2740; border-color: var(--accent); color: #fff; }
+.bar-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.bar-icon { width: 30px; padding: 0; justify-content: center; }
+.bar-rec { background: var(--rec); border-color: var(--rec); color: #fff; font-weight: 600; }
+.bar-rec:hover { background: #f05257; border-color: #fff; }
+.bar-audio.off { opacity: .45; text-decoration: line-through; }
+.bar-audio.on { border-color: #2f7d5b; }
+.bar-msg { max-width: 260px; overflow: hidden; text-overflow: ellipsis; color: var(--warn); padding: 0 4px; }
+.bar-sep { width: 1px; align-self: stretch; background: var(--border); margin: 3px 3px; }
+
+/* "Compact bar" entry in the main window's sidebar */
+.sidebar-bottom { margin-top: auto; }

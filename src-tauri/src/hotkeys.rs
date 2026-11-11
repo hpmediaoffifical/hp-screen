@@ -87,7 +87,7 @@ pub fn run_action(app: &AppHandle, action: HotkeyAction) {
             let app = app.clone();
             // Freezing the screen takes a moment; keep the hotkey thread free.
             std::thread::spawn(move || {
-                if let Err(message) = crate::snip::start(&app, false) {
+                if let Err(message) = crate::snip::start(&app) {
                     events::rec_error(&app, &message);
                 }
             });

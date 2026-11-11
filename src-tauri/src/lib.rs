@@ -71,6 +71,10 @@ pub fn run() {
             commands::snip_ready,
             commands::snip_finish,
             commands::snip_cancel,
+            commands::compact_show,
+            commands::compact_hide,
+            commands::open_main,
+            commands::get_target,
         ])
         .run(tauri::generate_context!())
         .expect("error while running HP Screen");

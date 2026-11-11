@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { compactShow } from "./api";
 import RecordPage from "./pages/RecordPage";
 import LibraryPage from "./pages/LibraryPage";
 import SettingsPage from "./pages/SettingsPage";
@@ -28,6 +29,10 @@ export default function App() {
             {n.label}
           </button>
         ))}
+        <button className="nav-item sidebar-bottom" title="Thu HP Screen thành một thanh nhỏ nổi trên màn hình" onClick={() => compactShow().catch(() => {})}>
+          <span className="nav-icon" aria-hidden="true">▭</span>
+          Thanh gọn
+        </button>
       </nav>
       <main className="content">
         {page === "record" && <RecordPage />}

@@ -2,6 +2,7 @@ import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   errorMessage,
   hotkeyStatus,
+  onSettingsChanged,
   outputFolder,
   pickFolder,
   previewName,
@@ -57,6 +58,11 @@ export default function SettingsPage() {
       })
       .catch((e) => setMessage(errorMessage(e)));
     refreshDerived();
+    // Changes made elsewhere (the record page, the compact bar) show up here too.
+    const unlisten = onSettingsChanged(setSettings);
+    return () => {
+      unlisten.then((off) => off());
+    };
   }, []);
 
   useEffect(() => {

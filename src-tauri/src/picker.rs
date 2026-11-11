@@ -57,9 +57,16 @@ pub async fn pick(app: AppHandle, mode: PickMode) -> Result<Option<Target>, Stri
     if let Some(existing) = app.get_webview_window(PICKER) {
         let _ = existing.destroy();
     }
-    if let Some(main) = app.get_webview_window(shell::MAIN) {
-        let _ = main.minimize(); // get out of the way so the desktop is visible
+    // Get HP Screen's own windows out of the way so the desktop is visible; they come back
+    // as they were afterwards.
+    let main = app.get_webview_window(shell::MAIN);
+    let main_was_visible = main
+        .as_ref()
+        .is_some_and(|m| m.is_visible().unwrap_or(false) && !m.is_minimized().unwrap_or(false));
+    if let Some(main) = &main {
+        let _ = main.hide();
     }
+    shell::suspend_bar(&app);
 
     let (tx, rx) = mpsc::channel();
     let state = app.state::<PickerState>();
@@ -94,7 +101,13 @@ pub async fn pick(app: AppHandle, mode: PickMode) -> Result<Option<Target>, Stri
     let choice = tauri::async_runtime::spawn_blocking(move || rx.recv().ok().flatten())
         .await
         .map_err(|e| e.to_string())?;
-    shell::show_main(&app);
+    shell::resume_bar(&app);
+    if main_was_visible {
+        if let Some(main) = &main {
+            let _ = main.show();
+            let _ = main.set_focus();
+        }
+    }
     Ok(choice)
 }
 
