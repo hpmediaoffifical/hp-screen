@@ -4,6 +4,7 @@ use crate::audio::{self, AudioConfig, AudioSession};
 use crate::capture::{self, CaptureSession, Frame, FrameSink, Target};
 use crate::clock;
 use crate::encoder::{self, EncoderConfig, Mp4Encoder};
+use crate::live_layer::LiveLayer;
 use hp_core::quality::{Quality, video_bitrate};
 use hp_core::timeline::Timeline;
 use std::path::PathBuf;
@@ -19,7 +20,7 @@ const MAX_CATCH_UP_FRAMES: u32 = 4;
 const TICK_EVENT_INTERVAL: Duration = Duration::from_millis(500);
 const THUMB_WIDTH: u32 = 320;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PipelineConfig {
     pub target: Target,
     pub path: PathBuf,
@@ -29,6 +30,8 @@ pub struct PipelineConfig {
     pub quality: Quality,
     /// Which audio sources to record; `None` writes a video without an audio track.
     pub audio: Option<AudioConfig>,
+    /// Strokes (and the webcam) drawn into every frame.
+    pub live: Option<Arc<LiveLayer>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -249,6 +252,11 @@ fn pace_loop(
                     blit(&frame, &mut canvas, width, height);
                 }
             }
+            if width != 0
+                && let Some(live) = &cfg.live
+            {
+                live.apply(&mut canvas, width, height, clock::now_100ns() / 10_000);
+            }
             if width != 0 {
                 if written == 0
                     && let Some(thumb) = &cfg.thumb {
@@ -360,13 +368,36 @@ mod desktop_tests {
             let seen = seen.clone();
             Arc::new(move |e| seen.lock().unwrap().push(e))
         };
-        let cfg = PipelineConfig { target, path: path.clone(), thumb: None, fps: 30, quality: Quality::Standard, audio };
+        let cfg = PipelineConfig { target, path: path.clone(), thumb: None, fps: 30, quality: Quality::Standard, audio, live: None };
         let pipeline = Pipeline::start(cfg, events).expect("pipeline starts");
         script(&pipeline);
         let stats = pipeline.finish().expect("pipeline finishes");
         let probed = encoder::probe(&path).expect("file can be read back");
         let events = seen.lock().unwrap().clone();
         (stats, probed, events)
+    }
+
+    #[test]
+    #[ignore = "needs a desktop session"]
+    fn recorded_frames_contain_strokes() {
+        use hp_core::stroke::{COLORS, Stroke, Tool};
+        let path = temp_file("live-stroke.mp4");
+        let live = LiveLayer::new();
+        let target = Target::Monitor { index: 0 };
+        let area = capture::target_rect(&target).unwrap();
+        let (cx, cy) = ((area.w / 2) as f32, (area.h / 2) as f32);
+        live.upsert_stroke(Stroke { id: 1, tool: Tool::Pen, color: COLORS[0], width: 14.0, points: vec![(cx - 100.0, cy), (cx + 100.0, cy)], finished_ms: None });
+        let events: EventFn = Arc::new(|_| {});
+        let cfg = PipelineConfig { target, path: path.clone(), thumb: None, fps: 30, quality: Quality::Standard, audio: None, live: Some(live) };
+        let pipeline = Pipeline::start(cfg, events).expect("pipeline starts");
+        std::thread::sleep(Duration::from_secs(2));
+        let stats = pipeline.finish().expect("pipeline finishes");
+        let (mut dec, info) = crate::decoder::VideoDecoder::open(&path).unwrap();
+        let frame = dec.frame_at(1500).unwrap();
+        let i = ((info.height / 2 * info.width + info.width / 2) * 4) as usize;
+        let rgb = [frame[i + 2], frame[i + 1], frame[i]];
+        println!("{stats:?} centre {rgb:?}");
+        assert!(rgb[0] > 180 && rgb[1] < 110 && rgb[2] < 110, "centre pixel should be the red stroke, got {rgb:?}");
     }
 
     #[test]
@@ -459,6 +490,7 @@ mod size_tests {
                 fps: 30,
                 quality: Quality::Standard,
                 audio: Some(AudioConfig { system: true, mic: true }),
+                live: None,
             };
             let pipeline = Pipeline::start(cfg, events).expect("pipeline starts");
             std::thread::sleep(Duration::from_secs(2));

@@ -67,6 +67,11 @@ impl LiveLayer {
         lock(&self.strokes).clear();
     }
 
+    #[cfg(test)]
+    pub fn stroke_count(&self) -> usize {
+        lock(&self.strokes).len()
+    }
+
     pub fn set_drawing(&self, on: bool) {
         self.drawing.store(on, Ordering::Relaxed);
     }

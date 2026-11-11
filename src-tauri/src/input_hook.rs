@@ -11,6 +11,7 @@ use std::cell::RefCell;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -58,12 +59,15 @@ impl Drop for InputHook {
     }
 }
 
-/// `ignored` lists key combinations that must not be logged (the app's own hotkeys).
+/// `ignored` lists key combinations that must not be logged (the app's own hotkeys). While
+/// `skip_clicks` is set (the user is drawing on screen) mouse buttons are not logged, so the
+/// drawing does not turn into click effects.
 pub fn start_input_hook(
     log_path: &Path,
     header: Header,
     timeline: Arc<Mutex<Timeline>>,
     ignored: Vec<String>,
+    skip_clicks: Arc<AtomicBool>,
 ) -> Result<InputHook, String> {
     if let Some(dir) = log_path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("Không tạo được thư mục nhật ký: {e}"))?;
@@ -74,7 +78,7 @@ pub fn start_input_hook(
 
     let writer_thread = std::thread::Builder::new()
         .name("hp-input-log".into())
-        .spawn(move || write_log(BufWriter::new(file), header, origin, rx, timeline, ignored))
+        .spawn(move || write_log(BufWriter::new(file), header, origin, rx, timeline, ignored, skip_clicks))
         .map_err(|e| e.to_string())?;
 
     let (ready_tx, ready_rx) = mpsc::channel::<Result<u32, String>>();
@@ -169,6 +173,7 @@ fn write_log(
     rx: Receiver<Raw>,
     timeline: Arc<Mutex<Timeline>>,
     ignored: Vec<String>,
+    skip_clicks: Arc<AtomicBool>,
 ) {
     let _ = writeln!(out, "{}", to_line(&header));
     let mut sampler = MoveSampler::new();
@@ -212,7 +217,7 @@ fn write_log(
             }
             None => None,
         };
-        if let Some(event) = event {
+        if let Some(event) = event.filter(|e| keep_event(e, skip_clicks.load(Ordering::Relaxed))) {
             let _ = writeln!(out, "{}", to_line(&event));
         }
         if last_flush.elapsed() >= FLUSH_INTERVAL {
@@ -221,6 +226,28 @@ fn write_log(
         }
     }
     let _ = out.flush();
+}
+
+/// Whether an event goes into the log: button presses are left out while the user draws.
+fn keep_event(e: &Event, drawing: bool) -> bool {
+    !(drawing && matches!(e, Event::Down { .. } | Event::Up { .. }))
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+
+    #[test]
+    fn clicks_are_dropped_while_drawing() {
+        let down = Event::Down { t: 1, b: Button::Left, x: 0, y: 0 };
+        let up = Event::Up { t: 2, b: Button::Right, x: 0, y: 0 };
+        let mv = Event::Move { t: 3, x: 0, y: 0 };
+        let wheel = Event::Wheel { t: 4, dx: 0, dy: 120, x: 0, y: 0 };
+        let key = Event::Key { t: 5, k: "Ctrl+S".into() };
+        assert!(!keep_event(&down, true) && !keep_event(&up, true));
+        assert!(keep_event(&mv, true) && keep_event(&wheel, true) && keep_event(&key, true));
+        assert!(keep_event(&down, false) && keep_event(&up, false));
+    }
 }
 
 #[cfg(test)]
@@ -254,7 +281,7 @@ mod desktop_tests {
             fps: 30,
         };
         let timeline = Arc::new(Mutex::new(Timeline::new(clock::now_100ns(), clock::TICKS_PER_SEC)));
-        let hook = start_input_hook(&path, header, timeline.clone(), Vec::new()).expect("hooks install");
+        let hook = start_input_hook(&path, header, timeline.clone(), Vec::new(), Arc::new(AtomicBool::new(false))).expect("hooks install");
         std::thread::sleep(Duration::from_millis(200));
         mouse(MOUSEEVENTF_MOVE, 3, 0, 0);
         std::thread::sleep(Duration::from_millis(50));

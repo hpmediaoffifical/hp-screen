@@ -2,6 +2,7 @@
 //! `Pipeline`, with every change reported to the UI as a `rec-state` event.
 use crate::capture::{self, Target};
 use crate::input_hook::{InputHook, start_input_hook};
+use crate::live_layer::LiveLayer;
 use crate::events;
 use crate::paths::{new_media_path, output_dir};
 use crate::pipeline::{EventFn, Pipeline, PipelineConfig, PipelineEvent};
@@ -42,6 +43,8 @@ struct Inner {
     elapsed_ms: AtomicI64,
     /// Bumped on every start so a cancelled countdown cannot start a later session.
     generation: AtomicU64,
+    /// Strokes and webcam drawn into the recording.
+    live: Arc<LiveLayer>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -64,12 +67,18 @@ impl Recorder {
                 last_target: Mutex::new(None),
                 elapsed_ms: AtomicI64::new(0),
                 generation: AtomicU64::new(0),
+                live: LiveLayer::new(),
             }),
         }
     }
 
     pub fn status(&self) -> RecStatus {
         self.inner.status(None, None)
+    }
+
+    /// The layer drawn into recorded frames (strokes, webcam).
+    pub fn live(&self) -> Arc<LiveLayer> {
+        self.inner.live.clone()
     }
 
     /// What the hotkeys and the tray record: the last selection made in the UI or last recorded.
@@ -100,6 +109,7 @@ impl Recorder {
 
     pub fn cancel(&self) -> Result<(), String> {
         self.inner.apply(Command::Cancel)?;
+        self.inner.reset_live();
         self.inner.emit(None, None);
         Ok(())
     }
@@ -136,6 +146,12 @@ impl Recorder {
 }
 
 impl Inner {
+    /// Nothing drawn in one session carries over to the next.
+    fn reset_live(&self) {
+        self.live.set_drawing(false);
+        self.live.clear();
+    }
+
     fn apply(&self, command: Command) -> Result<RecState, String> {
         let mut state = lock(&self.state);
         let next = transition(*state, command).map_err(|_| "Thao tác này không dùng được ở trạng thái hiện tại".to_string())?;
@@ -221,7 +237,10 @@ impl Inner {
             quality: settings.quality,
             audio: (settings.system_audio || settings.mic)
                 .then_some(crate::audio::AudioConfig { system: settings.system_audio, mic: settings.mic }),
+            live: Some(self.live.clone()),
         };
+        self.reset_live();
+        self.live.set_hold_ms(settings.draw_fade_secs as i64 * 1000);
         let weak = Arc::downgrade(&self);
         let on_event: EventFn = Arc::new(move |event| {
             let Some(inner) = weak.upgrade() else { return };
@@ -256,11 +275,12 @@ impl Inner {
             settings.hotkey_pause.clone(),
             settings.hotkey_screenshot.clone(),
             settings.hotkey_quickshot.clone(),
+            settings.hotkey_draw.clone(),
         ];
         let pipeline = Pipeline::start(cfg, on_event)?;
         // The input log is an extra: failing to start it must not stop the recording.
         *lock(&self.input_hook) =
-            log_header.and_then(|header| start_input_hook(&sidecar_path(&path), header, pipeline.timeline(), own_hotkeys).ok());
+            log_header.and_then(|header| start_input_hook(&sidecar_path(&path), header, pipeline.timeline(), own_hotkeys, self.live.drawing_flag()).ok());
         *lock(&self.file) = Some(path);
         Ok(pipeline)
     }
@@ -300,6 +320,7 @@ impl Inner {
     }
 
     fn finalized(&self, error: Option<String>) {
+        self.reset_live();
         let _ = self.apply(Command::Finalized);
         *lock(&self.file) = None;
         if let Some(message) = error {
@@ -351,6 +372,26 @@ mod desktop_tests {
             std::thread::sleep(Duration::from_millis(600)); // a late begin() would have stored its pipeline by now
             assert!(!recorder.has_pipeline(), "round {round}: a recording is still running while the state is Idle");
         }
+    }
+}
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+    use hp_core::stroke::{COLORS, Stroke, Tool};
+
+    #[test]
+    fn cancelling_clears_the_live_layer() {
+        let recorder = Recorder::with_host(Arc::new(FakeHost::default()));
+        let live = recorder.live();
+        live.upsert_stroke(Stroke { id: 1, tool: Tool::Pen, color: COLORS[0], width: 4.0, points: vec![(1.0, 1.0)], finished_ms: None });
+        live.set_drawing(true);
+        let dir = std::env::temp_dir().join("hp-screen-tests").join("live-cancel");
+        let settings = Settings { output_dir: Some(dir), countdown_secs: 3, ..Settings::default() };
+        recorder.start(Target::Monitor { index: 0 }, settings).unwrap();
+        recorder.cancel().unwrap();
+        assert!(!live.is_drawing());
+        assert_eq!(live.stroke_count(), 0);
     }
 }
 
