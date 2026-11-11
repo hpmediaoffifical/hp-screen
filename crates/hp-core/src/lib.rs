@@ -10,3 +10,4 @@ pub mod input_log;
 pub mod mix;
 pub mod library;
 pub mod cut;
+pub mod edit;

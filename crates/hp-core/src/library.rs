@@ -96,6 +96,13 @@ mod tests {
     }
 
     #[test]
+    fn edit_and_preview_files_are_companions() {
+        let c = companion_paths(Path::new("d/hp_a.mp4"));
+        assert_eq!(c[3], Path::new("d").join(".hpscreen").join("hp_a.edit.json"));
+        assert_eq!(c[4], Path::new("d").join(".hpscreen").join("hp_a.preview.mp4"));
+    }
+
+    #[test]
     fn companion_files_live_in_the_data_folder() {
         assert_eq!(sidecar_path(Path::new("d/hp_a.mp4")), Path::new("d").join(".hpscreen").join("hp_a.input.jsonl"));
         assert_eq!(thumb_path(Path::new("d/hp_a.mp4")), Path::new("d").join(".hpscreen").join("hp_a.thumb.png"));
@@ -110,8 +117,17 @@ pub fn meta_path(media: &Path) -> PathBuf {
 }
 
 /// Every file that accompanies `media`; they are renamed and deleted together with it.
-pub fn companion_paths(media: &Path) -> [PathBuf; 3] {
-    [sidecar_path(media), thumb_path(media), meta_path(media)]
+pub fn edit_path(media: &Path) -> PathBuf {
+    companion(media, "edit.json")
+}
+
+/// Plain-MP4 copy used for previewing when the WebView cannot play the recording itself.
+pub fn preview_path(media: &Path) -> PathBuf {
+    companion(media, "preview.mp4")
+}
+
+pub fn companion_paths(media: &Path) -> [PathBuf; 5] {
+    [sidecar_path(media), thumb_path(media), meta_path(media), edit_path(media), preview_path(media)]
 }
 
 /// What is known about a recording without opening the video file.
@@ -139,7 +155,13 @@ mod companion_tests {
         assert_eq!(meta_path(Path::new("d/hp_a.mp4")), data.join("hp_a.meta.json"));
         assert_eq!(
             companion_paths(Path::new("d/hp_a.mp4")),
-            [data.join("hp_a.input.jsonl"), data.join("hp_a.thumb.png"), data.join("hp_a.meta.json")]
+            [
+                data.join("hp_a.input.jsonl"),
+                data.join("hp_a.thumb.png"),
+                data.join("hp_a.meta.json"),
+                data.join("hp_a.edit.json"),
+                data.join("hp_a.preview.mp4"),
+            ]
         );
     }
 
