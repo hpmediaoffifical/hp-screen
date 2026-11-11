@@ -40,11 +40,12 @@ pub struct EditDoc {
     pub cuts: Vec<Span>,
     pub effects: EffectToggles,
     pub zoom: crate::zoom::ZoomDoc,
+    pub frame: crate::layout::FrameDoc,
 }
 
 impl Default for EditDoc {
     fn default() -> Self {
-        EditDoc { v: EDIT_VERSION, trim: Trim::default(), cuts: Vec::new(), effects: EffectToggles::default(), zoom: crate::zoom::ZoomDoc::default() }
+        EditDoc { v: EDIT_VERSION, trim: Trim::default(), cuts: Vec::new(), effects: EffectToggles::default(), zoom: crate::zoom::ZoomDoc::default(), frame: crate::layout::FrameDoc::default() }
     }
 }
 

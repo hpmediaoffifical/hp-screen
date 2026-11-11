@@ -17,3 +17,4 @@ pub mod stroke;
 pub mod webcam;
 pub mod spring;
 pub mod zoom;
+pub mod layout;
