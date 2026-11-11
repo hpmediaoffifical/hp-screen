@@ -4,12 +4,17 @@
 use crate::clock;
 use crate::compositor::{Device, bgra_props, d2d_context};
 use hp_core::geometry::Rect;
+use crate::camera::{CamFrame, SharedFrame};
 use hp_core::stroke::{Stroke, alpha_at, segments, visible_bounds};
+use hp_core::webcam::{CamShape, ROUNDED_RADIUS, WebcamSettings, bubble_rect, camera_crop};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
-use windows_numerics::Vector2;
+use windows_numerics::{Matrix3x2, Vector2};
+
+/// A camera frame older than this is no longer drawn (the camera stopped or was unplugged).
+const CAMERA_STALE_MS: i64 = 1000;
 
 pub struct LiveLayer {
     strokes: Mutex<Vec<Stroke>>,
@@ -18,6 +23,7 @@ pub struct LiveLayer {
     device: Device,
     /// Direct2D objects, made on first use by the thread that calls `apply`.
     painter: Mutex<Option<Painter>>,
+    camera: Mutex<Option<(SharedFrame, WebcamSettings)>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -36,6 +42,7 @@ impl LiveLayer {
             drawing: Arc::new(AtomicBool::new(false)),
             device,
             painter: Mutex::new(None),
+            camera: Mutex::new(None),
         })
     }
 
@@ -67,6 +74,11 @@ impl LiveLayer {
         lock(&self.strokes).clear();
     }
 
+    /// The camera picture to draw, and how; `None` removes the webcam.
+    pub fn set_camera(&self, cam: Option<(SharedFrame, WebcamSettings)>) {
+        *lock(&self.camera) = cam;
+    }
+
     #[cfg(test)]
     pub fn stroke_count(&self) -> usize {
         lock(&self.strokes).len()
@@ -96,23 +108,45 @@ impl LiveLayer {
             .map(|s| (s.clone(), alpha_at(s, now_ms, hold)))
             .filter(|(_, a)| *a > 0.0)
             .collect();
-        if visible.is_empty() {
-            return;
-        }
         let strokes: Vec<Stroke> = visible.iter().map(|(s, _)| s.clone()).collect();
-        let Some(area) = visible_bounds(&strokes, now_ms, hold, w, h) else { return };
+        let stroke_area = visible_bounds(&strokes, now_ms, hold, w, h);
+        let camera = lock(&self.camera).clone();
+        let frame_guard = camera.as_ref().map(|(f, _)| lock(f));
+        let cam = match (&camera, &frame_guard) {
+            (Some((_, ws)), Some(guard)) => guard
+                .as_ref()
+                .filter(|f| {
+                    now_ms - f.at_ms <= CAMERA_STALE_MS && f.width > 0 && f.height > 0 && f.bgra.len() >= (f.width * f.height * 4) as usize
+                })
+                .map(|f| (f, ws, bubble_rect(w, h, ws))),
+            _ => None,
+        };
+        let area = match (stroke_area, cam.as_ref().map(|c| c.2)) {
+            (Some(a), Some(b)) => Some(union(a, b)),
+            (a, b) => a.or(b),
+        };
+        let Some(area) = area else { return };
         let mut painter = lock(&self.painter);
         if painter.as_ref().is_none_or(|p| (p.w, p.h) != (w, h)) {
             *painter = Painter::new(self.device, w, h).ok();
         }
         if let Some(p) = painter.as_mut()
-            && p.paint(canvas, area, &visible).is_err()
+            && p.paint(canvas, area, &visible, cam).is_err()
         {
             // A lost device is made again on the next frame.
             *painter = None;
         }
     }
 }
+
+fn union(a: Rect, b: Rect) -> Rect {
+    let (x0, y0) = (a.x.min(b.x), a.y.min(b.y));
+    let x1 = (a.x + a.w as i32).max(b.x + b.w as i32);
+    let y1 = (a.y + a.h as i32).max(b.y + b.h as i32);
+    Rect { x: x0, y: y0, w: (x1 - x0) as u32, h: (y1 - y0) as u32 }
+}
+
+type CamDraw<'a> = (&'a CamFrame, &'a WebcamSettings, Rect);
 
 fn now_ms() -> i64 {
     clock::now_100ns() / 10_000
@@ -127,6 +161,8 @@ struct Painter {
     readback: ID2D1Bitmap1,
     w: u32,
     h: u32,
+    /// Camera picture (its cropped part), remade when the crop size changes.
+    cam_bitmap: Option<(ID2D1Bitmap1, u32, u32)>,
 }
 
 // SAFETY: the painter is only used under the layer's mutex, by one thread at a time, and its
@@ -156,11 +192,11 @@ impl Painter {
             let readback = ctx
                 .CreateBitmap(size, None, 0, &bgra_props(D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_ALPHA_MODE_PREMULTIPLIED))
                 .map_err(|e| e.to_string())?;
-            Ok(Painter { ctx, factory, round, target, readback, w, h })
+            Ok(Painter { ctx, factory, round, target, readback, w, h, cam_bitmap: None })
         }
     }
 
-    fn paint(&mut self, canvas: &mut [u8], area: Rect, strokes: &[(Stroke, f32)]) -> windows::core::Result<()> {
+    fn paint(&mut self, canvas: &mut [u8], area: Rect, strokes: &[(Stroke, f32)], cam: Option<CamDraw>) -> windows::core::Result<()> {
         let row = self.w as usize * 4;
         let (ax, ay, aw, ah) = (area.x as u32, area.y as u32, area.w, area.h);
         let rect_u = D2D_RECT_U { left: ax, top: ay, right: ax + aw, bottom: ay + ah };
@@ -174,7 +210,11 @@ impl Painter {
             self.ctx.BeginDraw();
             let clip = D2D_RECT_F { left: ax as f32, top: ay as f32, right: (ax + aw) as f32, bottom: (ay + ah) as f32 };
             self.ctx.PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_ALIASED);
-            let drawn = self.draw_strokes(strokes);
+            let drawn = match cam {
+                Some(c) => self.draw_camera(c),
+                None => Ok(()),
+            }
+            .and_then(|_| self.draw_strokes(strokes));
             self.ctx.PopAxisAlignedClip();
             self.ctx.EndDraw(None, None)?;
             drawn?;
@@ -187,6 +227,62 @@ impl Painter {
                 std::ptr::copy_nonoverlapping(src, dst, aw as usize * 4);
             }
             self.readback.Unmap()?;
+        }
+        Ok(())
+    }
+
+    /// The camera picture in its bubble: cropped, scaled, mirrored, masked to the shape, with a
+    /// thin white border. Drawn under the strokes.
+    unsafe fn draw_camera(&mut self, (f, ws, bubble): CamDraw) -> windows::core::Result<()> {
+        let crop = camera_crop(f.width, f.height, ws.shape);
+        // SAFETY: the crop lies inside the frame (camera_crop), whose buffer holds
+        // width * height * 4 bytes (checked by `apply`); drawing calls are between BeginDraw
+        // and EndDraw.
+        unsafe {
+            if self.cam_bitmap.as_ref().is_none_or(|(_, w, h)| (*w, *h) != (crop.w, crop.h)) {
+                let bmp = self.ctx.CreateBitmap(
+                    D2D_SIZE_U { width: crop.w, height: crop.h },
+                    None,
+                    0,
+                    &bgra_props(D2D1_BITMAP_OPTIONS_NONE, D2D1_ALPHA_MODE_IGNORE),
+                )?;
+                self.cam_bitmap = Some((bmp, crop.w, crop.h));
+            }
+            let (bmp, _, _) = self.cam_bitmap.as_ref().expect("just made");
+            let start = f.bgra.as_ptr().add((crop.y as usize * f.width as usize + crop.x as usize) * 4);
+            bmp.CopyFromMemory(None, start as *const _, f.width * 4)?;
+            let props = D2D1_BITMAP_BRUSH_PROPERTIES1 {
+                extendModeX: D2D1_EXTEND_MODE_CLAMP,
+                extendModeY: D2D1_EXTEND_MODE_CLAMP,
+                interpolationMode: D2D1_INTERPOLATION_MODE_LINEAR,
+            };
+            let brush = self.ctx.CreateBitmapBrush(bmp, Some(&props), None)?;
+            let (sx, sy) = (bubble.w as f32 / crop.w as f32, bubble.h as f32 / crop.h as f32);
+            let (bx, by, bw, bh) = (bubble.x as f32, bubble.y as f32, bubble.w as f32, bubble.h as f32);
+            let m = if ws.mirror {
+                Matrix3x2 { M11: -sx, M12: 0.0, M21: 0.0, M22: sy, M31: bx + bw, M32: by }
+            } else {
+                Matrix3x2 { M11: sx, M12: 0.0, M21: 0.0, M22: sy, M31: bx, M32: by }
+            };
+            brush.SetTransform(&m);
+            let border = (0.003 * self.h as f32).max(2.0);
+            let white = self.ctx.CreateSolidColorBrush(&D2D1_COLOR_F { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }, None)?;
+            match ws.shape {
+                CamShape::Circle => {
+                    let e = D2D1_ELLIPSE { point: Vector2 { X: bx + bw / 2.0, Y: by + bh / 2.0 }, radiusX: bw / 2.0, radiusY: bh / 2.0 };
+                    self.ctx.FillEllipse(&e, &brush);
+                    let inner = D2D1_ELLIPSE { radiusX: e.radiusX - border / 2.0, radiusY: e.radiusY - border / 2.0, ..e };
+                    self.ctx.DrawEllipse(&inner, &white, border, None::<&ID2D1StrokeStyle>);
+                }
+                CamShape::Rounded => {
+                    let r = ROUNDED_RADIUS * bh;
+                    let rect = D2D_RECT_F { left: bx, top: by, right: bx + bw, bottom: by + bh };
+                    self.ctx.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect, radiusX: r, radiusY: r }, &brush);
+                    let half = border / 2.0;
+                    let inner = D2D_RECT_F { left: bx + half, top: by + half, right: bx + bw - half, bottom: by + bh - half };
+                    self.ctx.DrawRoundedRectangle(&D2D1_ROUNDED_RECT { rect: inner, radiusX: r, radiusY: r }, &white, border, None::<&ID2D1StrokeStyle>);
+                }
+            }
         }
         Ok(())
     }
@@ -281,6 +377,61 @@ mod tests {
         let mut c = grey(64, 48);
         live.apply(&mut c, 64, 48, 0);
         assert_eq!(c, grey(64, 48), "a stroke fully outside draws nothing");
+    }
+
+    fn cam(frame: impl Fn(u32, u32) -> [u8; 3], w: u32, h: u32, at_ms: i64) -> crate::camera::SharedFrame {
+        let mut bgra = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let [r, g, b] = frame(x, y);
+                bgra.extend_from_slice(&[b, g, r, 255]);
+            }
+        }
+        Arc::new(Mutex::new(Some(crate::camera::CamFrame { width: w, height: h, bgra, at_ms })))
+    }
+
+    #[test]
+    fn webcam_is_drawn_in_its_bubble() {
+        use hp_core::webcam::{WebcamSettings, bubble_rect};
+        let live = LiveLayer::with_device(Device::Warp);
+        let ws = WebcamSettings::default();
+        live.set_camera(Some((cam(|_, _| [255, 0, 0], 320, 240, 1000), ws.clone())));
+        let mut c = grey(640, 360);
+        live.apply(&mut c, 640, 360, 1000);
+        let b = bubble_rect(640, 360, &ws);
+        let (cx, cy) = (b.x as u32 + b.w / 2, b.y as u32 + b.h / 2);
+        let [r, g, _] = rgb(&c, 640, cx, cy);
+        assert!(r > 200 && g < 60, "bubble centre {:?}", rgb(&c, 640, cx, cy));
+        assert_eq!(rgb(&c, 640, b.x as u32 + 1, b.y as u32 + 1), [128, 128, 128], "outside the circle");
+        assert_eq!(rgb(&c, 640, 10, 10), [128, 128, 128]);
+    }
+
+    #[test]
+    fn mirror_flips_the_picture() {
+        use hp_core::webcam::{WebcamSettings, bubble_rect};
+        let live = LiveLayer::with_device(Device::Warp);
+        let half = |x: u32, _| if x < 160 { [255, 0, 0] } else { [0, 0, 255] };
+        let left_of = |mirror: bool| {
+            let ws = WebcamSettings { mirror, ..WebcamSettings::default() };
+            live.set_camera(Some((cam(half, 320, 240, 0), ws.clone())));
+            let mut c = grey(640, 360);
+            live.apply(&mut c, 640, 360, 0);
+            let b = bubble_rect(640, 360, &ws);
+            rgb(&c, 640, b.x as u32 + b.w / 4, b.y as u32 + b.h / 2)
+        };
+        assert!(left_of(false)[0] > 200, "unmirrored: left half is red");
+        assert!(left_of(true)[2] > 200, "mirrored: left half is blue");
+    }
+
+    #[test]
+    fn stale_camera_frame_is_dropped() {
+        use hp_core::webcam::WebcamSettings;
+        let live = LiveLayer::with_device(Device::Warp);
+        live.set_camera(Some((cam(|_, _| [255, 0, 0], 320, 240, 0), WebcamSettings::default())));
+        let mut c = grey(640, 360);
+        live.apply(&mut c, 640, 360, 1500);
+        assert_eq!(c, grey(640, 360));
+        live.set_camera(None);
     }
 
     #[test]
