@@ -1,0 +1,243 @@
+//! Tauri commands of the edit page: open and save an edit, and run one export at a time.
+use crate::commands::{AppState, library_item};
+use crate::decoder::{VideoDecoder, VideoInfo};
+use crate::export::{export_path, run_export};
+use hp_core::cut::Span;
+use hp_core::edit::{EditDoc, LoadError, load_edit, save_edit};
+use hp_core::library::{DATA_DIR, Kind, edit_path, kind_of, sidecar_path};
+use hp_core::plan::{Plan, Source};
+use hp_core::state::RecState;
+use serde::Serialize;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter, State};
+
+pub const EXPORT_PROGRESS: &str = "export-progress";
+pub const EXPORT_DONE: &str = "export-done";
+pub const EXPORT_ERROR: &str = "export-error";
+
+/// The export running now, if any: its cancel flag.
+#[derive(Default)]
+pub struct ExportState {
+    running: Mutex<Option<Arc<AtomicBool>>>,
+}
+
+#[derive(Serialize)]
+pub struct EditSession {
+    pub info: VideoInfo,
+    pub doc: EditDoc,
+    pub has_log: bool,
+    pub warning: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct KeepInfo {
+    pub keep: Vec<Span>,
+    pub output_ms: i64,
+    pub can_export: bool,
+}
+
+#[derive(Clone, Serialize)]
+struct Progress {
+    done: u64,
+    total: u64,
+}
+
+#[derive(Clone, Serialize)]
+struct Done {
+    path: String,
+}
+
+#[derive(Clone, Serialize)]
+struct Failed {
+    message: String,
+}
+
+/// Reads the edit of `media`. A damaged file gives a fresh edit and a warning; a file from a
+/// newer HP Screen is refused so it is never overwritten.
+fn load_doc(media: &Path) -> Result<(EditDoc, Option<String>), String> {
+    let Ok(text) = std::fs::read_to_string(edit_path(media)) else {
+        return Ok((EditDoc::default(), None));
+    };
+    match load_edit(&text) {
+        Ok(doc) => Ok((doc, None)),
+        Err(LoadError::Newer(_)) => Err("File chỉnh sửa do bản HP Screen mới hơn tạo".to_string()),
+        Err(LoadError::Invalid) => Ok((EditDoc::default(), Some("File chỉnh sửa bị hỏng, bắt đầu lại từ đầu".to_string()))),
+    }
+}
+
+/// Writes the edit of `media` through a temporary file, so a crash never leaves half a file.
+fn save_doc(media: &Path, doc: &EditDoc) -> Result<(), String> {
+    let path = edit_path(media);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("Không lưu được chỉnh sửa: {e}"))?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, save_edit(doc)).map_err(|e| format!("Không lưu được chỉnh sửa: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("Không lưu được chỉnh sửa: {e}")
+    })
+}
+
+fn video_item(app: &AppHandle, state: &State<'_, AppState>, path: &str) -> Result<PathBuf, String> {
+    let media = library_item(app, state, path)?;
+    if kind_of(&media) != Some(Kind::Video) {
+        return Err("Chỉ chỉnh sửa được video".to_string());
+    }
+    Ok(media)
+}
+
+fn open_video(media: &Path) -> Result<VideoInfo, String> {
+    VideoDecoder::open(media).map(|(_, info)| info).map_err(|_| "Không đọc được video này".to_string())
+}
+
+fn plan_for(info: &VideoInfo, doc: &EditDoc) -> Plan {
+    let src = Source { width: info.width, height: info.height, duration_ms: info.duration_ms, fps: info.fps };
+    Plan::new(src, doc)
+}
+
+/// Removes `.part` files an export left behind when the app was closed while exporting.
+fn remove_stale_parts(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir.join(DATA_DIR)) else { return };
+    for e in entries.flatten() {
+        if e.path().extension().is_some_and(|x| x == "part") {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+/// Async: opening a long video may take a moment, and must not block the UI thread.
+#[tauri::command]
+pub async fn edit_open(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<EditSession, String> {
+    let media = video_item(&app, &state, &path)?;
+    let info = open_video(&media)?;
+    let (doc, warning) = load_doc(&media)?;
+    Ok(EditSession { info, doc, has_log: sidecar_path(&media).is_file(), warning })
+}
+
+#[tauri::command]
+pub fn edit_save(app: AppHandle, state: State<'_, AppState>, path: String, doc: EditDoc) -> Result<(), String> {
+    let media = video_item(&app, &state, &path)?;
+    save_doc(&media, &doc)
+}
+
+/// What an edit keeps of a video of `duration_ms`.
+#[tauri::command]
+pub fn edit_keep(doc: EditDoc, duration_ms: i64) -> KeepInfo {
+    let cuts = doc.cuts(duration_ms);
+    KeepInfo { keep: cuts.keep().to_vec(), output_ms: cuts.output_ms(), can_export: cuts.output_ms() >= hp_core::cut::MIN_OUTPUT_MS }
+}
+
+/// Starts exporting `doc` of `path` in the background; returns the file it will write.
+#[tauri::command]
+pub async fn export_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    exports: State<'_, ExportState>,
+    path: String,
+    doc: EditDoc,
+) -> Result<String, String> {
+    let media = video_item(&app, &state, &path)?;
+    if state.recorder.status().state != RecState::Idle {
+        return Err("Đang quay, hãy xuất sau khi dừng".to_string());
+    }
+    let mut running = exports.running.lock().unwrap_or_else(|e| e.into_inner());
+    if running.is_some() {
+        return Err("Đang xuất một video khác".to_string());
+    }
+    let info = open_video(&media)?;
+    let plan = plan_for(&info, &doc);
+    if !plan.can_export() {
+        return Err("Phần giữ lại quá ngắn để xuất".to_string());
+    }
+    if let Some(dir) = media.parent() {
+        remove_stale_parts(dir);
+    }
+    let out = export_path(&media);
+    let (w, h) = plan.out_size();
+    let bitrate = hp_core::quality::video_bitrate(w, h, plan.fps(), state.settings().quality);
+    let cancel = Arc::new(AtomicBool::new(false));
+    *running = Some(cancel.clone());
+    drop(running);
+    let out_name = out.to_string_lossy().into_owned();
+    std::thread::spawn(move || {
+        let mut report = |done, total| {
+            let _ = app.emit(EXPORT_PROGRESS, Progress { done, total });
+        };
+        let result = run_export(&media, &out, &plan, bitrate, &mut report, &cancel);
+        if let Some(exports) = tauri::Manager::try_state::<ExportState>(&app) {
+            *exports.running.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+        match result {
+            Ok(()) => {
+                let _ = app.emit(EXPORT_DONE, Done { path: out.to_string_lossy().into_owned() });
+                crate::events::library_changed(&app);
+            }
+            Err(message) => {
+                if !cancel.load(Ordering::Relaxed) {
+                    crate::paths::log_error(&app, &format!("Xuất video thất bại: {message}"));
+                }
+                let _ = app.emit(EXPORT_ERROR, Failed { message });
+            }
+        }
+    });
+    Ok(out_name)
+}
+
+#[tauri::command]
+pub fn export_cancel(exports: State<'_, ExportState>) {
+    if let Some(cancel) = exports.running.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_media::temp_path;
+    use hp_core::cut::Span;
+
+    #[test]
+    fn missing_file_gives_a_fresh_edit() {
+        let media = temp_path("edit-missing", "a.mp4");
+        assert_eq!(load_doc(&media).unwrap(), (EditDoc::default(), None));
+    }
+
+    #[test]
+    fn save_then_load_round_trips() {
+        let media = temp_path("edit-roundtrip", "a.mp4");
+        let doc = EditDoc { cuts: vec![Span { start_ms: 100, end_ms: 900 }], ..EditDoc::default() };
+        save_doc(&media, &doc).unwrap();
+        assert_eq!(load_doc(&media).unwrap(), (doc, None));
+    }
+
+    #[test]
+    fn corrupt_file_gives_defaults_with_warning() {
+        let media = temp_path("edit-corrupt", "a.mp4");
+        std::fs::create_dir_all(edit_path(&media).parent().unwrap()).unwrap();
+        std::fs::write(edit_path(&media), "{oops").unwrap();
+        let (doc, warning) = load_doc(&media).unwrap();
+        assert_eq!(doc, EditDoc::default());
+        assert_eq!(warning.as_deref(), Some("File chỉnh sửa bị hỏng, bắt đầu lại từ đầu"));
+    }
+
+    #[test]
+    fn newer_file_is_refused() {
+        let media = temp_path("edit-newer", "a.mp4");
+        std::fs::create_dir_all(edit_path(&media).parent().unwrap()).unwrap();
+        std::fs::write(edit_path(&media), "{\"v\":9}").unwrap();
+        assert_eq!(load_doc(&media).unwrap_err(), "File chỉnh sửa do bản HP Screen mới hơn tạo");
+    }
+
+    #[test]
+    fn save_leaves_no_tmp_file() {
+        let media = temp_path("edit-tmp", "a.mp4");
+        save_doc(&media, &EditDoc::default()).unwrap();
+        save_doc(&media, &EditDoc::default()).unwrap();
+        let dir = edit_path(&media).parent().unwrap().to_path_buf();
+        let names: Vec<String> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, vec!["a.edit.json".to_string()]);
+    }
+}

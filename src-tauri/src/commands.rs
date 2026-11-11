@@ -127,7 +127,7 @@ fn library_dir(app: &AppHandle, state: &State<'_, AppState>) -> Result<std::path
 
 /// A library path must be a media file directly inside the output folder: the UI only ever
 /// sends such paths, and nothing else may be renamed, deleted or opened through these commands.
-fn library_item(app: &AppHandle, state: &State<'_, AppState>, path: &str) -> Result<std::path::PathBuf, String> {
+pub(crate) fn library_item(app: &AppHandle, state: &State<'_, AppState>, path: &str) -> Result<std::path::PathBuf, String> {
     let path = std::path::PathBuf::from(path);
     let dir = library_dir(app, state)?;
     let inside = path.parent().is_some_and(|p| p == dir.as_path());

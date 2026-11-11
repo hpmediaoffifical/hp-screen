@@ -17,6 +17,7 @@ mod snip;
 mod decoder;
 mod compositor;
 mod export;
+mod edit_cmds;
 #[cfg(test)]
 mod test_media;
 
@@ -39,6 +40,7 @@ pub fn run() {
             app.manage(HotkeyRegistry::default());
             app.manage(picker::PickerState::default());
             app.manage(snip::SnipState::default());
+            app.manage(edit_cmds::ExportState::default());
             app.manage(AppState { settings: Mutex::new(settings.clone()), recorder: Recorder::new(handle.clone()) });
             shell::setup(handle)?;
             let _registered = hotkeys::register_hotkeys(handle, &settings);
@@ -81,6 +83,11 @@ pub fn run() {
             commands::compact_hide,
             commands::open_main,
             commands::get_target,
+            edit_cmds::edit_open,
+            edit_cmds::edit_save,
+            edit_cmds::edit_keep,
+            edit_cmds::export_start,
+            edit_cmds::export_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("error while running HP Screen");
