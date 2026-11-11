@@ -42,6 +42,7 @@ pub struct Settings {
     pub hotkey_draw: String,
     /// One of `DRAW_FADE_CHOICES`.
     pub draw_fade_secs: u32,
+    pub webcam: crate::webcam::WebcamSettings,
 }
 
 impl Default for Settings {
@@ -64,6 +65,7 @@ impl Default for Settings {
             last_region: None,
             hotkey_draw: DEFAULT_HOTKEY_DRAW.to_string(),
             draw_fade_secs: 3,
+            webcam: crate::webcam::WebcamSettings::default(),
         }
     }
 }

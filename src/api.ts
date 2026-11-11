@@ -111,6 +111,21 @@ export interface Settings {
   hotkey_draw: string;
   /** 0, 2, 3, 5 or 10; 0 keeps strokes until cleared. */
   draw_fade_secs: number;
+  webcam: WebcamSettings;
+}
+
+export type CamShape = "circle" | "rounded";
+export type CamSize = "small" | "medium" | "large";
+export type Corner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+export interface WebcamSettings {
+  /** Turn the webcam on when a recording starts. */
+  enabled: boolean;
+  /** Camera id; null is the first camera. */
+  device: string | null;
+  shape: CamShape;
+  size: CamSize;
+  corner: Corner;
+  mirror: boolean;
 }
 export const settingsGet = () => invoke<Settings>("settings_get");
 export const settingsSet = (settings: Settings) => invoke<Settings>("settings_set", { settings });
