@@ -82,27 +82,41 @@ pub fn auto_segments(clicks: &[(i64, f32, f32)], duration_ms: i64) -> Vec<ZoomSe
             _ => groups.push(vec![c]),
         }
     }
-    // Each group's time span, merged with the next when they nearly touch.
-    let mut spans: Vec<(i64, i64, Vec<(i64, f32, f32)>)> = Vec::new();
+    let centroid = |g: &[(i64, f32, f32)]| {
+        let n = g.len().max(1) as f32;
+        (g.iter().map(|c| c.1).sum::<f32>() / n, g.iter().map(|c| c.2).sum::<f32>() / n)
+    };
+    // Each group's time span, merged with the next when they nearly touch. A span made of
+    // groups far apart has no single good centre: it follows the cursor instead.
+    struct Span {
+        start: i64,
+        end: i64,
+        clicks: Vec<(i64, f32, f32)>,
+        spread: bool,
+    }
+    let mut spans: Vec<Span> = Vec::new();
     for g in groups {
         let start = (g[0].0 - LEAD_MS).max(0);
         let end = (g[g.len() - 1].0 + HOLD_MS).min(duration_ms);
         match spans.last_mut() {
-            Some(last) if start - last.1 < MERGE_GAP_MS => {
-                last.1 = last.1.max(end);
-                last.2.extend(g);
+            Some(last) if start - last.end < MERGE_GAP_MS => {
+                let (a, b) = (centroid(&last.clicks), centroid(&g));
+                last.spread |= ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt() >= GROUP_DISTANCE;
+                last.end = last.end.max(end);
+                last.clicks.extend(g);
             }
-            _ => spans.push((start, end, g)),
+            _ => spans.push(Span { start, end, clicks: g, spread: false }),
         }
     }
     spans
         .into_iter()
-        .filter(|(start, end, _)| end - start >= MIN_SEGMENT_MS)
-        .map(|(start_ms, end_ms, g)| {
-            let n = g.len() as f32;
-            let cx = g.iter().map(|c| c.1).sum::<f32>() / n;
-            let cy = g.iter().map(|c| c.2).sum::<f32>() / n;
-            ZoomSegment { start_ms, end_ms, scale: DEFAULT_SCALE, center: Some((cx, cy)), manual: false }
+        .filter(|s| s.end - s.start >= MIN_SEGMENT_MS)
+        .map(|s| ZoomSegment {
+            start_ms: s.start,
+            end_ms: s.end,
+            scale: DEFAULT_SCALE,
+            center: (!s.spread).then(|| centroid(&s.clicks)),
+            manual: false,
         })
         .collect()
 }
@@ -132,15 +146,21 @@ pub fn normalized(segments: &[ZoomSegment], duration_ms: i64) -> Vec<ZoomSegment
         .filter(|s| s.end_ms > s.start_ms)
         .collect();
     v.sort_by_key(|s| s.start_ms);
-    // The later segment wins where two overlap.
-    for i in 0..v.len().saturating_sub(1) {
-        let next_start = v[i + 1].start_ms;
-        if v[i].end_ms > next_start {
-            v[i].end_ms = next_start;
+    // Where segments overlap, the one that starts later wins; a segment inside another splits it.
+    let mut cuts: Vec<i64> = v.iter().flat_map(|s| [s.start_ms, s.end_ms]).collect();
+    cuts.sort_unstable();
+    cuts.dedup();
+    let mut out: Vec<(usize, ZoomSegment)> = Vec::new();
+    for w in cuts.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let winner = v.iter().enumerate().filter(|(_, s)| s.start_ms <= a && s.end_ms >= b).max_by_key(|(i, s)| (s.start_ms, *i));
+        let Some((i, s)) = winner else { continue };
+        match out.last_mut() {
+            Some((last_i, last)) if *last_i == i && last.end_ms == a => last.end_ms = b,
+            _ => out.push((i, ZoomSegment { start_ms: a, end_ms: b, ..s.clone() })),
         }
     }
-    v.retain(|s| s.end_ms > s.start_ms);
-    v
+    out.into_iter().map(|(_, s)| s).collect()
 }
 
 /// The camera every `step_ms` from 0 to `duration_ms`, moved by the camera spring in 1 ms steps.
@@ -173,15 +193,18 @@ pub fn camera_track(z: &ZoomDoc, cursor: &dyn Fn(i64) -> Option<(f32, f32)>, dur
                     None => match cursor(t) {
                         None => (0.5, 0.5),
                         Some(now) => {
-                            let aim = match follow {
+                            // What can be shown: the view never leaves the frame.
+                            let half = 0.5 / s.scale;
+                            let inside = |p: (f32, f32)| (p.0.clamp(half, 1.0 - half), p.1.clamp(half, 1.0 - half));
+                            let aim = inside(match follow {
                                 Some((i, aim)) if i == seg_i => aim,
                                 _ => cursor(s.start_ms).unwrap_or(now),
-                            };
+                            });
                             // Move only when the cursor leaves the central part of the view
                             // and is still out a moment later.
-                            let reach = DEAD_ZONE * 0.5 / s.scale;
+                            let reach = DEAD_ZONE * half;
                             let outside = |p: (f32, f32)| (p.0 - aim.0).abs() > reach || (p.1 - aim.1).abs() > reach;
-                            let aim = if outside(now) && cursor(t + LOOK_AHEAD_MS).is_none_or(outside) { now } else { aim };
+                            let aim = if outside(now) && cursor(t + LOOK_AHEAD_MS).is_none_or(outside) { inside(now) } else { aim };
                             follow = Some((seg_i, aim));
                             aim
                         }
@@ -258,6 +281,32 @@ mod tests {
         assert_eq!(s.len(), 2, "[600, 2800) and [3600, 5800): a gap of exactly 800 ms is not merged");
         let s = auto_segments(&[(1000, 0.1, 0.1), (6000, 0.9, 0.9)], 60_000);
         assert_eq!(s.len(), 2);
+    }
+
+    #[test]
+    fn merged_clicks_far_apart_follow_the_cursor() {
+        // Two clicks 500 ms apart at opposite corners: one span, but no single centre shows both.
+        let s = auto_segments(&[(1000, 0.1, 0.1), (1500, 0.9, 0.9)], 60_000);
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].center, None, "follows the cursor instead of zooming on the empty middle");
+        let near = auto_segments(&[(1000, 0.2, 0.2), (1500, 0.25, 0.2)], 60_000);
+        assert!(near[0].center.is_some(), "clicks close together keep their centre");
+    }
+
+    #[test]
+    fn a_segment_inside_another_splits_it() {
+        let out = normalized(&[manual(0, 10_000, 2.0, None), manual(2000, 3000, 3.0, None)], 20_000);
+        let spans: Vec<(i64, i64, f32)> = out.iter().map(|s| (s.start_ms, s.end_ms, s.scale)).collect();
+        assert_eq!(spans, vec![(0, 2000, 2.0), (2000, 3000, 3.0), (3000, 10_000, 2.0)]);
+    }
+
+    #[test]
+    fn near_an_edge_the_dead_zone_is_measured_from_what_is_shown() {
+        // Aiming at 0.98 at 2x shows 0.5..1.0 (centre 0.75). A cursor at 0.6 is inside the visible
+        // central 70% (0.575..0.925), so the camera must not move away from the edge.
+        let t = camera_track(&on(vec![manual(0, 10_000, 2.0, None)]), &|ms| Some(if ms < 3000 { (0.98, 0.5) } else { (0.6, 0.5) }), 10_000, 10);
+        assert!(close(camera_at(&t, 2900).cx, 0.75, 0.01), "{:?}", camera_at(&t, 2900));
+        assert!(close(camera_at(&t, 8000).cx, 0.75, 0.01), "stays: {:?}", camera_at(&t, 8000));
     }
 
     #[test]

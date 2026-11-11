@@ -131,6 +131,7 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
       from.current = from.current.slice(0, -1);
       to.current = [...to.current, cur];
       setDocState(target);
+      setZoomSel(null);
       dirty.current = true;
       window.clearTimeout(saveTimer.current);
       saveTimer.current = window.setTimeout(() => void save(), SAVE_DELAY_MS);
@@ -172,21 +173,29 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
         setSelection((s) => ({ start_ms: Math.min(s?.start_ms ?? doc?.trim.start_ms ?? 0, playhead - frameMs), end_ms: playhead }));
       } else if (e.key === "Delete") {
         e.preventDefault();
-        if (zoomSel !== null && doc) {
+        // A cut selection wins; a zoom segment is deleted only while it is shown and exists.
+        if (selection) removeSelection();
+        else if (zoomSel !== null && doc?.zoom.enabled && doc.zoom.segments[zoomSel]) {
           change({ ...doc, zoom: { ...doc.zoom, segments: doc.zoom.segments.filter((_, i) => i !== zoomSel) } });
           setZoomSel(null);
-        } else removeSelection();
+        }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undoRedo, removeSelection, playhead, duration, frameMs, trimEnd, doc, zoomSel, change]);
+  }, [undoRedo, removeSelection, playhead, duration, frameMs, trimEnd, doc, zoomSel, change, selection]);
 
+  // Moving the scale slider is one undo step, not one per tick.
+  const scaleRun = useRef<{ index: number; at: number } | null>(null);
   const setZoomSegment = (index: number, patch: Partial<ZoomSegment>) => {
     const d = latest.current;
-    if (!d) return;
+    if (!d || !d.zoom.segments[index]) return;
+    const now = performance.now();
+    const sliding = patch.scale !== undefined;
+    const merge = sliding && scaleRun.current?.index === index && now - scaleRun.current.at < 1000;
+    scaleRun.current = sliding ? { index, at: now } : null;
     const segments = d.zoom.segments.map((s, i) => (i === index ? { ...s, ...patch, manual: true } : s));
-    change({ ...d, zoom: { ...d.zoom, segments } });
+    change({ ...d, zoom: { ...d.zoom, segments } }, merge);
   };
 
   const regenerateZoom = async () => {
@@ -212,6 +221,10 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
       } catch (e) {
         setMessage(errorMessage(e));
       }
+    }
+    if (!enabled) {
+      setZoomSel(null);
+      setPicking(false);
     }
     change({ ...d, zoom: { enabled, segments } });
   };
@@ -387,7 +400,10 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
           selection={selection}
           onSeek={(ms) => preview.current?.seek(ms)}
           onTrim={(start, end, first) => change({ ...doc, trim: { start_ms: start, end_ms: end >= duration ? null : end } }, !first)}
-          onSelect={setSelection}
+          onSelect={(s) => {
+            setSelection(s);
+            if (s) setZoomSel(null);
+          }}
           onRestoreCut={(i) => change({ ...doc, cuts: doc.cuts.filter((_, j) => j !== i) })}
         />
       </div>
