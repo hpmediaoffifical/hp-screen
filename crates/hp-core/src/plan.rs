@@ -1,7 +1,8 @@
 //! The export plan: for each output frame, which source time to show and what to draw.
 use crate::cut::{Cuts, MIN_OUTPUT_MS};
 use crate::edit::EditDoc;
-use crate::effects::Draw;
+use crate::edit::EffectToggles;
+use crate::effects::{Draw, Effects, draws_at};
 use crate::geometry::make_even;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -23,11 +24,14 @@ pub struct FramePlan {
 pub struct Plan {
     src: Source,
     cuts: Cuts,
+    effects: Option<Effects>,
+    toggles: EffectToggles,
 }
 
 impl Plan {
-    pub fn new(src: Source, doc: &EditDoc) -> Plan {
-        Plan { src, cuts: doc.cuts(src.duration_ms) }
+    /// `effects` is `None` for a video without an input log.
+    pub fn new(src: Source, doc: &EditDoc, effects: Option<Effects>) -> Plan {
+        Plan { src, cuts: doc.cuts(src.duration_ms), effects, toggles: doc.effects }
     }
 
     pub fn frames(&self) -> u64 {
@@ -48,7 +52,11 @@ impl Plan {
         }
         let out_ms = (n * 1000 / self.fps() as u64) as i64;
         let src_ms = self.cuts.to_source(out_ms)?;
-        Some(FramePlan { out_ms, src_ms, draws: Vec::new() })
+        let draws = match &self.effects {
+            Some(e) => draws_at(e, src_ms, &self.toggles, self.src.height),
+            None => Vec::new(),
+        };
+        Some(FramePlan { out_ms, src_ms, draws })
     }
 
     pub fn cuts(&self) -> &Cuts {
@@ -75,7 +83,7 @@ mod tests {
     }
 
     fn sample() -> Plan {
-        Plan::new(src(640, 480), &doc(1000, 9000, vec![Span { start_ms: 3000, end_ms: 5000 }]))
+        Plan::new(src(640, 480), &doc(1000, 9000, vec![Span { start_ms: 3000, end_ms: 5000 }]), None)
     }
 
     #[test]
@@ -95,12 +103,26 @@ mod tests {
 
     #[test]
     fn too_short_cannot_export() {
-        assert!(!Plan::new(src(640, 480), &doc(0, 400, vec![])).can_export());
-        assert!(Plan::new(src(640, 480), &doc(0, 500, vec![])).can_export());
+        assert!(!Plan::new(src(640, 480), &doc(0, 400, vec![]), None).can_export());
+        assert!(Plan::new(src(640, 480), &doc(0, 500, vec![]), None).can_export());
+    }
+
+    #[test]
+    fn plan_draws_effects_at_source_time() {
+        use crate::input_log::{Button, Event, ParsedLog};
+        let log = ParsedLog { header: None, events: vec![Event::Down { t: 6000, b: Button::Left, x: 10, y: 10 }] };
+        let fx = crate::effects::build_effects(&log, 640, 480);
+        let p = Plan::new(src(640, 480), &doc(1000, 9000, vec![Span { start_ms: 3000, end_ms: 5000 }]), Some(fx));
+        // Output 3000 ms shows source 6000 ms, the click.
+        let n = 3000 * 30 / 1000;
+        let f = p.frame(n).unwrap();
+        assert_eq!(f.src_ms, 6000);
+        assert!(matches!(f.draws.as_slice(), [Draw::Ring { .. }]), "{:?}", f.draws);
+        assert!(p.frame(0).unwrap().draws.is_empty());
     }
 
     #[test]
     fn odd_sources_give_even_output() {
-        assert_eq!(Plan::new(src(641, 481), &EditDoc::default()).out_size(), (640, 480));
+        assert_eq!(Plan::new(src(641, 481), &EditDoc::default(), None).out_size(), (640, 480));
     }
 }
