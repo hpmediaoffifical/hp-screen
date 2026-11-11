@@ -11,36 +11,43 @@ pub struct Timeline {
 
 impl Timeline {
     pub fn new(start_ticks: i64, ticks_per_sec: i64) -> Self {
-        let _ = (start_ticks, ticks_per_sec);
-        todo!()
+        Self { start: start_ticks, ticks_per_sec: ticks_per_sec.max(1), paused_total: 0, paused_since: None }
     }
 
     /// Starts a pause at `now`. Ignored when already paused.
     pub fn pause(&mut self, now: i64) {
-        let _ = now;
-        todo!()
+        if self.paused_since.is_none() {
+            self.paused_since = Some(now);
+        }
     }
 
     /// Ends the pause at `now`. Ignored when not paused.
     pub fn resume(&mut self, now: i64) {
-        let _ = now;
-        todo!()
+        if let Some(since) = self.paused_since.take() {
+            self.paused_total += (now - since).max(0);
+        }
     }
 
     pub fn is_paused(&self) -> bool {
-        todo!()
+        self.paused_since.is_some()
     }
 
     /// Video time in 100 ns units (Media Foundation's unit); `None` while paused.
     pub fn video_100ns(&self, now: i64) -> Option<i64> {
-        let _ = now;
-        todo!()
+        self.scaled(now, 10_000_000)
     }
 
     /// Video time in milliseconds; `None` while paused.
     pub fn video_ms(&self, now: i64) -> Option<i64> {
-        let _ = now;
-        todo!()
+        self.scaled(now, 1_000)
+    }
+
+    fn scaled(&self, now: i64, units_per_sec: i128) -> Option<i64> {
+        if self.is_paused() {
+            return None;
+        }
+        let ticks = (now - self.start - self.paused_total).max(0) as i128;
+        Some((ticks * units_per_sec / self.ticks_per_sec as i128) as i64)
     }
 }
 
