@@ -42,19 +42,23 @@ pub struct KeepInfo {
     pub can_export: bool,
 }
 
+// Every export event names its source video, so an edit page only follows its own export.
 #[derive(Clone, Serialize)]
 struct Progress {
+    source: String,
     done: u64,
     total: u64,
 }
 
 #[derive(Clone, Serialize)]
 struct Done {
+    source: String,
     path: String,
 }
 
 #[derive(Clone, Serialize)]
 struct Failed {
+    source: String,
     message: String,
 }
 
@@ -179,8 +183,9 @@ pub async fn export_start(
     drop(running);
     let out_name = out.to_string_lossy().into_owned();
     std::thread::spawn(move || {
+        let source = path;
         let mut report = |done, total| {
-            let _ = app.emit(EXPORT_PROGRESS, Progress { done, total });
+            let _ = app.emit(EXPORT_PROGRESS, Progress { source: source.clone(), done, total });
         };
         let result = run_export(&media, &out, &plan, bitrate, &mut report, &cancel);
         if let Some(exports) = tauri::Manager::try_state::<ExportState>(&app) {
@@ -188,14 +193,14 @@ pub async fn export_start(
         }
         match result {
             Ok(written) => {
-                let _ = app.emit(EXPORT_DONE, Done { path: written.to_string_lossy().into_owned() });
+                let _ = app.emit(EXPORT_DONE, Done { source, path: written.to_string_lossy().into_owned() });
                 crate::events::library_changed(&app);
             }
             Err(message) => {
                 if !cancel.load(Ordering::Relaxed) {
                     crate::paths::log_error(&app, &format!("Xuất video thất bại: {message}"));
                 }
-                let _ = app.emit(EXPORT_ERROR, Failed { message });
+                let _ = app.emit(EXPORT_ERROR, Failed { source, message });
             }
         }
     });

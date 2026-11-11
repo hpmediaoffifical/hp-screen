@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorMessage, formatElapsed } from "../api";
-import { editKeep, editOpen, editSave, type EditDoc, type EditSession, type KeepInfo, type Span } from "../editApi";
+import { addCut, editKeep, editOpen, editSave, type EditDoc, type EditSession, type KeepInfo, type Span } from "../editApi";
 import ExportPanel from "../editor/ExportPanel";
 import Preview, { type PreviewHandle } from "../editor/Preview";
 import Timeline from "../editor/Timeline";
@@ -116,7 +116,7 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
   const trimEnd = doc?.trim.end_ms ?? duration;
   const removeSelection = useCallback(() => {
     if (!doc || !selection) return;
-    change({ ...doc, cuts: [...doc.cuts, selection].sort((a, b) => a.start_ms - b.start_ms) });
+    change({ ...doc, cuts: addCut(doc.cuts, selection) });
     setSelection(null);
   }, [doc, selection, change]);
 
@@ -252,9 +252,15 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
               )}
             </div>
           )}
-          {tab === "export" && (
-            <ExportPanel path={props.path} doc={doc} canExport={!!keep?.can_export} outputMs={keep?.output_ms ?? 0} beforeExport={save} />
-          )}
+          {/* Always mounted, so a running export keeps its progress and result across tabs. */}
+          <ExportPanel
+            hidden={tab !== "export"}
+            path={props.path}
+            doc={doc}
+            canExport={!!keep?.can_export}
+            outputMs={keep?.output_ms ?? 0}
+            beforeExport={save}
+          />
         </aside>
       </div>
       <div className="editor-transport">

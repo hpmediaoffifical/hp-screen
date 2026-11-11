@@ -62,24 +62,15 @@ export const editKeep = (doc: EditDoc, durationMs: number) => invoke<KeepInfo>("
 export const exportStart = (path: string, doc: EditDoc) => invoke<string>("export_start", { path, doc });
 export const exportCancel = () => invoke<void>("export_cancel");
 
-export const onExportProgress = (handler: (done: number, total: number) => void): Promise<UnlistenFn> =>
-  listen<{ done: number; total: number }>("export-progress", (e) => handler(e.payload.done, e.payload.total));
-export const onExportDone = (handler: (path: string) => void): Promise<UnlistenFn> =>
-  listen<{ path: string }>("export-done", (e) => handler(e.payload.path));
-export const onExportError = (handler: (message: string) => void): Promise<UnlistenFn> =>
-  listen<{ message: string }>("export-error", (e) => handler(e.payload.message));
+// Every export event names the source video, so a page only follows its own export.
+export const onExportProgress = (handler: (source: string, done: number, total: number) => void): Promise<UnlistenFn> =>
+  listen<{ source: string; done: number; total: number }>("export-progress", (e) => handler(e.payload.source, e.payload.done, e.payload.total));
+export const onExportDone = (handler: (source: string, path: string) => void): Promise<UnlistenFn> =>
+  listen<{ source: string; path: string }>("export-done", (e) => handler(e.payload.source, e.payload.path));
+export const onExportError = (handler: (source: string, message: string) => void): Promise<UnlistenFn> =>
+  listen<{ source: string; message: string }>("export-error", (e) => handler(e.payload.source, e.payload.message));
 
-/**
- * Where playback should be for source time `ms`: `ms` itself when it is kept, else the start
- * of the next kept span, or `null` past the last one.
- */
-export function keptTime(keep: Span[], ms: number): number | null {
-  for (const k of keep) {
-    if (ms < k.start_ms) return k.start_ms;
-    if (ms < k.end_ms) return ms;
-  }
-  return null;
-}
+export { addCut, keptTime, playFrom } from "./editor/timeMath.ts";
 
 /** "01:15,4": minutes, seconds and tenths, for timeline labels. */
 export function formatPrecise(ms: number): string {

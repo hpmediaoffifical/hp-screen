@@ -7,17 +7,25 @@ type Job = { kind: "idle" } | { kind: "running"; done: number; total: number } |
 const nameOf = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
 /** The Export tab: start, follow and cancel an export, then open the result. */
-export default function ExportPanel(props: { path: string; doc: EditDoc; canExport: boolean; outputMs: number; beforeExport: () => Promise<void> }) {
+export default function ExportPanel(props: {
+  hidden: boolean;
+  path: string;
+  doc: EditDoc;
+  canExport: boolean;
+  outputMs: number;
+  beforeExport: () => Promise<void>;
+}) {
   const [job, setJob] = useState<Job>({ kind: "idle" });
+  const { path } = props;
 
   useEffect(() => {
     const subs = [
-      onExportProgress((done, total) => setJob({ kind: "running", done, total })),
-      onExportDone((path) => setJob({ kind: "done", path })),
-      onExportError((message) => setJob({ kind: "error", message })),
+      onExportProgress((source, done, total) => source === path && setJob({ kind: "running", done, total })),
+      onExportDone((source, out) => source === path && setJob({ kind: "done", path: out })),
+      onExportError((source, message) => source === path && setJob({ kind: "error", message })),
     ];
     return () => subs.forEach((s) => s.then((u) => u()));
-  }, []);
+  }, [path]);
 
   async function start() {
     try {
@@ -31,7 +39,7 @@ export default function ExportPanel(props: { path: string; doc: EditDoc; canExpo
 
   const running = job.kind === "running";
   return (
-    <div className="panel-body">
+    <div className="panel-body" hidden={props.hidden}>
       <p className="hint">
         Video mới dài {formatElapsed(props.outputMs)}, lưu cạnh video gốc với hậu tố <code>_edit</code>. Video gốc giữ nguyên.
       </p>

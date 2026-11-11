@@ -1,6 +1,6 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
-import { keptTime, type Span } from "../editApi";
+import { keptTime, playFrom, type Span } from "../editApi";
 
 export interface PreviewHandle {
   play(): void;
@@ -95,7 +95,7 @@ const Preview = forwardRef<PreviewHandle, Props>(function Preview(props, ref) {
       const v = video.current;
       if (!v) return;
       const ms = v.currentTime * 1000;
-      const target = keptTime(keep.current, ms) ?? keep.current[0]?.start_ms ?? 0;
+      const target = playFrom(keep.current, ms);
       if (Math.abs(target - ms) > 1) v.currentTime = target / 1000;
       void v.play().catch(() => {});
     },
