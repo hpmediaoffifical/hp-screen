@@ -2,6 +2,7 @@
 //! effects drawn over it, read back as top-down BGRA for the encoder.
 use hp_core::effects::{Draw, RIPPLE_RADIUS};
 use hp_core::input_log::Button;
+use hp_core::layout::{Background, Layout, SHADOW_OFFSET};
 use std::mem::ManuallyDrop;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -12,7 +13,7 @@ use windows::Win32::Graphics::DirectWrite::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::core::{HSTRING, Interface};
-use windows_numerics::Vector2;
+use windows_numerics::{Matrix3x2, Vector2};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Device {
@@ -149,7 +150,16 @@ impl Compositor {
     /// Draws `src` (top-down BGRA, `src_w * 4` per row) over the whole output, then `draws`,
     /// and returns the output as top-down BGRA, `out_w * 4` per row.
     /// `view` is the part of the source shown (x, y, w, h in source pixels), `None` for all of it.
-    pub fn render(&mut self, src: &[u8], src_w: u32, src_h: u32, view: Option<(f32, f32, f32, f32)>, draws: &[Draw]) -> Result<&[u8], String> {
+    /// `layout` places it in the output with a background; `None` fills the whole output.
+    pub fn render(
+        &mut self,
+        src: &[u8],
+        src_w: u32,
+        src_h: u32,
+        view: Option<(f32, f32, f32, f32)>,
+        layout: Option<&Layout>,
+        draws: &[Draw],
+    ) -> Result<&[u8], String> {
         if src_w == 0 || src_h == 0 || src.len() < (src_w * src_h * 4) as usize {
             return Err("Khung hình nguồn không hợp lệ".to_string());
         }
@@ -161,12 +171,20 @@ impl Compositor {
             self.ctx.SetTarget(&self.target);
             self.ctx.BeginDraw();
             self.ctx.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }));
-            let dest = D2D_RECT_F { left: 0.0, top: 0.0, right: self.out_w as f32, bottom: self.out_h as f32 };
             let view = view.unwrap_or((0.0, 0.0, src_w as f32, src_h as f32));
-            let from = D2D_RECT_F { left: view.0, top: view.1, right: view.0 + view.2, bottom: view.1 + view.3 };
-            self.ctx.DrawBitmap(&source, Some(&dest), 1.0, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, Some(&from), None);
-            // EndDraw must follow BeginDraw even when an effect failed.
-            let drawn = self.draw_effects(draws, view);
+            let full = (0.0, 0.0, self.out_w as f32, self.out_h as f32);
+            let video = layout.map_or(full, |l| l.video);
+            // EndDraw must follow BeginDraw even when a step failed.
+            let drawn = match layout.filter(|l| l.decorated) {
+                Some(l) => self.draw_framed(&source, view, l),
+                None => {
+                    let dest = D2D_RECT_F { left: video.0, top: video.1, right: video.0 + video.2, bottom: video.1 + video.3 };
+                    let from = D2D_RECT_F { left: view.0, top: view.1, right: view.0 + view.2, bottom: view.1 + view.3 };
+                    self.ctx.DrawBitmap(&source, Some(&dest), 1.0, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, Some(&from), None);
+                    Ok(())
+                }
+            }
+            .and_then(|_| self.draw_effects(draws, view, video));
             self.ctx.EndDraw(None, None).map_err(err("Vẽ khung hình thất bại"))?;
             drawn?;
             self.readback.CopyFromBitmap(None, &self.target, None).map_err(err("Không đọc được khung hình"))?;
@@ -199,10 +217,67 @@ impl Compositor {
 
     /// Draws the effects of one frame. Positions of rings, dots and wheel marks are in source
     /// pixels and scale with the picture; chips are placed in the output frame.
-    unsafe fn draw_effects(&mut self, draws: &[Draw], view: (f32, f32, f32, f32)) -> Result<(), String> {
+    /// Background, shadow, then the video in its (rounded) rectangle.
+    unsafe fn draw_framed(&mut self, source: &ID2D1Bitmap1, view: (f32, f32, f32, f32), l: &Layout) -> Result<(), String> {
+        let (ow, oh) = (self.out_w as f32, self.out_h as f32);
+        let (x, y, w, h) = l.video;
+        // SAFETY: drawing calls between BeginDraw and EndDraw on valid objects.
+        unsafe {
+            let all = D2D_RECT_F { left: 0.0, top: 0.0, right: ow, bottom: oh };
+            match l.background {
+                Background::Solid { color } => {
+                    self.ctx.FillRectangle(&all, &self.brush(rgb(color), 1.0)?);
+                }
+                Background::Gradient { from, to } => {
+                    let stops = [
+                        D2D1_GRADIENT_STOP { position: 0.0, color: colour(rgb(from), 1.0) },
+                        D2D1_GRADIENT_STOP { position: 1.0, color: colour(rgb(to), 1.0) },
+                    ];
+                    let coll = self
+                        .ctx
+                        .CreateGradientStopCollection(
+                            &stops,
+                            D2D1_COLOR_SPACE_SRGB,
+                            D2D1_COLOR_SPACE_SRGB,
+                            D2D1_BUFFER_PRECISION_8BPC_UNORM,
+                            D2D1_EXTEND_MODE_CLAMP,
+                            D2D1_COLOR_INTERPOLATION_MODE_STRAIGHT,
+                        )
+                        .map_err(err("Không vẽ được nền"))?;
+                    let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: point(0.0, 0.0), endPoint: point(ow, oh) };
+                    let brush = self.ctx.CreateLinearGradientBrush(&props, None, &coll).map_err(err("Không vẽ được nền"))?;
+                    self.ctx.FillRectangle(&all, &brush);
+                }
+            }
+            let rounded = |grow: f32, dy: f32| D2D1_ROUNDED_RECT {
+                rect: D2D_RECT_F { left: x - grow, top: y - grow + dy, right: x + w + grow, bottom: y + h + grow + dy },
+                radiusX: l.radius + grow,
+                radiusY: l.radius + grow,
+            };
+            if l.shadow {
+                let offset = SHADOW_OFFSET * ow.min(oh);
+                let shade = self.brush((0.0, 0.0, 0.0), 0.06)?;
+                for i in (1..=8).rev() {
+                    self.ctx.FillRoundedRectangle(&rounded(i as f32 * offset / 3.0, offset), &shade);
+                }
+            }
+            let props = D2D1_BITMAP_BRUSH_PROPERTIES1 {
+                extendModeX: D2D1_EXTEND_MODE_CLAMP,
+                extendModeY: D2D1_EXTEND_MODE_CLAMP,
+                interpolationMode: D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+            };
+            let brush = self.ctx.CreateBitmapBrush(source, Some(&props), None).map_err(err("Không vẽ được video"))?;
+            let (sx, sy) = (w / view.2.max(1.0), h / view.3.max(1.0));
+            brush.SetTransform(&Matrix3x2 { M11: sx, M12: 0.0, M21: 0.0, M22: sy, M31: x - view.0 * sx, M32: y - view.1 * sy });
+            self.ctx.FillRoundedRectangle(&rounded(0.0, 0.0), &brush);
+        }
+        Ok(())
+    }
+
+    unsafe fn draw_effects(&mut self, draws: &[Draw], view: (f32, f32, f32, f32), video: (f32, f32, f32, f32)) -> Result<(), String> {
         let (vx, vy, vw, vh) = view;
-        let (sx, sy) = (self.out_w as f32 / vw.max(1.0), self.out_h as f32 / vh.max(1.0));
-        let at = |x: f32, y: f32| ((x - vx) * sx, (y - vy) * sy);
+        let (sx, sy) = (video.2 / vw.max(1.0), video.3 / vh.max(1.0));
+        let at = |x: f32, y: f32| (video.0 + (x - vx) * sx, video.1 + (y - vy) * sy);
         let full_ring = RIPPLE_RADIUS * self.out_h as f32;
         let stroke = (0.12 * full_ring).max(2.0);
         // SAFETY: drawing calls on the device context between BeginDraw and EndDraw.
@@ -293,6 +368,14 @@ impl Compositor {
     }
 }
 
+fn rgb(c: [u8; 3]) -> (f32, f32, f32) {
+    (c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0)
+}
+
+fn colour((r, g, b): (f32, f32, f32), a: f32) -> D2D1_COLOR_F {
+    D2D1_COLOR_F { r, g, b, a }
+}
+
 fn button_colour(b: Button) -> (f32, f32, f32) {
     let hex = match b {
         Button::Left => 0xFF5A36,
@@ -338,7 +421,7 @@ mod tests {
     fn same_size_render_keeps_the_picture() {
         let src = solid(64, 48, |x, _| if x < 32 { [255, 0, 0] } else { [0, 0, 255] });
         let mut c = Compositor::new(64, 48, Device::Warp).unwrap();
-        let out = c.render(&src, 64, 48, None, &[]).unwrap();
+        let out = c.render(&src, 64, 48, None, None, &[]).unwrap();
         assert_eq!(out.len(), 64 * 48 * 4);
         assert!(close(rgb_at(out, 64, 10, 24), [255, 0, 0]), "{:?}", rgb_at(out, 64, 10, 24));
         assert!(close(rgb_at(out, 64, 54, 24), [0, 0, 255]), "{:?}", rgb_at(out, 64, 54, 24));
@@ -348,18 +431,71 @@ mod tests {
     fn render_scales_to_the_output_size() {
         let src = solid(64, 48, |_, _| [0, 255, 0]);
         let mut c = Compositor::new(128, 96, Device::Warp).unwrap();
-        let out = c.render(&src, 64, 48, None, &[]).unwrap();
+        let out = c.render(&src, 64, 48, None, None, &[]).unwrap();
         assert_eq!(out.len(), 128 * 96 * 4);
         for (x, y) in [(0, 0), (127, 0), (64, 48), (0, 95), (127, 95)] {
             assert!(close(rgb_at(out, 128, x, y), [0, 255, 0]), "({x},{y}) {:?}", rgb_at(out, 128, x, y));
         }
     }
 
+    fn tall(fit: hp_core::layout::Fit, radius: f32) -> hp_core::layout::Layout {
+        use hp_core::layout::{Aspect, FrameDoc, layout};
+        layout(160, 90, &FrameDoc { aspect: Aspect::Tall, fit, radius, background: "white".into(), ..FrameDoc::default() })
+    }
+
+    #[test]
+    fn background_fills_around_a_fitted_video() {
+        let l = tall(hp_core::layout::Fit::Fit, 0.0);
+        let src = solid(160, 90, |_, _| [255, 0, 0]);
+        let mut c = Compositor::new(l.out_w, l.out_h, Device::Warp).unwrap();
+        let out = c.render(&src, 160, 90, None, Some(&l), &[]).unwrap();
+        assert_eq!(rgb_at(out, l.out_w, l.out_w / 2, 2), [255, 255, 255], "white background above");
+        assert!(close(rgb_at(out, l.out_w, l.out_w / 2, l.out_h / 2), [255, 0, 0]), "video in the middle");
+    }
+
+    #[test]
+    fn rounded_corner_shows_the_background() {
+        use hp_core::layout::{FrameDoc, layout};
+        let l = layout(200, 200, &FrameDoc { radius: 30.0, background: "white".into(), ..FrameDoc::default() });
+        let src = solid(200, 200, |_, _| [255, 0, 0]);
+        let mut c = Compositor::new(200, 200, Device::Warp).unwrap();
+        let out = c.render(&src, 200, 200, None, Some(&l), &[]).unwrap();
+        assert_eq!(rgb_at(out, 200, 1, 1), [255, 255, 255], "corner is cut");
+        assert!(close(rgb_at(out, 200, 100, 100), [255, 0, 0]));
+    }
+
+    #[test]
+    fn gradient_background_changes_across_the_frame() {
+        use hp_core::layout::{Aspect, FrameDoc, layout};
+        let l = layout(160, 90, &FrameDoc { aspect: Aspect::Tall, background: "ocean".into(), ..FrameDoc::default() });
+        let src = solid(160, 90, |_, _| [0, 0, 0]);
+        let mut c = Compositor::new(l.out_w, l.out_h, Device::Warp).unwrap();
+        let out = c.render(&src, 160, 90, None, Some(&l), &[]).unwrap().to_vec();
+        let top = rgb_at(&out, l.out_w, 1, 1);
+        let bottom = rgb_at(&out, l.out_w, l.out_w - 2, l.out_h - 2);
+        assert_ne!(top, bottom, "a gradient");
+        assert!(top[1] > bottom[1], "from sky blue towards indigo: {top:?} {bottom:?}");
+    }
+
+    #[test]
+    fn effects_follow_the_video_rect() {
+        let l = tall(hp_core::layout::Fit::Fit, 0.0);
+        let src = solid(160, 90, |_, _| [128, 128, 128]);
+        let mut c = Compositor::new(l.out_w, l.out_h, Device::Warp).unwrap();
+        // A ring at the source centre lands at the centre of the fitted video.
+        let ring = Draw::Ring { x: 80.0, y: 45.0, radius: 10.0, alpha: 1.0, button: Button::Right };
+        let out = c.render(&src, 160, 90, None, Some(&l), &[ring]).unwrap();
+        let (vx, vy, vw, vh) = l.video;
+        let k = vw / 160.0;
+        let (px, py) = ((vx + vw / 2.0 + 10.0 * k) as u32, (vy + vh / 2.0) as u32);
+        assert!(rgb_at(out, l.out_w, px, py)[2] > 200, "ring on the video at ({px},{py}): {:?}", rgb_at(out, l.out_w, px, py));
+    }
+
     #[test]
     fn view_crops_the_source() {
         let src = solid(64, 64, |_, y| if y < 32 { [255, 0, 0] } else { [0, 0, 255] });
         let mut c = Compositor::new(64, 64, Device::Warp).unwrap();
-        let out = c.render(&src, 64, 64, Some((0.0, 0.0, 64.0, 32.0)), &[]).unwrap();
+        let out = c.render(&src, 64, 64, Some((0.0, 0.0, 64.0, 32.0)), None, &[]).unwrap();
         for (x, y) in [(0, 0), (32, 32), (63, 60), (5, 50)] {
             assert!(close(rgb_at(out, 64, x, y), [255, 0, 0]), "({x},{y}) {:?}", rgb_at(out, 64, x, y));
         }
@@ -371,7 +507,7 @@ mod tests {
         let mut c = Compositor::new(200, 200, Device::Warp).unwrap();
         // View the top-left quarter at 2x: a ring at (50, 50) radius 20 lands at (100, 100) radius 40.
         let ring = Draw::Ring { x: 50.0, y: 50.0, radius: 20.0, alpha: 1.0, button: Button::Left };
-        let out = c.render(&src, 200, 200, Some((0.0, 0.0, 100.0, 100.0)), &[ring]).unwrap();
+        let out = c.render(&src, 200, 200, Some((0.0, 0.0, 100.0, 100.0)), None, &[ring]).unwrap();
         let [r, _, b] = rgb_at(out, 200, 140, 100);
         assert!(r > 200 && b < 120, "ring pixel {:?}", rgb_at(out, 200, 140, 100));
     }
@@ -381,7 +517,7 @@ mod tests {
         let src = solid(200, 200, |_, _| [128, 128, 128]);
         let mut c = Compositor::new(200, 200, Device::Warp).unwrap();
         let ring = Draw::Ring { x: 100.0, y: 100.0, radius: 40.0, alpha: 1.0, button: Button::Left };
-        let out = c.render(&src, 200, 200, None, &[ring]).unwrap();
+        let out = c.render(&src, 200, 200, None, None, &[ring]).unwrap();
         let [r, _, b] = rgb_at(out, 200, 140, 100);
         assert!(r > 200 && b < 120, "ring pixel {:?}", rgb_at(out, 200, 140, 100));
         assert!(close(rgb_at(out, 200, 100, 100), [128, 128, 128]), "centre stays grey");
@@ -392,7 +528,7 @@ mod tests {
         let src = solid(100, 100, |_, _| [128, 128, 128]);
         let mut c = Compositor::new(200, 200, Device::Warp).unwrap();
         let ring = Draw::Ring { x: 50.0, y: 50.0, radius: 20.0, alpha: 1.0, button: Button::Right };
-        let out = c.render(&src, 100, 100, None, &[ring]).unwrap();
+        let out = c.render(&src, 100, 100, None, None, &[ring]).unwrap();
         let [r, _, b] = rgb_at(out, 200, 140, 100);
         assert!(b > 200 && r < 120, "right-click ring is blue at the scaled spot: {:?}", rgb_at(out, 200, 140, 100));
     }
@@ -402,7 +538,7 @@ mod tests {
         let src = solid(400, 300, |_, _| [255, 255, 255]);
         let mut c = Compositor::new(400, 300, Device::Warp).unwrap();
         let chip = Draw::Chip { text: "Ctrl + S".into(), alpha: 1.0, bottom: 0.08 };
-        let out = c.render(&src, 400, 300, None, &[chip]).unwrap();
+        let out = c.render(&src, 400, 300, None, None, &[chip]).unwrap();
         let dark = (262..276).any(|y| (180..220).any(|x| rgb_at(out, 400, x, y)[0] < 60));
         assert!(dark, "chip background under the bottom centre");
         assert!(close(rgb_at(out, 400, 200, 100), [255, 255, 255]), "rest untouched");
@@ -412,12 +548,12 @@ mod tests {
     fn wheel_mark_and_dot_draw_something() {
         let src = solid(200, 200, |_, _| [128, 128, 128]);
         let mut c = Compositor::new(200, 200, Device::Warp).unwrap();
-        let before = c.render(&src, 200, 200, None, &[]).unwrap().to_vec();
+        let before = c.render(&src, 200, 200, None, None, &[]).unwrap().to_vec();
         let draws = [
             Draw::Wheel { x: 50.0, y: 50.0, up: true, alpha: 1.0 },
             Draw::Dot { x: 150.0, y: 150.0, radius: 6.0, alpha: 0.55, button: Button::Middle },
         ];
-        let out = c.render(&src, 200, 200, None, &draws).unwrap();
+        let out = c.render(&src, 200, 200, None, None, &draws).unwrap();
         assert_ne!(before, out);
         assert!(rgb_at(out, 200, 150, 150)[1] > 140, "middle-button dot is green: {:?}", rgb_at(out, 200, 150, 150));
     }
@@ -426,19 +562,19 @@ mod tests {
     fn alpha_zero_draws_nothing() {
         let src = solid(200, 200, |_, _| [128, 128, 128]);
         let mut c = Compositor::new(200, 200, Device::Warp).unwrap();
-        let before = c.render(&src, 200, 200, None, &[]).unwrap().to_vec();
+        let before = c.render(&src, 200, 200, None, None, &[]).unwrap().to_vec();
         let draws = [
             Draw::Ring { x: 100.0, y: 100.0, radius: 40.0, alpha: 0.0, button: Button::Left },
             Draw::Chip { text: "Ctrl + S".into(), alpha: 0.0, bottom: 0.08 },
         ];
-        assert_eq!(before, c.render(&src, 200, 200, None, &draws).unwrap());
+        assert_eq!(before, c.render(&src, 200, 200, None, None, &draws).unwrap());
     }
 
     #[test]
     fn source_size_may_change_between_frames() {
         let mut c = Compositor::new(64, 48, Device::Warp).unwrap();
-        c.render(&solid(32, 24, |_, _| [255, 0, 0]), 32, 24, None, &[]).unwrap();
-        let out = c.render(&solid(64, 48, |_, _| [0, 0, 255]), 64, 48, None, &[]).unwrap();
+        c.render(&solid(32, 24, |_, _| [255, 0, 0]), 32, 24, None, None, &[]).unwrap();
+        let out = c.render(&solid(64, 48, |_, _| [0, 0, 255]), 64, 48, None, None, &[]).unwrap();
         assert!(close(rgb_at(out, 64, 32, 24), [0, 0, 255]));
     }
 }

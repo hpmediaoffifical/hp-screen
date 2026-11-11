@@ -120,7 +120,7 @@ fn write_all(
             }
             let c = compositor.as_mut().expect("just created");
             let view = zoomed.then(|| fp.camera.view(info.width, info.height));
-            (c.render(src, info.width, info.height, view, &fp.draws)?, out_w * 4)
+            (c.render(src, info.width, info.height, view, None, &fp.draws)?, out_w * 4)
         };
         if first.is_none() {
             first = Some(tight(frame, stride, out_w, out_h));
