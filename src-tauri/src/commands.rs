@@ -74,3 +74,34 @@ pub fn audio_status() -> crate::audio::AudioStatus {
 pub fn hotkey_status(registry: State<'_, crate::hotkeys::HotkeyRegistry>) -> Vec<crate::hotkeys::HotkeyStatus> {
     registry.inner().0.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
+
+/// Opens the selection overlay; resolves to the chosen target or `None` when cancelled.
+#[tauri::command]
+pub async fn pick_target(app: AppHandle, mode: crate::picker::PickMode) -> Result<Option<Target>, String> {
+    crate::picker::pick(app, mode).await
+}
+
+#[tauri::command]
+pub fn picker_context(app: AppHandle) -> Option<crate::picker::PickerContext> {
+    crate::picker::context(&app)
+}
+
+#[tauri::command]
+pub fn picker_done(app: AppHandle, target: Option<Target>) {
+    crate::picker::finish(&app, target);
+}
+
+#[tauri::command]
+pub fn settings_get(state: State<'_, AppState>) -> Settings {
+    state.settings()
+}
+
+/// Validates, saves and applies new settings; returns what was actually stored.
+#[tauri::command]
+pub fn settings_set(app: AppHandle, state: State<'_, AppState>, settings: Settings) -> Result<Settings, String> {
+    let settings = hp_core::settings::normalize(settings);
+    crate::paths::write_settings(&app, &settings)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = settings.clone();
+    crate::hotkeys::register_hotkeys(&app, &settings);
+    Ok(settings)
+}

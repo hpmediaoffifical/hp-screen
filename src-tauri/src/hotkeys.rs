@@ -42,6 +42,8 @@ pub fn register_hotkeys(app: &AppHandle, settings: &Settings) -> Vec<HotkeyStatu
     .into_iter()
     .map(|(action, hotkey)| {
         let registered = shortcuts.on_shortcut(hotkey.as_str(), move |app, _shortcut, event| {
+            #[cfg(debug_assertions)]
+            eprintln!("[hp] hotkey event {action:?} {:?}", event.state);
             if event.state == ShortcutState::Pressed {
                 run_action(app, action);
             }
@@ -54,6 +56,8 @@ pub fn register_hotkeys(app: &AppHandle, settings: &Settings) -> Vec<HotkeyStatu
         }
     })
     .collect();
+    #[cfg(debug_assertions)]
+    eprintln!("[hp] register_hotkeys on {:?}: {:?}", std::thread::current().name(), results.iter().map(|r| (r.hotkey.as_str(), r.ok)).collect::<Vec<_>>());
     if let Some(registry) = app.try_state::<HotkeyRegistry>() {
         *registry.0.lock().unwrap_or_else(|e| e.into_inner()) = results.clone();
     }
@@ -67,6 +71,8 @@ pub fn default_target() -> Target {
 }
 
 pub fn run_action(app: &AppHandle, action: HotkeyAction) {
+    #[cfg(debug_assertions)]
+    eprintln!("[hp] run_action {action:?} state {:?}", app.try_state::<AppState>().map(|s| s.recorder.status().state));
     let Some(state) = app.try_state::<AppState>() else { return };
     let settings = state.settings();
     let result = match action {

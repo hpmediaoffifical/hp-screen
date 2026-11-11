@@ -414,3 +414,47 @@ mod desktop_tests {
         assert!((2.6e7..=3.4e7).contains(&(last as f64)), "last frame at {last}");
     }
 }
+
+#[cfg(test)]
+mod size_tests {
+    use super::*;
+    use crate::capture::list_monitors;
+
+    /// Sizes that are even but not multiples of 16 must still record (found with a 698x450 region).
+    #[test]
+    #[ignore = "needs a desktop session"]
+    fn awkward_even_sizes_record_without_error() {
+        let primary = list_monitors().into_iter().find(|m| m.primary).unwrap();
+        let sizes: Vec<(u32, u32)> = match std::env::var("HP_SIZES") {
+            Ok(list) => list.split(',').map(|s| { let (w, h) = s.split_once('x').unwrap(); (w.parse().unwrap(), h.parse().unwrap()) }).collect(),
+            Err(_) => vec![(698, 450), (1002, 562)],
+        };
+        for (w, h) in sizes {
+            let path = std::env::temp_dir().join("hp-screen-tests").join(format!("size-{w}x{h}.mp4"));
+            let _ = std::fs::remove_file(&path);
+            let rect = hp_core::geometry::Rect { x: primary.rect.x + 50, y: primary.rect.y + 50, w, h };
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let events: EventFn = {
+                let seen = seen.clone();
+                Arc::new(move |e| seen.lock().unwrap().push(e))
+            };
+            let cfg = PipelineConfig {
+                target: Target::Region { monitor: primary.index, rect },
+                path: path.clone(),
+                thumb: None,
+                fps: 30,
+                quality: Quality::Standard,
+                audio: Some(AudioConfig { system: true, mic: true }),
+            };
+            let pipeline = Pipeline::start(cfg, events).expect("pipeline starts");
+            std::thread::sleep(Duration::from_secs(2));
+            let result = pipeline.finish();
+            let failures: Vec<_> = seen.lock().unwrap().iter().filter(|e| matches!(e, PipelineEvent::Failed(_))).cloned().collect();
+            println!("{w}x{h}: {result:?} failures {failures:?} bytes {:?}", std::fs::metadata(&path).map(|m| m.len()));
+            if std::env::var("HP_SIZES").is_ok() { continue; }
+            assert!(result.is_ok(), "{w}x{h} failed: {result:?}");
+            let (frames, _, _) = encoder::probe(&path).expect("readable");
+            assert!(frames >= 45, "{w}x{h}: only {frames} frames");
+        }
+    }
+}

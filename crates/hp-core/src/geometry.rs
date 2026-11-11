@@ -10,7 +10,7 @@ pub struct Rect {
 }
 
 /// Smallest width or height a capture region may have.
-pub const MIN_SIZE: u32 = 32;
+pub const MIN_SIZE: u32 = 64;
 
 /// H.264 needs even dimensions: odd values lose one pixel.
 pub fn make_even(w: u32, h: u32) -> (u32, u32) {
@@ -137,5 +137,20 @@ mod tests {
     fn monitor_containing_is_none_outside_all_monitors() {
         assert_eq!(monitor_containing((9999, 5), &[MAIN, LEFT]), None);
         assert_eq!(monitor_containing((1920, 5), &[MAIN, LEFT]), None);
+    }
+}
+
+#[cfg(test)]
+mod min_size_tests {
+    use super::*;
+
+    /// The H.264 encoder rejects very small frames (measured: 320x34 fails, 146x50 works),
+    /// so regions below 64 px on a side are refused up front.
+    #[test]
+    fn regions_under_64_pixels_are_refused() {
+        let monitor = Rect { x: 0, y: 0, w: 1920, h: 1080 };
+        assert_eq!(crop_in_monitor(Rect { x: 0, y: 0, w: 320, h: 34 }, monitor), None);
+        assert_eq!(crop_in_monitor(Rect { x: 0, y: 0, w: 63, h: 400 }, monitor), None);
+        assert_eq!(crop_in_monitor(Rect { x: 0, y: 0, w: 65, h: 64 }, monitor), Some(Rect { x: 0, y: 0, w: 64, h: 64 }));
     }
 }

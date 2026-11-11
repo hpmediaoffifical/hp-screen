@@ -76,3 +76,44 @@ export interface AudioStatus {
   mic_available: boolean;
 }
 export const audioStatus = () => invoke<AudioStatus>("audio_status");
+
+export type PickMode = "region" | "window";
+export interface PickerContext {
+  mode: PickMode;
+  monitor: MonitorInfo;
+  windows: WindowInfo[];
+}
+export const pickTarget = (mode: PickMode) => invoke<Target | null>("pick_target", { mode });
+export const pickerContext = () => invoke<PickerContext | null>("picker_context");
+export const pickerDone = (target: Target | null) => invoke<void>("picker_done", { target });
+
+export type Quality = "light" | "standard" | "high";
+export interface Settings {
+  version: number;
+  output_dir: string | null;
+  name_pattern: string;
+  fps: number;
+  quality: Quality;
+  countdown_secs: number;
+  system_audio: boolean;
+  mic: boolean;
+  hotkey_toggle: string;
+  hotkey_pause: string;
+  hotkey_screenshot: string;
+  input_log: boolean;
+  autostart: boolean;
+  last_region: Rect | null;
+}
+export const settingsGet = () => invoke<Settings>("settings_get");
+export const settingsSet = (settings: Settings) => invoke<Settings>("settings_set", { settings });
+
+export interface HotkeyStatus {
+  action: "toggle" | "pause" | "screenshot";
+  hotkey: string;
+  ok: boolean;
+  message: string | null;
+}
+export const hotkeyStatus = () => invoke<HotkeyStatus[]>("hotkey_status");
+
+/** Smallest region side the recorder accepts, in physical pixels (mirrors hp-core MIN_SIZE). */
+export const MIN_REGION = 64;
