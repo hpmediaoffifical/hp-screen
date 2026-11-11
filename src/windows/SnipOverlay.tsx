@@ -1,5 +1,5 @@
 
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { errorMessage, snipCancel, snipContext, snipFinish, snipFrozen, snipReady, type SnipAction } from "../api";
 
 /**
@@ -8,7 +8,7 @@ import { errorMessage, snipCancel, snipContext, snipFinish, snipFrozen, snipRead
  * image's physical pixels, so the result is as sharp as the screen.
  */
 
-type Tool = "pen" | "rect" | "ellipse" | "arrow" | "line" | "text" | "mosaic";
+type Tool = "pen" | "rect" | "ellipse" | "arrow" | "blockArrow" | "line" | "text" | "mosaic";
 interface Point {
   x: number;
   y: number;
@@ -21,7 +21,7 @@ interface Box {
 }
 type Shape =
   | { kind: "pen"; color: string; width: number; points: Point[] }
-  | { kind: "rect" | "ellipse" | "arrow" | "line"; color: string; width: number; from: Point; to: Point }
+  | { kind: "rect" | "ellipse" | "arrow" | "blockArrow" | "line"; color: string; width: number; from: Point; to: Point }
   | { kind: "mosaic"; from: Point; to: Point }
   | { kind: "text"; color: string; size: number; at: Point; text: string; bg: TextBg };
 type Handle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
@@ -34,26 +34,40 @@ type Drag =
 
 type TextShape = Extract<Shape, { kind: "text" }>;
 
-/** Box behind text so it stands out: none, black, white, or the chosen colour. */
-type TextBg = "none" | "dark" | "light" | "color";
+/** Box behind text so it stands out. Boxes are slightly see-through so they do not feel heavy. */
+type TextBg = "none" | "dark" | "light" | "orange" | "color";
 const TEXT_BGS: { value: TextBg; label: string }[] = [
   { value: "none", label: "Không nền" },
   { value: "dark", label: "Nền đen" },
   { value: "light", label: "Nền trắng" },
+  { value: "orange", label: "Nền vàng cam" },
   { value: "color", label: "Nền theo màu" },
 ];
+const ORANGE = "#ffa41b";
+/** Hex colour plus an alpha channel, e.g. "#ff3b30" + 0.8 → "#ff3b30cc". */
+const withAlpha = (hex: string, alpha: number) =>
+  hex +
+  Math.round(alpha * 255)
+    .toString(16)
+    .padStart(2, "0");
 
 /** Text and box colours for a text annotation. */
 function textColors(color: string, bg: TextBg): { fill: string; box: string | null } {
-  if (bg === "dark") return { fill: color === "#111111" ? "#ffffff" : color, box: "rgba(0, 0, 0, 0.78)" };
-  if (bg === "light") return { fill: color === "#ffffff" ? "#111111" : color, box: "rgba(255, 255, 255, 0.92)" };
+  if (bg === "dark") return { fill: color === "#111111" ? "#ffffff" : color, box: "rgba(0, 0, 0, 0.55)" };
+  if (bg === "light") return { fill: color === "#ffffff" ? "#111111" : color, box: "rgba(255, 255, 255, 0.72)" };
+  if (bg === "orange") return { fill: "#111111", box: withAlpha(ORANGE, 0.82) };
   if (bg === "color") {
     // Light swatches get dark text, dark ones white text.
     const light = ["#ffcc00", "#34c759", "#ffffff"].includes(color);
-    return { fill: light ? "#111111" : "#ffffff", box: color };
+    return { fill: light ? "#111111" : "#ffffff", box: withAlpha(color, 0.8) };
   }
   return { fill: color, box: null };
 }
+
+/** Space between text and the edge of its box, as a share of the font size. */
+const TEXT_PAD_X = 0.35;
+const TEXT_PAD_Y = 0.18;
+const LINE_HEIGHT = 1.25;
 
 const measureContext = document.createElement("canvas").getContext("2d")!;
 
@@ -62,7 +76,7 @@ function textBox(s: TextShape): Box {
   measureContext.font = `600 ${s.size}px "Segoe UI", sans-serif`;
   const lines = s.text.split("\n");
   const width = Math.max(...lines.map((l) => measureContext.measureText(l).width));
-  return { x: s.at.x, y: s.at.y, w: width, h: lines.length * s.size * 1.25 };
+  return { x: s.at.x, y: s.at.y, w: width, h: lines.length * s.size * LINE_HEIGHT };
 }
 
 const COLORS = ["#ff3b30", "#ffcc00", "#34c759", "#0a84ff", "#ffffff", "#111111"];
@@ -77,6 +91,7 @@ const TOOLS: { id: Tool; label: string; icon: string; key: string }[] = [
   { id: "rect", label: "Hình chữ nhật", icon: "▭", key: "R" },
   { id: "ellipse", label: "Hình tròn / elip", icon: "◯", key: "O" },
   { id: "arrow", label: "Mũi tên", icon: "↗", key: "A" },
+  { id: "blockArrow", label: "Mũi tên khối", icon: "⇨", key: "B" },
   { id: "line", label: "Đường thẳng", icon: "╱", key: "L" },
   { id: "text", label: "Chữ", icon: "T", key: "T" },
   { id: "mosaic", label: "Làm mờ (che thông tin)", icon: "▦", key: "M" },
@@ -187,6 +202,36 @@ function drawShape(ctx: CanvasRenderingContext2D, s: Shape, image: HTMLImageElem
       }
       break;
     }
+    case "blockArrow": {
+      // An outlined "fat" arrow: a shaft and a wide triangular head, drawn as one shape
+      // along the drag direction. Its thickness grows with its length.
+      const dx = s.to.x - s.from.x;
+      const dy = s.to.y - s.from.y;
+      const length = Math.hypot(dx, dy);
+      if (length < 2) break;
+      const shaftHalf = Math.max(length * 0.11, s.width * 2.5);
+      const headHalf = shaftHalf * 2.1;
+      const headLength = Math.min(length * 0.45, headHalf * 1.3);
+      const neck = length - headLength;
+      ctx.save();
+      ctx.translate(s.from.x, s.from.y);
+      ctx.rotate(Math.atan2(dy, dx));
+      ctx.beginPath();
+      ctx.moveTo(0, -shaftHalf);
+      ctx.lineTo(neck, -shaftHalf);
+      ctx.lineTo(neck, -headHalf);
+      ctx.lineTo(length, 0);
+      ctx.lineTo(neck, headHalf);
+      ctx.lineTo(neck, shaftHalf);
+      ctx.lineTo(0, shaftHalf);
+      ctx.closePath();
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = s.width;
+      ctx.stroke();
+      ctx.restore();
+      break;
+    }
     case "mosaic": {
       const b = normalize(s.from, s.to);
       if (b.w < 1 || b.h < 1) break;
@@ -201,20 +246,23 @@ function drawShape(ctx: CanvasRenderingContext2D, s: Shape, image: HTMLImageElem
     }
     case "text": {
       const { fill, box } = textColors(s.color, s.bg);
-      ctx.font = `600 ${s.size}px "Segoe UI", sans-serif`;
-      ctx.textBaseline = "top";
       if (box) {
+        // The box is the text area plus the same padding on both sides, so the text sits
+        // in its middle.
         const b = textBox(s);
-        const pad = s.size * 0.3;
+        const padX = s.size * TEXT_PAD_X;
+        const padY = s.size * TEXT_PAD_Y;
         ctx.fillStyle = box;
         ctx.beginPath();
-        ctx.roundRect(b.x - pad, b.y - pad * 0.6, b.w + pad * 2, b.h + pad * 1.2, pad * 0.8);
+        ctx.roundRect(b.x - padX, b.y - padY, b.w + padX * 2, b.h + padY * 2, s.size * 0.25);
         ctx.fill();
-        ctx.font = `600 ${s.size}px "Segoe UI", sans-serif`;
-        ctx.textBaseline = "top";
       }
+      ctx.font = `600 ${s.size}px "Segoe UI", sans-serif`;
+      // Each line is centred vertically in its own line slot, which keeps it centred in the box.
+      ctx.textBaseline = "middle";
       ctx.fillStyle = fill;
-      s.text.split("\n").forEach((line, i) => ctx.fillText(line, s.at.x, s.at.y + i * s.size * 1.25));
+      const lineHeight = s.size * LINE_HEIGHT;
+      s.text.split("\n").forEach((line, i) => ctx.fillText(line, s.at.x, s.at.y + (i + 0.5) * lineHeight));
       break;
     }
   }
@@ -237,6 +285,17 @@ export default function SnipOverlay() {
   const [textBg, setTextBg] = useState<TextBg>("none");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Measured sizes of the two floating panels (CSS pixels), used to keep them on screen.
+  const toolsRef = useRef<HTMLDivElement>(null);
+  const actionsRef = useRef<HTMLDivElement>(null);
+  const [panels, setPanels] = useState({ tw: 52, th: 420, aw: 300, ah: 48 });
+  useLayoutEffect(() => {
+    const t = toolsRef.current?.getBoundingClientRect();
+    const a = actionsRef.current?.getBoundingClientRect();
+    if (!t || !a) return;
+    const next = { tw: Math.ceil(t.width), th: Math.ceil(t.height), aw: Math.ceil(a.width), ah: Math.ceil(a.height) };
+    if (next.tw !== panels.tw || next.th !== panels.th || next.aw !== panels.aw || next.ah !== panels.ah) setPanels(next);
+  });
 
   // Load the frozen screen, then show the window once it is drawn (no flash of an empty window).
   useEffect(() => {
@@ -501,15 +560,35 @@ export default function SnipOverlay() {
 
   const css = (v: number) => v / scale;
   const sel = selection && selection.w >= 4 && selection.h >= 4 && drag?.kind !== "select" ? selection : null;
-  const toolbarBelow = sel && css(sel.y + sel.h) + 110 < window.innerHeight;
-  const toolbarAbove = sel && !toolbarBelow && css(sel.y) > 110;
-  const toolbarStyle = sel
-    ? {
-        right: Math.max(8, window.innerWidth - css(sel.x + sel.w)),
-        top: toolbarBelow ? css(sel.y + sel.h) + 10 : toolbarAbove ? undefined : undefined,
-        bottom: toolbarAbove ? window.innerHeight - css(sel.y) + 10 : toolbarBelow ? undefined : 16,
-      }
-    : undefined;
+
+  // Place the two panels around the area, flipping sides near the screen edges.
+  const GAP = 8;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const clampTo = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), Math.max(lo, hi));
+  let toolsLeft = 0;
+  let toolsTop = 0;
+  let toolsOnLeft = false;
+  let actionsLeft = 0;
+  let actionsTop = 0;
+  if (sel) {
+    const left = css(sel.x);
+    const right = css(sel.x + sel.w);
+    const top = css(sel.y);
+    const bottom = css(sel.y + sel.h);
+    // Tools: right of the area, else left of it, else inside its right edge.
+    if (right + GAP + panels.tw <= vw - GAP) toolsLeft = right + GAP;
+    else if (left - GAP - panels.tw >= GAP) {
+      toolsLeft = left - GAP - panels.tw;
+      toolsOnLeft = true;
+    } else toolsLeft = right - GAP - panels.tw;
+    toolsTop = clampTo(top, GAP, vh - panels.th - GAP);
+    // Actions: under the area, else above it, else inside its bottom edge; right-aligned.
+    if (bottom + GAP + panels.ah <= vh - GAP) actionsTop = bottom + GAP;
+    else if (top - GAP - panels.ah >= GAP) actionsTop = top - GAP - panels.ah;
+    else actionsTop = bottom - GAP - panels.ah;
+    actionsLeft = clampTo(right - panels.aw, GAP, vw - panels.aw - GAP);
+  }
 
   return (
     <div className="snip">
@@ -568,93 +647,123 @@ export default function SnipOverlay() {
       )}
 
       {sel && (
-        <div className="snip-toolbar" style={toolbarStyle} onPointerDown={(e) => e.stopPropagation()}>
-          <div className="snip-row" role="toolbar" aria-label="Công cụ vẽ">
-            {TOOLS.map((t) => (
+        <>
+          {/* Drawing tools: a column beside the area, plus their options when a tool is on. */}
+          <div
+            ref={toolsRef}
+            className={"snip-panel snip-tools" + (toolsOnLeft ? " snip-flip" : "")}
+            style={{ left: toolsLeft, top: toolsTop }}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <div className="snip-col" role="toolbar" aria-orientation="vertical" aria-label="Công cụ vẽ">
+              {TOOLS.map((t) => (
+                <button
+                  key={t.id}
+                  className={"snip-btn" + (tool === t.id ? " on" : "")}
+                  title={`${t.label} (${t.key})`}
+                  aria-label={t.label}
+                  aria-pressed={tool === t.id}
+                  onClick={() => setTool(tool === t.id ? null : t.id)}
+                >
+                  {t.icon}
+                </button>
+              ))}
+              <span className="snip-hsep" />
               <button
-                key={t.id}
-                className={"snip-btn" + (tool === t.id ? " on" : "")}
-                title={`${t.label} (${t.key})`}
-                aria-label={t.label}
-                aria-pressed={tool === t.id}
-                onClick={() => setTool(tool === t.id ? null : t.id)}
+                className="snip-btn"
+                title="Hoàn tác (Ctrl+Z)"
+                aria-label="Hoàn tác"
+                disabled={shapes.length === 0}
+                onClick={() => setShapes((s) => s.slice(0, -1))}
               >
-                {t.icon}
+                ↶
               </button>
-            ))}
-            <span className="snip-sep" />
-            <button
-              className="snip-btn"
-              title="Hoàn tác (Ctrl+Z)"
-              aria-label="Hoàn tác"
-              disabled={shapes.length === 0}
-              onClick={() => setShapes((s) => s.slice(0, -1))}
-            >
-              ↶
-            </button>
-            <span className="snip-sep" />
-            <button className="snip-btn" title="Hủy (Esc)" aria-label="Hủy" onClick={() => snipCancel()}>
-              ✕
-            </button>
-            <button className="snip-btn snip-wide" title="Lưu vào máy (Ctrl+S)" disabled={busy} onClick={() => finish("save")}>
-              Lưu
-            </button>
-            <button className="snip-btn snip-wide" title="Sao chép để dán (Ctrl+C)" disabled={busy} onClick={() => finish("copy")}>
-              Sao chép
-            </button>
-            <button className="snip-btn snip-wide snip-done" title="Lưu và sao chép (Enter)" disabled={busy} onClick={() => finish("both")}>
-              ✓ Xong
-            </button>
+            </div>
+            {tool && tool !== "mosaic" && (
+              <div className="snip-col snip-options">
+                <div className="snip-col" role="radiogroup" aria-label="Màu">
+                  {COLORS.map((c, i) => (
+                    <button
+                      key={c}
+                      role="radio"
+                      className={"snip-swatch" + (color === c ? " on" : "")}
+                      style={{ background: c }}
+                      title={COLOR_NAMES[i]}
+                      aria-label={`Màu ${COLOR_NAMES[i]}`}
+                      aria-checked={color === c}
+                      onClick={() => setColor(c)}
+                    />
+                  ))}
+                </div>
+                <span className="snip-hsep" />
+                <div className="snip-col" role="radiogroup" aria-label={tool === "text" ? "Cỡ chữ" : "Cỡ nét"}>
+                  {SIZES.map((s, i) => (
+                    <button
+                      key={s.label}
+                      role="radio"
+                      className={"snip-btn snip-size-btn" + (sizeIndex === i ? " on" : "")}
+                      title={tool === "text" ? `Chữ ${s.label.toLowerCase()}` : `Nét ${s.label.toLowerCase()}`}
+                      aria-label={tool === "text" ? `Chữ ${s.label.toLowerCase()}` : `Nét ${s.label.toLowerCase()}`}
+                      aria-checked={sizeIndex === i}
+                      onClick={() => setSizeIndex(i)}
+                    >
+                      <span className="snip-dot" style={{ width: 4 + s.stroke * 1.5, height: 4 + s.stroke * 1.5, background: color }} />
+                    </button>
+                  ))}
+                </div>
+                {tool === "text" && (
+                  <>
+                    <span className="snip-hsep" />
+                    <div className="snip-col" role="radiogroup" aria-label="Nền chữ">
+                      {TEXT_BGS.map((b) => (
+                        <button
+                          key={b.value}
+                          role="radio"
+                          aria-checked={textBg === b.value}
+                          className={"snip-btn snip-bg-btn" + (textBg === b.value ? " on" : "")}
+                          title={b.label}
+                          aria-label={b.label}
+                          onClick={() => setTextBg(b.value)}
+                        >
+                          <span
+                            className={"snip-bg-sample snip-bg-" + b.value}
+                            style={b.value === "color" ? { background: color, color: textColors(color, "color").fill } : undefined}
+                          >
+                            Aa
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
-          {tool && tool !== "mosaic" && (
-            <div className="snip-row" aria-label="Màu và cỡ nét">
-              {COLORS.map((c, i) => (
-                <button
-                  key={c}
-                  className={"snip-swatch" + (color === c ? " on" : "")}
-                  style={{ background: c }}
-                  title={COLOR_NAMES[i]}
-                  aria-label={`Màu ${COLOR_NAMES[i]}`}
-                  aria-pressed={color === c}
-                  onClick={() => setColor(c)}
-                />
-              ))}
-              <span className="snip-sep" />
-              {SIZES.map((s, i) => (
-                <button
-                  key={s.label}
-                  className={"snip-btn snip-size-btn" + (sizeIndex === i ? " on" : "")}
-                  title={tool === "text" ? `Chữ ${s.label.toLowerCase()}` : `Nét ${s.label.toLowerCase()}`}
-                  aria-label={tool === "text" ? `Chữ ${s.label.toLowerCase()}` : `Nét ${s.label.toLowerCase()}`}
-                  aria-pressed={sizeIndex === i}
-                  onClick={() => setSizeIndex(i)}
-                >
-                  <span className="snip-dot" style={{ width: 4 + s.stroke * 1.5, height: 4 + s.stroke * 1.5, background: color }} />
-                </button>
-              ))}
+
+          {/* Finishing actions: under the area, or above it near the bottom edge. */}
+          <div
+            ref={actionsRef}
+            className="snip-panel snip-actions"
+            style={{ left: actionsLeft, top: actionsTop }}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <div className="snip-row" role="toolbar" aria-label="Lưu và sao chép">
+              <button className="snip-btn" title="Hủy (Esc)" aria-label="Hủy" onClick={() => snipCancel()}>
+                ✕
+              </button>
+              <button className="snip-btn snip-wide" title="Lưu vào máy (Ctrl+S)" disabled={busy} onClick={() => finish("save")}>
+                Lưu
+              </button>
+              <button className="snip-btn snip-wide" title="Sao chép để dán (Ctrl+C)" disabled={busy} onClick={() => finish("copy")}>
+                Sao chép
+              </button>
+              <button className="snip-btn snip-wide snip-done" title="Lưu và sao chép (Enter)" disabled={busy} onClick={() => finish("both")}>
+                ✓ Xong
+              </button>
             </div>
-          )}
-          {tool === "text" && (
-            <div className="snip-row" role="radiogroup" aria-label="Nền chữ">
-              <span className="snip-label">Nền chữ</span>
-              {TEXT_BGS.map((b) => (
-                <button
-                  key={b.value}
-                  role="radio"
-                  aria-checked={textBg === b.value}
-                  className={"snip-btn snip-bg-btn" + (textBg === b.value ? " on" : "")}
-                  title={b.label}
-                  onClick={() => setTextBg(b.value)}
-                >
-                  <span className={"snip-bg-sample snip-bg-" + b.value} style={b.value === "color" ? { background: color, color: textColors(color, "color").fill } : undefined}>
-                    Aa
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-          {error && <p className="snip-error" role="alert">{error}</p>}
-        </div>
+            {error && <p className="snip-error" role="alert">{error}</p>}
+          </div>
+        </>
       )}
     </div>
   );

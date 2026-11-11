@@ -247,3 +247,21 @@ html[data-window="control-bar"] #root { height: auto; }
 .snip-bg-none { color: var(--text); outline: 1px dashed var(--border); }
 .snip-bg-dark { background: #000; color: #fff; }
 .snip-bg-light { background: #fff; color: #111; }
+.snip-bg-orange { background: #ffa41b; color: #111; }
+/* The text box preview uses the same padding as the drawn box, without moving the text. */
+.snip-text { padding: 0.18em 0.35em; margin: -0.18em 0 0 -0.35em; border-radius: 0.25em; }
+
+/* Capture-and-annotate: two floating panels (tools beside the area, actions under it) */
+.snip-panel {
+  position: absolute; display: flex; gap: 6px; padding: 5px;
+  background: rgba(15, 19, 27, .97); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+}
+.snip-tools { flex-direction: row; align-items: flex-start; }
+.snip-tools.snip-flip { flex-direction: row-reverse; }
+.snip-actions { flex-direction: column; }
+.snip-col { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.snip-options { padding: 0 2px; }
+.snip-tools > .snip-options { border-left: 1px solid var(--border); padding-left: 6px; }
+.snip-tools.snip-flip > .snip-options { border-left: 0; border-right: 1px solid var(--border); padding: 0 6px 0 0; }
+.snip-hsep { height: 1px; align-self: stretch; background: var(--border); margin: 3px 2px; }
