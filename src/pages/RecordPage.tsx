@@ -4,6 +4,7 @@ import {
   errorMessage,
   formatElapsed,
   listMonitors,
+  listWindows,
   pickTarget,
   recCancel,
   recStart,
@@ -48,6 +49,7 @@ export default function RecordPage() {
   const [mode, setMode] = useState<Mode>("monitor");
   const [monitorIndex, setMonitorIndex] = useState(0);
   const [windowTarget, setWindowTarget] = useState<Target | null>(null);
+  const [windowTitle, setWindowTitle] = useState("");
   const [regionTarget, setRegionTarget] = useState<Extract<Target, { kind: "region" }> | null>(null);
   const [note, setNote] = useState("");
   const { state } = status;
@@ -98,7 +100,12 @@ export default function RecordPage() {
     try {
       const picked = await pickTarget(kind);
       if (!picked) return;
-      if (picked.kind === "window") setWindowTarget(picked);
+      if (picked.kind === "window") {
+        setWindowTarget(picked);
+        // Show which window was chosen, by name.
+        const chosen = (await listWindows()).find((w) => w.hwnd === picked.hwnd);
+        setWindowTitle(chosen ? chosen.title : "");
+      }
       if (picked.kind === "region") {
         setRegionTarget(picked);
         save({ last_region: picked.rect });
@@ -165,7 +172,9 @@ export default function RecordPage() {
         <div className={"mode" + (mode === "window" ? " on" : "")}>
           <button role="radio" aria-checked={mode === "window"} className="mode-main" disabled={!idle} onClick={() => (windowTarget ? setMode("window") : pick("window"))}>
             <span className="mode-title">Cửa sổ</span>
-            <span className="mode-sub">{windowTarget ? "Đã chọn một cửa sổ" : "Chỉ quay một cửa sổ"}</span>
+            <span className="mode-sub mode-window-name" title={windowTitle}>
+              {windowTarget ? windowTitle || "Đã chọn một cửa sổ" : "Chỉ quay một cửa sổ"}
+            </span>
           </button>
           <button className="btn btn-small" disabled={!idle} onClick={() => pick("window")}>
             {windowTarget ? "Chọn lại" : "Chọn cửa sổ"}

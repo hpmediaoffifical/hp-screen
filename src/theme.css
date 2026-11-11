@@ -166,3 +166,6 @@ ul.grid, ul.recent { list-style: none; margin: 0; padding: 0; }
 .check input { width: 16px; height: 16px; margin-top: 3px; accent-color: var(--accent); flex: none; }
 .check-hint { display: block; margin-top: 2px; }
 @media (max-width: 760px) { .field { grid-template-columns: 1fr; gap: 4px; } }
+.mode-main { min-width: 0; }
+.mode-window-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.mode.on .mode-window-name { color: var(--text); }
