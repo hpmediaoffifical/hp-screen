@@ -108,6 +108,9 @@ export interface Settings {
   input_log: boolean;
   autostart: boolean;
   last_region: Rect | null;
+  hotkey_draw: string;
+  /** 0, 2, 3, 5 or 10; 0 keeps strokes until cleared. */
+  draw_fade_secs: number;
 }
 export const settingsGet = () => invoke<Settings>("settings_get");
 export const settingsSet = (settings: Settings) => invoke<Settings>("settings_set", { settings });

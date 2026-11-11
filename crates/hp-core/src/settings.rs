@@ -13,6 +13,10 @@ pub const DEFAULT_HOTKEY_PAUSE: &str = "Ctrl+Alt+P";
 pub const DEFAULT_HOTKEY_SCREENSHOT: &str = "Ctrl+Alt+S";
 /// Instant screenshot of the selected source, no editing.
 pub const DEFAULT_HOTKEY_QUICKSHOT: &str = "Ctrl+Alt+A";
+/// Draw on screen while recording.
+pub const DEFAULT_HOTKEY_DRAW: &str = "Ctrl+Alt+D";
+/// Seconds a finished stroke stays before fading; 0 keeps strokes until cleared.
+pub const DRAW_FADE_CHOICES: [u32; 5] = [0, 2, 3, 5, 10];
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -35,6 +39,9 @@ pub struct Settings {
     pub input_log: bool,
     pub autostart: bool,
     pub last_region: Option<Rect>,
+    pub hotkey_draw: String,
+    /// One of `DRAW_FADE_CHOICES`.
+    pub draw_fade_secs: u32,
 }
 
 impl Default for Settings {
@@ -55,6 +62,8 @@ impl Default for Settings {
             input_log: true,
             autostart: false,
             last_region: None,
+            hotkey_draw: DEFAULT_HOTKEY_DRAW.to_string(),
+            draw_fade_secs: 3,
         }
     }
 }
@@ -95,12 +104,16 @@ pub fn normalize(mut s: Settings) -> Settings {
     if s.name_pattern.trim().is_empty() {
         s.name_pattern = defaults.name_pattern;
     }
+    if !DRAW_FADE_CHOICES.contains(&s.draw_fade_secs) {
+        s.draw_fade_secs = defaults.draw_fade_secs;
+    }
 
-    const SPARE_HOTKEYS: [&str; 7] = [
+    const SPARE_HOTKEYS: [&str; 8] = [
         DEFAULT_HOTKEY_TOGGLE,
         DEFAULT_HOTKEY_PAUSE,
         DEFAULT_HOTKEY_SCREENSHOT,
         DEFAULT_HOTKEY_QUICKSHOT,
+        DEFAULT_HOTKEY_DRAW,
         "Ctrl+Alt+F9",
         "Ctrl+Alt+F10",
         "Ctrl+Alt+F11",
@@ -111,6 +124,7 @@ pub fn normalize(mut s: Settings) -> Settings {
         (&mut s.hotkey_pause, DEFAULT_HOTKEY_PAUSE),
         (&mut s.hotkey_screenshot, DEFAULT_HOTKEY_SCREENSHOT),
         (&mut s.hotkey_quickshot, DEFAULT_HOTKEY_QUICKSHOT),
+        (&mut s.hotkey_draw, DEFAULT_HOTKEY_DRAW),
     ] {
         let mut value = match parse_hotkey(slot) {
             Ok(h) => format_hotkey(&h),
@@ -132,6 +146,27 @@ pub fn normalize(mut s: Settings) -> Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn draw_defaults() {
+        let s = Settings::default();
+        assert_eq!(s.hotkey_draw, "Ctrl+Alt+D");
+        assert_eq!(s.draw_fade_secs, 3);
+    }
+
+    #[test]
+    fn bad_fade_falls_back_to_3() {
+        assert_eq!(load_settings(r#"{"draw_fade_secs":7}"#).draw_fade_secs, 3);
+        assert_eq!(load_settings(r#"{"draw_fade_secs":0}"#).draw_fade_secs, 0);
+        assert_eq!(load_settings(r#"{"draw_fade_secs":10}"#).draw_fade_secs, 10);
+    }
+
+    #[test]
+    fn draw_hotkey_cannot_duplicate_toggle() {
+        let s = load_settings(r#"{"hotkey_draw":"Ctrl+Alt+R"}"#);
+        assert_eq!(s.hotkey_toggle, "Ctrl+Alt+R");
+        assert_ne!(s.hotkey_draw, s.hotkey_toggle);
+    }
 
     #[test]
     fn corrupted_file_gives_defaults() {
