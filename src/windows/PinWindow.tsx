@@ -18,6 +18,9 @@ export default function PinWindow() {
   const [zoom, setZoom] = useState<number | null>(null);
   const zoomTimer = useRef(0);
   const [note, setNote] = useState("");
+  /** Where a press started; the window is dragged only once the pointer really moves, so a
+   * click or a double-click never starts a window drag (which would swallow the second click). */
+  const press = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     let objectUrl = "";
@@ -93,8 +96,16 @@ export default function PinWindow() {
             requestAnimationFrame(() => pinReady().catch(() => {}));
           }}
           onPointerDown={(e) => {
-            if (e.button === 0 && e.detail < 2) getCurrentWindow().startDragging().catch(() => {});
+            press.current = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
           }}
+          onPointerMove={(e) => {
+            const start = press.current;
+            if (!start || !(e.buttons & 1)) return;
+            if (Math.hypot(e.clientX - start.x, e.clientY - start.y) < 4) return;
+            press.current = null;
+            getCurrentWindow().startDragging().catch(() => {});
+          }}
+          onPointerUp={() => (press.current = null)}
           onDoubleClick={() => natural.current && resizeTo(natural.current.w)}
         />
       )}

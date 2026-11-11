@@ -250,3 +250,83 @@ mod tests {
         assert_eq!(bar_position(region, left, 500, 60).0, -1920);
     }
 }
+
+#[cfg(test)]
+mod desktop_tests {
+    //! Captures the real screen. Needs a page framed in magenta (#ff00ff) that scrolls by
+    //! itself while the test runs; no input is sent. Run on request:
+    //! `HP_SCROLL_OUT=out.png cargo test -p hp-screen --lib -- --ignored live_scroll --nocapture`
+    use super::*;
+    use crate::capture::list_monitors;
+    use std::time::Instant;
+
+    /// Bounding box of the magenta frame on a monitor picture, if there is one.
+    fn magenta_box(picture: &image::RgbaImage) -> Option<(u32, u32, u32, u32)> {
+        let (mut x0, mut y0, mut x1, mut y1, mut count) = (u32::MAX, u32::MAX, 0, 0, 0u32);
+        for (x, y, p) in picture.enumerate_pixels() {
+            if p[0] > 235 && p[1] < 25 && p[2] > 235 {
+                (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+                count += 1;
+            }
+        }
+        (count > 2000).then_some((x0, y0, x1, y1))
+    }
+
+    #[test]
+    #[ignore = "captures the real screen while a marked page scrolls"]
+    fn live_scroll_capture_of_a_marked_area() {
+        use windows::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext};
+        // Physical pixels, like the app itself.
+        // SAFETY: plain process setting, called before any window or capture work.
+        let _ = unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+        let secs: u64 = std::env::var("HP_SCROLL_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(14);
+        // The marked window may take a moment to appear.
+        let waiting = Instant::now();
+        let (monitor, (x0, y0, x1, y1)) = loop {
+            let found = list_monitors().into_iter().find_map(|m| {
+                let shot = grab_frame(&Target::Monitor { index: m.index }).ok()?;
+                magenta_box(&shot).map(|b| (m, b))
+            });
+            if let Some(found) = found {
+                break found;
+            }
+            assert!(waiting.elapsed() < Duration::from_secs(15), "no magenta frame on any monitor");
+            std::thread::sleep(Duration::from_millis(300));
+        };
+        // Inside the frame (its border is a few pixels thick at any scale).
+        let inset = 14;
+        let region = Rect {
+            x: monitor.rect.x + (x0 + inset) as i32,
+            y: monitor.rect.y + (y0 + inset) as i32,
+            w: x1 - x0 - 2 * inset,
+            h: y1 - y0 - 2 * inset,
+        };
+        println!("monitor {} region {region:?}", monitor.index);
+        let target = Target::Region { monitor: monitor.index, rect: region };
+        let (w, h) = (region.w as usize, region.h as usize);
+        let mut stitcher = Stitcher::new(w, h, MAX_ROWS);
+        let (mut added, mut same, mut lost) = (0, 0, 0);
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(secs) {
+            if let Ok(picture) = grab_frame(&target)
+                && picture.dimensions() == (region.w, region.h)
+            {
+                match stitcher.push(picture.as_raw()) {
+                    StitchStep::Added(_) => added += 1,
+                    StitchStep::Unchanged => same += 1,
+                    StitchStep::NoMatch => lost += 1,
+                    _ => {}
+                }
+            }
+            std::thread::sleep(INTERVAL);
+        }
+        let (width, height, rgba) = stitcher.finish();
+        println!("added {added}, unchanged {same}, lost {lost}; picture {width} x {height}");
+        let picture = image::RgbaImage::from_raw(width as u32, height as u32, rgba).expect("picture");
+        if let Some(out) = std::env::var_os("HP_SCROLL_OUT") {
+            picture.save(out).expect("save");
+        }
+        assert!(added >= 3, "the page never seemed to scroll");
+        assert!(height > h * 2, "joined picture is not much taller than one frame");
+    }
+}

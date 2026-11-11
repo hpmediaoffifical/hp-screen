@@ -36,9 +36,9 @@ export function ScrollBar() {
   };
 
   const height = progress ? progress.height.toLocaleString("vi-VN") : "0";
-  let message = `Lăn chuột trong khung xanh để cuộn trang xuống · Ảnh đang cao ${height} px`;
+  let message = `Lăn chuột trong khung xanh để cuộn trang xuống · Ảnh đang cao ${height} px`;
   if (progress?.status === "lost") message = "Chưa khớp với phần đã chụp: cuộn ngược lên một chút rồi cuộn xuống chậm hơn. Đoạn trống quá dài cũng không ghép được.";
-  if (progress?.status === "full") message = `Ảnh đã cao tối đa (${height} px). Bấm Xong để lưu.`;
+  if (progress?.status === "full") message = `Ảnh đã cao tối đa (${height} px). Bấm Xong để lưu.`;
   if (error) message = error;
   if (done) message = done;
 
