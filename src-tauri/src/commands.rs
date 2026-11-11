@@ -108,7 +108,9 @@ pub fn settings_set(app: AppHandle, state: State<'_, AppState>, settings: Settin
     crate::paths::write_settings(&app, &settings)?;
     let previous = std::mem::replace(&mut *state.settings.lock().unwrap_or_else(|e| e.into_inner()), settings.clone());
     // Re-registering briefly drops the hotkeys, so only do it when one of them changed.
-    let hotkeys = |s: &Settings| [s.hotkey_toggle.clone(), s.hotkey_pause.clone(), s.hotkey_screenshot.clone()];
+    let hotkeys = |s: &Settings| {
+        [s.hotkey_toggle.clone(), s.hotkey_pause.clone(), s.hotkey_screenshot.clone(), s.hotkey_quickshot.clone()]
+    };
     if hotkeys(&previous) != hotkeys(&settings) {
         crate::hotkeys::register_hotkeys(&app, &settings);
     }
@@ -208,4 +210,42 @@ pub fn output_folder(app: AppHandle, state: State<'_, AppState>) -> Result<Strin
 #[tauri::command]
 pub fn set_target(state: State<'_, AppState>, target: Target) {
     state.recorder.set_target(target);
+}
+
+/// Opens "capture and annotate" from the main window.
+#[tauri::command]
+pub async fn snip_start(app: AppHandle) -> Result<(), String> {
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::snip::start(&handle, true))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn snip_context(app: AppHandle) -> Option<crate::snip::SnipContext> {
+    crate::snip::context(&app)
+}
+
+/// The overlay is drawn and ready: show it.
+#[tauri::command]
+pub fn snip_ready(app: AppHandle) {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window(crate::snip::SNIP) {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+/// Copies and/or saves the annotated picture; returns the saved file, if any.
+#[tauri::command]
+pub async fn snip_finish(app: AppHandle, action: crate::snip::SnipAction, png: String) -> Result<Option<String>, String> {
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::snip::finish(&handle, action, &png))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn snip_cancel(app: AppHandle) {
+    crate::snip::close(&app);
 }

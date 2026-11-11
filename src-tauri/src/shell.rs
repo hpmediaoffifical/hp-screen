@@ -17,10 +17,11 @@ const BAR_MARGIN_BOTTOM: i32 = 96;
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let toggle = MenuItemBuilder::with_id("toggle", "Bắt đầu / Dừng quay").build(app)?;
-    let shot = MenuItemBuilder::with_id("screenshot", "Chụp ảnh").build(app)?;
+    let shot = MenuItemBuilder::with_id("screenshot", "Chụp ảnh và vẽ ghi chú").build(app)?;
+    let quick = MenuItemBuilder::with_id("quickshot", "Chụp nhanh").build(app)?;
     let open = MenuItemBuilder::with_id("open", "Mở HP Screen").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Thoát").build(app)?;
-    let menu = MenuBuilder::new(app).items(&[&toggle, &shot]).separator().items(&[&open]).separator().items(&[&quit]).build()?;
+    let menu = MenuBuilder::new(app).items(&[&toggle, &shot, &quick]).separator().items(&[&open]).separator().items(&[&quit]).build()?;
 
     let mut tray = TrayIconBuilder::with_id("hp-tray").tooltip("HP Screen").menu(&menu).show_menu_on_left_click(false);
     if let Some(icon) = app.default_window_icon() {
@@ -29,6 +30,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     tray.on_menu_event(|app, event| match event.id().as_ref() {
         "toggle" => hotkeys::run_action(app, HotkeyAction::Toggle),
         "screenshot" => hotkeys::run_action(app, HotkeyAction::Screenshot),
+        "quickshot" => hotkeys::run_action(app, HotkeyAction::Quickshot),
         "open" => show_main(app),
         "quit" => quit_app(app),
         _ => {}

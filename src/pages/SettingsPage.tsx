@@ -12,12 +12,13 @@ import {
   type Settings,
 } from "../api";
 
-type HotkeyField = "hotkey_toggle" | "hotkey_pause" | "hotkey_screenshot";
+type HotkeyField = "hotkey_toggle" | "hotkey_pause" | "hotkey_screenshot" | "hotkey_quickshot";
 
 const HOTKEYS: { field: HotkeyField; action: HotkeyStatus["action"]; label: string }[] = [
   { field: "hotkey_toggle", action: "toggle", label: "Bật / tắt quay" },
   { field: "hotkey_pause", action: "pause", label: "Tạm dừng / tiếp tục" },
-  { field: "hotkey_screenshot", action: "screenshot", label: "Chụp ảnh" },
+  { field: "hotkey_screenshot", action: "screenshot", label: "Chụp ảnh và vẽ ghi chú" },
+  { field: "hotkey_quickshot", action: "quickshot", label: "Chụp nhanh (không vẽ)" },
 ];
 
 const QUALITIES: { value: Quality; label: string; hint: string }[] = [

@@ -251,7 +251,12 @@ impl Inner {
             }
         });
         let own_hotkeys =
-            vec![settings.hotkey_toggle.clone(), settings.hotkey_pause.clone(), settings.hotkey_screenshot.clone()];
+            vec![
+            settings.hotkey_toggle.clone(),
+            settings.hotkey_pause.clone(),
+            settings.hotkey_screenshot.clone(),
+            settings.hotkey_quickshot.clone(),
+        ];
         let pipeline = Pipeline::start(cfg, on_event)?;
         // The input log is an extra: failing to start it must not stop the recording.
         *lock(&self.input_hook) =

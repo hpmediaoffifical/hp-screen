@@ -100,6 +100,7 @@ export interface Settings {
   hotkey_toggle: string;
   hotkey_pause: string;
   hotkey_screenshot: string;
+  hotkey_quickshot: string;
   input_log: boolean;
   autostart: boolean;
   last_region: Rect | null;
@@ -108,7 +109,7 @@ export const settingsGet = () => invoke<Settings>("settings_get");
 export const settingsSet = (settings: Settings) => invoke<Settings>("settings_set", { settings });
 
 export interface HotkeyStatus {
-  action: "toggle" | "pause" | "screenshot";
+  action: "toggle" | "pause" | "screenshot" | "quickshot";
   hotkey: string;
   ok: boolean;
   message: string | null;
@@ -154,3 +155,15 @@ export const pickFolder = () => invoke<string | null>("pick_folder");
 export const outputFolder = () => invoke<string>("output_folder");
 
 export const setTarget = (target: Target) => invoke<void>("set_target", { target });
+
+export type SnipAction = "copy" | "save" | "both";
+export interface SnipContext {
+  frozen: string;
+  monitor: MonitorInfo;
+}
+/** Opens "capture and annotate" from the main window. */
+export const snipStart = () => invoke<void>("snip_start");
+export const snipContext = () => invoke<SnipContext | null>("snip_context");
+export const snipReady = () => invoke<void>("snip_ready");
+export const snipFinish = (action: SnipAction, png: string) => invoke<string | null>("snip_finish", { action, png });
+export const snipCancel = () => invoke<void>("snip_cancel");

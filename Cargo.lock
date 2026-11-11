@@ -1668,6 +1668,7 @@ name = "hp-screen"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "base64 0.23.1",
  "cpal",
  "hp-core",
  "image",

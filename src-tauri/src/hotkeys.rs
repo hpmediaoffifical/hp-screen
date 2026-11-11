@@ -13,7 +13,10 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 pub enum HotkeyAction {
     Toggle,
     Pause,
+    /// Capture an area and draw notes on it.
     Screenshot,
+    /// Instant screenshot of the selected source.
+    Quickshot,
 }
 
 /// Outcome of registering one hotkey, shown next to its field in Settings.
@@ -38,6 +41,7 @@ pub fn register_hotkeys(app: &AppHandle, settings: &Settings) -> Vec<HotkeyStatu
         (HotkeyAction::Toggle, &settings.hotkey_toggle),
         (HotkeyAction::Pause, &settings.hotkey_pause),
         (HotkeyAction::Screenshot, &settings.hotkey_screenshot),
+        (HotkeyAction::Quickshot, &settings.hotkey_quickshot),
     ]
     .into_iter()
     .map(|(action, hotkey)| {
@@ -80,6 +84,16 @@ pub fn run_action(app: &AppHandle, action: HotkeyAction) {
         // Pressing pause when nothing is recording is not an error worth showing.
         HotkeyAction::Pause => state.recorder.toggle_pause().or(Ok(())),
         HotkeyAction::Screenshot => {
+            let app = app.clone();
+            // Freezing the screen takes a moment; keep the hotkey thread free.
+            std::thread::spawn(move || {
+                if let Err(message) = crate::snip::start(&app, false) {
+                    events::rec_error(&app, &message);
+                }
+            });
+            Ok(())
+        }
+        HotkeyAction::Quickshot => {
             let target = state.recorder.last_target().unwrap_or_else(default_target);
             let app = app.clone();
             // Capturing takes a moment; keep the hotkey thread free.

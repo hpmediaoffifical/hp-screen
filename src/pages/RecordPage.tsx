@@ -13,6 +13,7 @@ import {
   settingsGet,
   settingsSet,
   setTarget,
+  snipStart,
   takeScreenshot,
   type AudioStatus,
   type MonitorInfo,
@@ -244,13 +245,18 @@ export default function RecordPage() {
           </>
         )}
         {state === "finalizing" && <span className="status">{STATE_LABEL.finalizing}</span>}
+        <button className="btn btn-big" onClick={() => run(snipStart)} title="Chọn vùng, vẽ ghi chú, rồi sao chép hoặc lưu">
+          Chụp &amp; vẽ
+          {settings && <kbd>{settings.hotkey_screenshot}</kbd>}
+        </button>
         <button
           className="btn btn-big"
           disabled={!target || state === "finalizing"}
+          title="Chụp ngay theo chế độ đang chọn, lưu và sao chép"
           onClick={() => target && run(() => takeScreenshot(target), (path) => `Đã lưu ảnh và copy vào clipboard: ${path}`)}
         >
-          Chụp ảnh
-          {settings && <kbd>{settings.hotkey_screenshot}</kbd>}
+          Chụp nhanh
+          {settings && <kbd>{settings.hotkey_quickshot}</kbd>}
         </button>
         {targetHint && idle && <span className="status warn">{targetHint}</span>}
       </div>

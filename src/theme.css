@@ -169,3 +169,44 @@ ul.grid, ul.recent { list-style: none; margin: 0; padding: 0; }
 .mode-main { min-width: 0; }
 .mode-window-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .mode.on .mode-window-name { color: var(--text); }
+
+/* Capture-and-annotate overlay */
+html[data-window="snip"], html[data-window="snip"] body { background: #000; overflow: hidden; }
+.snip { position: fixed; inset: 0; user-select: none; }
+.snip-canvas { position: absolute; inset: 0; width: 100vw; height: 100vh; display: block; touch-action: none; }
+.snip-hint {
+  position: absolute; left: 50%; top: 24px; transform: translateX(-50%); margin: 0; pointer-events: none;
+  background: rgba(12, 15, 22, .9); color: #fff; padding: 8px 16px; border-radius: 999px; white-space: nowrap;
+}
+.snip-size {
+  position: absolute; background: #4c8dff; color: #fff; font-size: 12px; padding: 2px 8px; border-radius: 4px;
+  pointer-events: none; font-variant-numeric: tabular-nums;
+}
+.snip-toolbar {
+  position: absolute; display: flex; flex-direction: column; gap: 6px; padding: 6px;
+  background: rgba(15, 19, 27, .97); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+}
+.snip-row { display: flex; align-items: center; gap: 4px; }
+.snip-btn {
+  min-width: 34px; height: 34px; border-radius: 7px; border: 1px solid transparent; background: transparent;
+  color: var(--text); font-size: 17px; display: inline-flex; align-items: center; justify-content: center; padding: 0 8px;
+}
+.snip-btn:hover:not(:disabled) { background: #1e2636; }
+.snip-btn.on { background: #1b2740; border-color: var(--accent); color: #fff; }
+.snip-btn:disabled { opacity: .4; cursor: default; }
+.snip-btn:focus-visible, .snip-swatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.snip-wide { font-size: 13px; font-weight: 600; }
+.snip-done { background: #2f7d5b; color: #fff; }
+.snip-done:hover:not(:disabled) { background: #379469; }
+.snip-sep { width: 1px; align-self: stretch; background: var(--border); margin: 2px 4px; }
+.snip-swatch { width: 22px; height: 22px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, .25); padding: 0; }
+.snip-swatch.on { border-color: #fff; box-shadow: 0 0 0 2px var(--accent); }
+.snip-size-btn { min-width: 30px; }
+.snip-dot { border-radius: 50%; display: block; }
+.snip-text {
+  position: absolute; min-width: 140px; background: rgba(0, 0, 0, .25); border: 1px dashed #fff; border-radius: 4px;
+  font-family: "Segoe UI", sans-serif; font-weight: 600; resize: none; outline: none; padding: 0; line-height: 1.25;
+  field-sizing: content;
+}
+.snip-error { color: #ff8589; margin: 0; font-size: 12px; max-width: 420px; }

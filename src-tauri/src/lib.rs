@@ -13,6 +13,7 @@ mod pipeline;
 mod recorder;
 mod screenshot;
 mod shell;
+mod snip;
 
 use commands::AppState;
 use hotkeys::HotkeyRegistry;
@@ -32,6 +33,7 @@ pub fn run() {
             let settings = paths::read_settings(handle);
             app.manage(HotkeyRegistry::default());
             app.manage(picker::PickerState::default());
+            app.manage(snip::SnipState::default());
             app.manage(AppState { settings: Mutex::new(settings.clone()), recorder: Recorder::new(handle.clone()) });
             shell::setup(handle)?;
             let _registered = hotkeys::register_hotkeys(handle, &settings);
@@ -64,6 +66,11 @@ pub fn run() {
             commands::pick_folder,
             commands::output_folder,
             commands::set_target,
+            commands::snip_start,
+            commands::snip_context,
+            commands::snip_ready,
+            commands::snip_finish,
+            commands::snip_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("error while running HP Screen");

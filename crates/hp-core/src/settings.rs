@@ -9,7 +9,10 @@ use std::path::PathBuf;
 pub const SETTINGS_VERSION: u32 = 1;
 pub const DEFAULT_HOTKEY_TOGGLE: &str = "Ctrl+Alt+R";
 pub const DEFAULT_HOTKEY_PAUSE: &str = "Ctrl+Alt+P";
+/// Capture an area and draw notes on it.
 pub const DEFAULT_HOTKEY_SCREENSHOT: &str = "Ctrl+Alt+S";
+/// Instant screenshot of the selected source, no editing.
+pub const DEFAULT_HOTKEY_QUICKSHOT: &str = "Ctrl+Alt+A";
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -28,6 +31,7 @@ pub struct Settings {
     pub hotkey_toggle: String,
     pub hotkey_pause: String,
     pub hotkey_screenshot: String,
+    pub hotkey_quickshot: String,
     pub input_log: bool,
     pub autostart: bool,
     pub last_region: Option<Rect>,
@@ -47,6 +51,7 @@ impl Default for Settings {
             hotkey_toggle: DEFAULT_HOTKEY_TOGGLE.to_string(),
             hotkey_pause: DEFAULT_HOTKEY_PAUSE.to_string(),
             hotkey_screenshot: DEFAULT_HOTKEY_SCREENSHOT.to_string(),
+            hotkey_quickshot: DEFAULT_HOTKEY_QUICKSHOT.to_string(),
             input_log: true,
             autostart: false,
             last_region: None,
@@ -91,10 +96,11 @@ pub fn normalize(mut s: Settings) -> Settings {
         s.name_pattern = defaults.name_pattern;
     }
 
-    const SPARE_HOTKEYS: [&str; 6] = [
+    const SPARE_HOTKEYS: [&str; 7] = [
         DEFAULT_HOTKEY_TOGGLE,
         DEFAULT_HOTKEY_PAUSE,
         DEFAULT_HOTKEY_SCREENSHOT,
+        DEFAULT_HOTKEY_QUICKSHOT,
         "Ctrl+Alt+F9",
         "Ctrl+Alt+F10",
         "Ctrl+Alt+F11",
@@ -104,6 +110,7 @@ pub fn normalize(mut s: Settings) -> Settings {
         (&mut s.hotkey_toggle, DEFAULT_HOTKEY_TOGGLE),
         (&mut s.hotkey_pause, DEFAULT_HOTKEY_PAUSE),
         (&mut s.hotkey_screenshot, DEFAULT_HOTKEY_SCREENSHOT),
+        (&mut s.hotkey_quickshot, DEFAULT_HOTKEY_QUICKSHOT),
     ] {
         let mut value = match parse_hotkey(slot) {
             Ok(h) => format_hotkey(&h),
@@ -185,5 +192,32 @@ mod tests {
         s.last_region = Some(Rect { x: -10, y: 20, w: 640, h: 480 });
         let json = serde_json::to_string(&s).unwrap();
         assert_eq!(load_settings(&json), s);
+    }
+}
+
+#[cfg(test)]
+mod quickshot_tests {
+    use super::*;
+
+    /// Ctrl+Alt+S opens "capture and annotate"; the old instant screenshot has its own key.
+    #[test]
+    fn instant_screenshot_has_its_own_hotkey_defaulting_to_ctrl_alt_a() {
+        let s = Settings::default();
+        assert_eq!(s.hotkey_screenshot, "Ctrl+Alt+S");
+        assert_eq!(s.hotkey_quickshot, "Ctrl+Alt+A");
+        // Files written before this setting existed get the default.
+        assert_eq!(load_settings(r#"{"hotkey_screenshot":"Ctrl+Alt+S"}"#).hotkey_quickshot, "Ctrl+Alt+A");
+    }
+
+    #[test]
+    fn the_quickshot_hotkey_cannot_collide_with_the_other_three() {
+        let s = load_settings(r#"{"hotkey_quickshot":"Ctrl+Alt+R"}"#);
+        let keys = [&s.hotkey_toggle, &s.hotkey_pause, &s.hotkey_screenshot, &s.hotkey_quickshot];
+        for (i, a) in keys.iter().enumerate() {
+            for b in &keys[i + 1..] {
+                assert_ne!(a, b, "two actions share {a}");
+            }
+        }
+        assert_eq!(load_settings(r#"{"hotkey_quickshot":"bad"}"#).hotkey_quickshot, "Ctrl+Alt+A");
     }
 }
