@@ -96,6 +96,8 @@ pub fn run() {
             edit_cmds::edit_keep,
             edit_cmds::export_start,
             edit_cmds::export_cancel,
+            edit_cmds::zoom_auto,
+            edit_cmds::zoom_track,
             live_cmds::draw_set,
             live_cmds::draw_toggle,
             live_cmds::draw_stroke,

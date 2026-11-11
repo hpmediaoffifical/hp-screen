@@ -5,6 +5,7 @@ use crate::export::{export_path, run_export};
 use hp_core::cut::Span;
 use hp_core::edit::{EditDoc, LoadError, load_edit, save_edit};
 use hp_core::effects::{Effects, build_effects};
+use hp_core::zoom::{Camera, ZoomSegment, auto_segments, camera_track, regenerate};
 use hp_core::input_log::parse_log;
 use hp_core::library::{DATA_DIR, Kind, edit_path, kind_of, sidecar_path};
 use hp_core::plan::{Plan, Source};
@@ -116,6 +117,50 @@ fn effects_for(media: &Path, info: &VideoInfo) -> Option<Effects> {
     Some(build_effects(&log, info.width, info.height))
 }
 
+/// Zoom segments made from the clicks in `effects`, keeping manual ones; without a log the
+/// existing segments stay as they are.
+fn auto_zoom(effects: Option<&Effects>, doc: &EditDoc, w: u32, h: u32, duration_ms: i64) -> Vec<ZoomSegment> {
+    let Some(fx) = effects else { return doc.zoom.segments.clone() };
+    let (w, h) = (w.max(1) as f32, h.max(1) as f32);
+    let clicks: Vec<(i64, f32, f32)> = fx.ripples.iter().map(|r| (r.t_ms, r.x / w, r.y / h)).collect();
+    regenerate(&doc.zoom.segments, auto_segments(&clicks, duration_ms))
+}
+
+/// Camera samples for the preview: every 1000/60 ms, as in the export.
+fn zoom_samples(effects: Option<&Effects>, doc: &EditDoc, w: u32, h: u32, duration_ms: i64) -> Vec<(i64, Camera)> {
+    let (fw, fh) = (w.max(1) as f32, h.max(1) as f32);
+    let cursor = |t: i64| effects.and_then(|e| e.cursor_at(t)).map(|(x, y)| (x / fw, y / fh));
+    camera_track(&doc.zoom, &cursor, duration_ms, 1000 / 60)
+}
+
+/// The video's size and length as the edit page knows them (saves reopening the file).
+#[derive(serde::Deserialize)]
+pub struct Frame {
+    pub width: u32,
+    pub height: u32,
+    pub duration_ms: i64,
+}
+
+fn frame_info(f: &Frame) -> VideoInfo {
+    VideoInfo { width: f.width, height: f.height, duration_ms: f.duration_ms, fps: 30, has_audio: false }
+}
+
+/// Automatic zoom segments from the clicks in the input log, keeping manual ones.
+#[tauri::command]
+pub async fn zoom_auto(app: AppHandle, state: State<'_, AppState>, path: String, doc: EditDoc, frame: Frame) -> Result<Vec<ZoomSegment>, String> {
+    let media = video_item(&app, &state, &path)?;
+    let fx = effects_for(&media, &frame_info(&frame));
+    Ok(auto_zoom(fx.as_ref(), &doc, frame.width, frame.height, frame.duration_ms))
+}
+
+/// The zoom camera over source time, for the preview.
+#[tauri::command]
+pub async fn zoom_track(app: AppHandle, state: State<'_, AppState>, path: String, doc: EditDoc, frame: Frame) -> Result<Vec<(i64, Camera)>, String> {
+    let media = video_item(&app, &state, &path)?;
+    let fx = effects_for(&media, &frame_info(&frame));
+    Ok(zoom_samples(fx.as_ref(), &doc, frame.width, frame.height, frame.duration_ms))
+}
+
 /// Removes `.part` files an export left behind when the app was closed while exporting.
 /// Called at start-up and before each export (never while one is running).
 pub(crate) fn remove_stale_parts(dir: &Path) {
@@ -222,6 +267,24 @@ mod tests {
 
     fn info() -> VideoInfo {
         VideoInfo { width: 640, height: 480, duration_ms: 1000, fps: 30, has_audio: false }
+    }
+
+    #[test]
+    fn zoom_auto_without_log_keeps_segments() {
+        use hp_core::zoom::ZoomSegment;
+        let mut doc = EditDoc::default();
+        doc.zoom.segments = vec![ZoomSegment { start_ms: 0, end_ms: 2000, manual: true, ..ZoomSegment::default() }];
+        assert_eq!(auto_zoom(None, &doc, 640, 480, 10_000), doc.zoom.segments);
+    }
+
+    #[test]
+    fn zoom_auto_makes_segments_from_clicks() {
+        use hp_core::input_log::{Button, Event, ParsedLog};
+        let log = ParsedLog { header: None, events: vec![Event::Down { t: 1000, b: Button::Left, x: 160, y: 120 }] };
+        let fx = build_effects(&log, 640, 480);
+        let out = auto_zoom(Some(&fx), &EditDoc::default(), 640, 480, 10_000);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].center, Some((0.25, 0.25)), "clicks are normalised to the frame");
     }
 
     #[test]
