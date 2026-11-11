@@ -166,3 +166,18 @@ Cột "Máy" ghi những gì kiểm thử tự động đã phủ (video mẫu d
 | F5 | Thẻ Xuất → GIF, 15 fps, 720 px: file `_edit.gif` mở được trong trình duyệt, chạy lặp, đúng tốc độ | Đạt (`gif_has_the_frames_and_size`, `frames_size_timing_and_colour_survive`) | |
 | F6 | GIF hiện trong Thư viện (loại Ảnh) | Đạt cho cách xếp loại (`gif_names_do_not_overwrite`) | |
 | F7 | Quay một vùng chọn có kích thước bất kỳ (ví dụ 301×201), xuất ra: hình không bị lệch hay xéo | Đạt (`widths_that_are_not_multiples_of_16_are_not_skewed`) | |
+
+## Phụ đề tiếng Việt (giai đoạn 2, bước 7)
+
+Cần mạng cho lần đầu (tải khoảng 584 MB với model "Chính xác", 157 MB với model "Nhẹ"). Sau đó không cần mạng.
+
+| # | Việc cần thử | Máy | Người |
+|---|---|---|---|
+| S1 | Thẻ Phụ đề → "Tạo phụ đề" lần đầu: hiện hộp hỏi, ghi rõ dung lượng, nguồn tải (github.com, huggingface.co) và thư mục lưu. "Để sau" thì không tải gì | — | |
+| S2 | Đồng ý tải: thanh tiến độ chạy theo MB, bấm Hủy thì dừng; tải lại thì xong và tự tạo phụ đề | Đạt cho kiểm mã SHA-256 và giải nén (`sha256_of_a_known_file`, `zip_with_the_cli_in_a_subfolder`) | |
+| S3 | Video nói tiếng Việt 1–3 phút: phụ đề đúng phần lớn lời, mỗi dòng không quá 2 hàng, khớp thời gian | Đạt cho cách chia dòng (`long_segments_are_split_into_readable_cues`) | |
+| S4 | Sửa chữ một dòng, Gộp, Tách tại đây, Xóa, Đầu / Cuối; Ctrl+Z lấy lại được | Đạt cho phép tính (`subsMath.test.ts`) | |
+| S5 | Bấm vào giờ của một dòng: video tua tới đó; xem trước hiện phụ đề đang phát | — | |
+| S6 | Bật "Ghi cứng phụ đề vào video", xuất MP4: chữ nằm gần cạnh dưới, nền tối; phím tắt (nếu có) nằm trên phụ đề | Đạt (`subtitle_is_drawn_near_the_bottom`, `chips_move_above_a_burned_subtitle`) | |
+| S7 | "Xuất SRT": file `_edit.srt` cạnh video, mở trong CapCut hoặc VLC thấy đúng dấu tiếng Việt và đúng giờ (cả khi đã cắt bớt đoạn giữa) | Đạt (`srt_is_written_next_to_the_video_without_overwriting`, `srt_uses_output_time`) | |
+| S8 | Video không có tiếng: nút Tạo phụ đề tắt, có lời giải thích; vẫn "Thêm dòng tại đây" bằng tay được | Đạt cho phát hiện không có tiếng (`a_silent_video_gives_no_wav`) | |

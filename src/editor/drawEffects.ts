@@ -40,7 +40,7 @@ const fade = (t: number, start: number, end: number, fadeIn: number, fadeOut: nu
  * Draws the effects at source time `tMs` onto `ctx`, whose canvas shows the whole video:
  * `scale` is canvas pixels per source pixel, `videoH` the source height.
  */
-export function drawEffects(ctx: CanvasRenderingContext2D, fx: Effects, tMs: number, on: EffectToggles, videoH: number, scale: number): void {
+export function drawEffects(ctx: CanvasRenderingContext2D, fx: Effects, tMs: number, on: EffectToggles, videoH: number, scale: number, chipBottom = CHIP_BOTTOM): void {
   const { width, height } = ctx.canvas;
   ctx.clearRect(0, 0, width, height);
   const r = RIPPLE_RADIUS * videoH * scale;
@@ -81,7 +81,7 @@ export function drawEffects(ctx: CanvasRenderingContext2D, fx: Effects, tMs: num
     if (chip) {
       ctx.save();
       ctx.globalAlpha = fade(tMs, chip.start_ms, chip.end_ms, CHIP_FADE_MS, CHIP_FADE_MS);
-      drawChip(ctx, chip.text, Math.max(9, CHIP_FONT * height), CHIP_BOTTOM);
+      drawChip(ctx, chip.text, Math.max(9, CHIP_FONT * height), chipBottom);
       ctx.restore();
     }
   }

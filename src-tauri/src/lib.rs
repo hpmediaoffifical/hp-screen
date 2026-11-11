@@ -23,6 +23,7 @@ mod live_layer;
 mod live_cmds;
 mod camera;
 mod asr;
+mod subs_cmds;
 #[cfg(test)]
 mod test_media;
 
@@ -47,6 +48,7 @@ pub fn run() {
             app.manage(snip::SnipState::default());
             app.manage(edit_cmds::ExportState::default());
             app.manage(live_cmds::CamState::default());
+            app.manage(subs_cmds::AsrState::default());
             // An export cut short by quitting leaves a hidden .part file; remove it.
             if let Ok(dir) = paths::output_dir(handle, &settings) {
                 edit_cmds::remove_stale_parts(&dir);
@@ -101,6 +103,11 @@ pub fn run() {
             edit_cmds::zoom_auto,
             edit_cmds::zoom_track,
             edit_cmds::edit_layout,
+            subs_cmds::asr_status,
+            subs_cmds::asr_install,
+            subs_cmds::asr_cancel,
+            subs_cmds::subtitles_generate,
+            subs_cmds::export_srt,
             live_cmds::draw_set,
             live_cmds::draw_toggle,
             live_cmds::draw_stroke,

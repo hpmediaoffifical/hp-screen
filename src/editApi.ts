@@ -69,6 +69,19 @@ export interface GifOptions {
   width: number;
 }
 
+/** A subtitle line, in source time. `text` may hold a line break. */
+export interface Cue {
+  start_ms: number;
+  end_ms: number;
+  text: string;
+}
+
+export interface SubtitleDoc {
+  cues: Cue[];
+  /** Burned into exported videos. */
+  burn: boolean;
+}
+
 export interface EditDoc {
   v: number;
   trim: { start_ms: number; end_ms: number | null };
@@ -77,6 +90,7 @@ export interface EditDoc {
   effects: EffectToggles;
   zoom: ZoomDoc;
   frame: FrameDoc;
+  subtitles: SubtitleDoc;
 }
 
 /** The video's size and length, sent with zoom commands. */
@@ -136,6 +150,40 @@ export const onExportDone = (handler: (source: string, path: string) => void): P
   listen<{ source: string; path: string }>("export-done", (e) => handler(e.payload.source, e.payload.path));
 export const onExportError = (handler: (source: string, message: string) => void): Promise<UnlistenFn> =>
   listen<{ source: string; message: string }>("export-error", (e) => handler(e.payload.source, e.payload.message));
+
+export interface AsrModel {
+  id: string;
+  name: string;
+  size_mb: number;
+  installed: boolean;
+}
+
+export interface AsrStatus {
+  /** whisper.cpp is installed. */
+  cli: boolean;
+  cli_size_mb: number;
+  models: AsrModel[];
+  /** Where it is installed. */
+  folder: string;
+}
+
+export const asrStatus = () => invoke<AsrStatus>("asr_status");
+export const asrInstall = (model: string) => invoke<void>("asr_install", { model });
+export const asrCancel = () => invoke<void>("asr_cancel");
+export const subtitlesGenerate = (path: string, model: string) => invoke<void>("subtitles_generate", { path, model });
+export const exportSrt = (path: string, doc: EditDoc, durationMs: number) => invoke<string>("export_srt", { path, doc, durationMs });
+
+export const onAsrProgress = (handler: (phase: "cli" | "model", done: number, total: number) => void): Promise<UnlistenFn> =>
+  listen<{ phase: "cli" | "model"; done: number; total: number }>("asr-progress", (e) => handler(e.payload.phase, e.payload.done, e.payload.total));
+export const onAsrDone = (handler: () => void): Promise<UnlistenFn> => listen("asr-done", () => handler());
+export const onAsrError = (handler: (message: string) => void): Promise<UnlistenFn> =>
+  listen<{ message: string }>("asr-error", (e) => handler(e.payload.message));
+export const onSubsProgress = (handler: (source: string, phase: "audio" | "recognise", percent: number) => void): Promise<UnlistenFn> =>
+  listen<{ source: string; phase: "audio" | "recognise"; percent: number }>("subs-progress", (e) => handler(e.payload.source, e.payload.phase, e.payload.percent));
+export const onSubsDone = (handler: (source: string, cues: Cue[]) => void): Promise<UnlistenFn> =>
+  listen<{ source: string; cues: Cue[] }>("subs-done", (e) => handler(e.payload.source, e.payload.cues));
+export const onSubsError = (handler: (source: string, message: string) => void): Promise<UnlistenFn> =>
+  listen<{ source: string; message: string }>("subs-error", (e) => handler(e.payload.source, e.payload.message));
 
 export { addCut, keptTime, playFrom } from "./editor/timeMath.ts";
 

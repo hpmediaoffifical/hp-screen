@@ -18,18 +18,21 @@ import {
   type ZoomSegment,
 } from "../editApi";
 import ExportPanel from "../editor/ExportPanel";
+import SubtitlesPanel from "../editor/SubtitlesPanel";
+import { chipBottom, cueAt, drawSubtitle } from "../editor/subsMath";
 import Preview, { type PreviewHandle } from "../editor/Preview";
 import Timeline from "../editor/Timeline";
 import { drawEffects } from "../editor/drawEffects";
 import ZoomTrack from "../editor/ZoomTrack";
 import { cameraAt } from "../editor/zoomMath";
 
-type Tab = "cut" | "effects" | "zoom" | "frame" | "export";
+type Tab = "cut" | "effects" | "zoom" | "frame" | "subs" | "export";
 const TABS: { id: Tab; label: string }[] = [
   { id: "cut", label: "Cắt" },
   { id: "effects", label: "Hiệu ứng" },
   { id: "zoom", label: "Zoom" },
   { id: "frame", label: "Khung" },
+  { id: "subs", label: "Phụ đề" },
   { id: "export", label: "Xuất" },
 ];
 
@@ -306,11 +309,14 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
               ? (ctx, ms) => drawEffects(ctx, session.effects!, ms, { ...doc.effects, keys: false }, session.info.height, ctx.canvas.height / session.info.height)
               : undefined
           }
-          drawFixed={
-            session.effects
-              ? (ctx, ms) => drawEffects(ctx, session.effects!, ms, { ...doc.effects, clicks: false }, session.info.height, ctx.canvas.height / session.info.height)
-              : undefined
-          }
+          drawFixed={(ctx, ms) => {
+            // Shown in the preview whether or not they are burned in, so they can be checked.
+            const cue = cueAt(doc.subtitles.cues, ms);
+            if (session.effects) {
+              drawEffects(ctx, session.effects, ms, { ...doc.effects, clicks: false }, session.info.height, ctx.canvas.height / session.info.height, chipBottom(cue && doc.subtitles.burn ? cue.text : null));
+            } else ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+            if (cue) drawSubtitle(ctx, cue.text);
+          }}
           camera={doc.zoom.enabled && track.length > 0 ? (ms) => cameraAt(track, ms) : undefined}
           onPick={
             picking && zoomSel !== null
@@ -418,6 +424,23 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
               }}
             />
           )}
+          <SubtitlesPanel
+            hidden={tab !== "subs"}
+            path={props.path}
+            doc={doc}
+            durationMs={duration}
+            hasAudio={session.info.has_audio}
+            playhead={playhead}
+            onChange={(subtitles, merge) => {
+              const d = latest.current;
+              if (d) change({ ...d, subtitles }, merge);
+            }}
+            onSeek={(ms) => {
+              preview.current?.pause();
+              preview.current?.seek(ms);
+            }}
+            beforeExport={save}
+          />
           {/* Always mounted, so a running export keeps its progress and result across tabs. */}
           <ExportPanel
             hidden={tab !== "export"}

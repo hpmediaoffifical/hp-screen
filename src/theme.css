@@ -345,3 +345,13 @@ html[data-window="region-border"], html[data-window="region-border"] body { back
 .preview-frame > .preview-overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
 .bg-swatch { width: 26px; height: 26px; border-radius: 6px; border: 2px solid var(--border); cursor: pointer; padding: 0; }
 .bg-swatch.on { border-color: #fff; outline: 2px solid var(--accent); }
+
+/* Subtitles tab */
+.cue-list { list-style: none; margin: 0; padding: 0; width: 100%; display: flex; flex-direction: column; gap: 8px; }
+.cue { border: 1px solid var(--border); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.cue.on { border-color: var(--accent); }
+.cue-head { display: flex; align-items: center; gap: 6px; }
+.cue-time { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font: inherit; font-variant-numeric: tabular-nums; margin-right: auto; }
+.cue-text { width: 100%; resize: vertical; font: inherit; background: var(--bg); color: inherit; border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; box-sizing: border-box; }
+.btn-tiny { padding: 2px 8px; font-size: 12px; }
+.consent-list { margin: 8px 0; padding-left: 18px; }
