@@ -1,0 +1,17 @@
+[package]
+name = "mf-fmp4-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "THROWAWAY: does a Media Foundation fragmented MP4 survive a killed process? Not reused by the app."
+
+[workspace]
+
+[dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_Foundation",
+] }

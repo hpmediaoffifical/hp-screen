@@ -120,6 +120,15 @@ Tạm dừng: ngừng nhận khung hình và âm thanh; khi tiếp tục, mốc 
 
 Mục tiêu là video đã quay không mất nếu ứng dụng hoặc máy bị tắt đột ngột. Cách đạt mục tiêu này với Media Foundation **chưa được kiểm chứng**, nên việc đầu tiên của kế hoạch là một phép thử: ghi MP4 phân mảnh rồi tắt nóng tiến trình và kiểm tra file. Nếu MP4 phân mảnh không dùng được, phương án dự phòng theo thứ tự là: (a) ghi tạm ra định dạng an toàn rồi chuyển sang MP4 khi dừng; (b) chấp nhận MP4 thường và ghi rõ giới hạn. Kết quả phép thử được ghi lại vào tài liệu này.
 
+**Kết quả phép thử (2026-11-11, `spikes/mf-fmp4`, máy phát triển Windows 11 build 26200):** dùng MP4 phân mảnh (`MF_TRANSCODE_CONTAINERTYPE = MFTranscodeContainerType_FMPEG4`).
+
+| Trường hợp | MP4 phân mảnh | MP4 thường |
+|---|---|---|
+| Ghi 5 giây rồi đóng file bình thường | Đọc lại đủ 150/150 khung hình | Đọc lại đủ 150/150 khung hình |
+| Ghi 20 giây, tắt nóng tiến trình ở khoảng giây thứ 10 | Đọc lại được 279 khung hình (9,27 giây) | Không mở được file (lỗi `0xC00D36C4`) |
+
+Phép thử đọc lại bằng Media Foundation Source Reader, video H.264 1280×720 30 fps, chưa có đường tiếng. Chưa kiểm bằng mắt trong trình phát và chưa kiểm khả năng tua của file phân mảnh; hai việc này nằm trong danh sách kiểm thủ công.
+
 ### 4.4 Nhật ký thao tác
 
 Mỗi video có một file nhật ký `<tên video không đuôi>.input.jsonl` (ví dụ `hp_14-30-05_11-11-2026.input.jsonl`) nằm trong thư mục con `.hpscreen` của thư mục lưu. Mỗi dòng là một sự kiện JSON với thời gian tính bằng mili giây theo thời gian video (đã trừ tạm dừng):
@@ -193,7 +202,7 @@ Webcam; vẽ khi quay; lịch quay và tự dừng; thu âm riêng từng ứng 
 
 | Điểm | Cách xử lý |
 |---|---|
-| MP4 an toàn khi treo máy với Media Foundation | Phép thử đầu kế hoạch (mục 4.3) |
+| MP4 an toàn khi treo máy với Media Foundation | Đã thử: MP4 phân mảnh giữ được video khi bị tắt nóng (mục 4.3). Còn phải kiểm khả năng tua và việc có thêm đường tiếng AAC |
 | Tắt viền vàng WGC với ứng dụng không đóng gói MSIX | Thử trên máy phát triển ngay khi có module `capture` |
 | `windows-capture` có cho điều khiển đủ sâu bộ mã hóa không | Nếu không, dùng crate cho phần ghi hình và tự viết `encoder` bằng crate `windows` |
 | Lệch hình–tiếng khi quay dài | Dùng chung một đồng hồ (QPC) cho hình, tiếng và nhật ký; kiểm bằng video 10 phút |
