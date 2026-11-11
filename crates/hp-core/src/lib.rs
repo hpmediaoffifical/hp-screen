@@ -3,3 +3,6 @@ pub mod naming;
 pub mod geometry;
 pub mod state;
 pub mod timeline;
+pub mod quality;
+pub mod hotkey;
+pub mod settings;
