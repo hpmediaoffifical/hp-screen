@@ -20,6 +20,7 @@ mod export;
 mod edit_cmds;
 mod live_layer;
 mod live_cmds;
+mod camera;
 #[cfg(test)]
 mod test_media;
 

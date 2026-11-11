@@ -193,42 +193,49 @@ impl VideoDecoder {
         }
     }
 
-    /// Copies the visible picture out of a decoded buffer as tight top-down BGRA. The buffer's
-    /// geometry comes from the file, so every row is bounds-checked before it is read.
+    /// Copies the visible picture out of a decoded buffer as tight top-down BGRA.
     unsafe fn copy_picture(&self, buffer: &IMFMediaBuffer) -> Result<Vec<u8>, String> {
-        unsafe {
-            let row = self.width as usize * 4;
-            let rows = self.height as usize;
-            let (x0, y0) = (self.offset.0 as usize * 4, self.offset.1 as usize);
-            let mut out = vec![0u8; row * rows];
-            let mut copy = |start: *const u8, len: usize, base: isize, pitch: isize| -> Result<(), String> {
-                if !rows_in_bounds(len, base, pitch, x0, y0, rows, row) {
-                    return Err("Khung hình trong file video không hợp lệ".to_string());
-                }
-                for (y, dst) in out.chunks_exact_mut(row).enumerate() {
-                    let src = start.offset(base + (y + y0) as isize * pitch + x0 as isize);
-                    std::ptr::copy_nonoverlapping(src, dst.as_mut_ptr(), row);
-                }
-                Ok(())
-            };
-            if let Ok(b2) = buffer.cast::<IMF2DBuffer2>() {
-                let (mut scan0, mut pitch, mut start, mut len) = (std::ptr::null_mut(), 0i32, std::ptr::null_mut(), 0u32);
-                b2.Lock2DSize(MF2DBuffer_LockFlags_Read, &mut scan0, &mut pitch, &mut start, &mut len).map_err(err("Lỗi khi đọc video"))?;
-                let result = copy(start, len as usize, scan0.offset_from(start), pitch as isize);
-                let _ = b2.Unlock2D();
-                result?;
-            } else {
-                let (mut data, mut len) = (std::ptr::null_mut(), 0u32);
-                buffer.Lock(&mut data, None, Some(&mut len)).map_err(err("Lỗi khi đọc video"))?;
-                let pitch = self.default_stride as isize;
-                // Bottom-up rows: the top row is the last one in memory.
-                let base = if pitch < 0 { len as isize + pitch } else { 0 };
-                let result = copy(data, len as usize, base, pitch);
-                let _ = buffer.Unlock();
-                result?;
+        // SAFETY: forwarded; `buffer` is a live media buffer.
+        unsafe { copy_bgra(buffer, self.width, self.height, self.offset, self.default_stride) }
+    }
+}
+
+/// Copies a `width`×`height` BGRA picture starting at `offset` out of a media buffer as tight
+/// top-down rows. The buffer's geometry comes from the file or device, so every row is
+/// bounds-checked before it is read. `default_stride` is used when the buffer is not 2D.
+pub(crate) unsafe fn copy_bgra(buffer: &IMFMediaBuffer, width: u32, height: u32, offset: (u32, u32), default_stride: i32) -> Result<Vec<u8>, String> {
+    unsafe {
+        let row = width as usize * 4;
+        let rows = height as usize;
+        let (x0, y0) = (offset.0 as usize * 4, offset.1 as usize);
+        let mut out = vec![0u8; row * rows];
+        let mut copy = |start: *const u8, len: usize, base: isize, pitch: isize| -> Result<(), String> {
+            if !rows_in_bounds(len, base, pitch, x0, y0, rows, row) {
+                return Err("Khung hình không hợp lệ".to_string());
             }
-            Ok(out)
+            for (y, dst) in out.chunks_exact_mut(row).enumerate() {
+                let src = start.offset(base + (y + y0) as isize * pitch + x0 as isize);
+                std::ptr::copy_nonoverlapping(src, dst.as_mut_ptr(), row);
+            }
+            Ok(())
+        };
+        if let Ok(b2) = buffer.cast::<IMF2DBuffer2>() {
+            let (mut scan0, mut pitch, mut start, mut len) = (std::ptr::null_mut(), 0i32, std::ptr::null_mut(), 0u32);
+            b2.Lock2DSize(MF2DBuffer_LockFlags_Read, &mut scan0, &mut pitch, &mut start, &mut len).map_err(err("Lỗi khi đọc khung hình"))?;
+            let result = copy(start, len as usize, scan0.offset_from(start), pitch as isize);
+            let _ = b2.Unlock2D();
+            result?;
+        } else {
+            let (mut data, mut len) = (std::ptr::null_mut(), 0u32);
+            buffer.Lock(&mut data, None, Some(&mut len)).map_err(err("Lỗi khi đọc khung hình"))?;
+            let pitch = default_stride as isize;
+            // Bottom-up rows: the top row is the last one in memory.
+            let base = if pitch < 0 { len as isize + pitch } else { 0 };
+            let result = copy(data, len as usize, base, pitch);
+            let _ = buffer.Unlock();
+            result?;
         }
+        Ok(out)
     }
 }
 
