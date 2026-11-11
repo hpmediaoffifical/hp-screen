@@ -13,3 +13,4 @@ pub mod cut;
 pub mod edit;
 pub mod effects;
 pub mod plan;
+pub mod stroke;
