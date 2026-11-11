@@ -1,4 +1,5 @@
 import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
+import { camList, type CameraInfo } from "../liveApi";
 import {
   errorMessage,
   hotkeyStatus,
@@ -9,8 +10,12 @@ import {
   settingsGet,
   settingsSet,
   type HotkeyStatus,
+  type CamShape,
+  type CamSize,
+  type Corner,
   type Quality,
   type Settings,
+  type WebcamSettings,
 } from "../api";
 
 type HotkeyField = "hotkey_toggle" | "hotkey_pause" | "hotkey_screenshot" | "hotkey_quickshot" | "hotkey_draw";
@@ -203,6 +208,10 @@ export default function SettingsPage() {
         })}
       </Group>
 
+      <Group title="Webcam">
+        <WebcamFields settings={settings} save={save} />
+      </Group>
+
       <Group title="Khác">
         <Check
           label="Ghi nhật ký thao tác chuột và phím tắt kèm video"
@@ -260,5 +269,76 @@ function Check(props: { label: string; hint?: string; checked: boolean; onChange
         {props.hint && <span className="hint check-hint">{props.hint}</span>}
       </span>
     </label>
+  );
+}
+
+/** Webcam choices: which camera, and how its bubble looks in the video. */
+function WebcamFields(props: { settings: Settings; save: (patch: Partial<Settings>) => Promise<Settings | null> }) {
+  const [cameras, setCameras] = useState<CameraInfo[] | null>(null);
+  useEffect(() => {
+    camList().then(setCameras).catch(() => setCameras([]));
+  }, []);
+  const ws = props.settings.webcam;
+  const set = (patch: Partial<WebcamSettings>) => props.save({ webcam: { ...ws, ...patch } });
+  return (
+    <>
+      <Field label="Camera" htmlFor="cam-device">
+        {cameras && cameras.length === 0 ? (
+          <p className="hint">Không tìm thấy camera nào.</p>
+        ) : (
+          <select id="cam-device" className="input" value={ws.device ?? ""} onChange={(e) => set({ device: e.target.value || null })}>
+            <option value="">Camera đầu tiên</option>
+            {cameras?.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        )}
+      </Field>
+      <Field label="Hình dạng">
+        <Choice
+          name="cam-shape"
+          value={ws.shape}
+          options={[
+            { value: "circle", label: "Tròn" },
+            { value: "rounded", label: "Bo góc" },
+          ]}
+          onChange={(v) => set({ shape: v as CamShape })}
+        />
+      </Field>
+      <Field label="Cỡ">
+        <Choice
+          name="cam-size"
+          value={ws.size}
+          options={[
+            { value: "small", label: "Nhỏ" },
+            { value: "medium", label: "Vừa" },
+            { value: "large", label: "Lớn" },
+          ]}
+          onChange={(v) => set({ size: v as CamSize })}
+        />
+      </Field>
+      <Field label="Góc">
+        <Choice
+          name="cam-corner"
+          value={ws.corner}
+          options={[
+            { value: "top-left", label: "Trên trái" },
+            { value: "top-right", label: "Trên phải" },
+            { value: "bottom-left", label: "Dưới trái" },
+            { value: "bottom-right", label: "Dưới phải" },
+          ]}
+          onChange={(v) => set({ corner: v as Corner })}
+        />
+      </Field>
+      <Check label="Lật gương (như nhìn vào gương)" checked={ws.mirror} onChange={(mirror) => set({ mirror })} />
+      <Check
+        label="Bật webcam mỗi khi bắt đầu quay"
+        hint="Cũng bật tắt được bằng nút Webcam trên thanh gọn trong lúc quay."
+        checked={ws.enabled}
+        onChange={(enabled) => set({ enabled })}
+      />
+    </>
   );
 }

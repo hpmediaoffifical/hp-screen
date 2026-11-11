@@ -44,6 +44,7 @@ pub fn run() {
             app.manage(picker::PickerState::default());
             app.manage(snip::SnipState::default());
             app.manage(edit_cmds::ExportState::default());
+            app.manage(live_cmds::CamState::default());
             // An export cut short by quitting leaves a hidden .part file; remove it.
             if let Ok(dir) = paths::output_dir(handle, &settings) {
                 edit_cmds::remove_stale_parts(&dir);
@@ -100,6 +101,9 @@ pub fn run() {
             live_cmds::draw_stroke,
             live_cmds::draw_clear,
             live_cmds::draw_context,
+            live_cmds::cam_list,
+            live_cmds::cam_set,
+            live_cmds::cam_on,
         ])
         .run(tauri::generate_context!())
         .expect("error while running HP Screen");

@@ -245,6 +245,13 @@ export default function RecordPage() {
           disabled={!idle || !settings}
           onChange={(system_audio) => save({ system_audio })}
         />
+        <Toggle
+          label="Webcam"
+          on={!!settings?.webcam.enabled}
+          unavailable={false}
+          disabled={!idle || !settings}
+          onChange={(enabled) => settings && save({ webcam: { ...settings.webcam, enabled } })}
+        />
         <span className="chip">MP4 · {settings?.fps ?? 30} fps</span>
       </div>
 

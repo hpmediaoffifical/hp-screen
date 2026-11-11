@@ -26,5 +26,18 @@ export const drawToggle = () => invoke<void>("draw_toggle");
 export const drawStroke = (stroke: Stroke) => invoke<void>("draw_stroke", { stroke });
 export const drawClear = () => invoke<void>("draw_clear");
 export const drawContext = () => invoke<DrawContext>("draw_context");
+export interface CameraInfo {
+  id: string;
+  name: string;
+}
+
+export const camList = () => invoke<CameraInfo[]>("cam_list");
+export const camSet = (on: boolean) => invoke<void>("cam_set", { on });
+export const camOn = () => invoke<boolean>("cam_on");
+export const onCamState = (handler: (on: boolean) => void): Promise<UnlistenFn> =>
+  listen<{ on: boolean }>("cam-state", (e) => handler(e.payload.on));
+export const onCamFrame = (handler: (jpegBase64: string) => void): Promise<UnlistenFn> =>
+  listen<{ jpeg: string }>("cam-frame", (e) => handler(e.payload.jpeg));
+
 export const onDrawMode = (handler: (on: boolean) => void): Promise<UnlistenFn> =>
   listen<{ on: boolean }>("draw-mode", (e) => handler(e.payload.on));

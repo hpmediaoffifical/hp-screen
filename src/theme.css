@@ -309,3 +309,11 @@ html[data-window="draw"], html[data-window="draw"] body { background: transparen
 .draw-swatch { width: 20px; height: 20px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
 .draw-swatch.on { border-color: #fff; outline: 2px solid var(--accent); }
 .draw-dot { display: inline-block; border-radius: 50%; background: currentColor; }
+
+/* Webcam bubble while recording (excluded from capture) */
+html[data-window="cam"], html[data-window="cam"] body { background: transparent; overflow: hidden; }
+.cam { position: fixed; inset: 0; overflow: hidden; background: #000; display: flex; align-items: center; justify-content: center; box-sizing: border-box; border: 2px solid #fff; }
+.cam-circle { border-radius: 50%; }
+.cam-rounded { border-radius: 12%; }
+.cam-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cam-wait { color: #fff; font-size: 11px; text-align: center; padding: 6px; }

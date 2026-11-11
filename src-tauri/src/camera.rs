@@ -114,6 +114,11 @@ impl Camera {
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::SeqCst)
     }
+
+    /// Cleared when the reading thread stops (device unplugged or failed).
+    pub fn alive_flag(&self) -> Arc<AtomicBool> {
+        self.alive.clone()
+    }
 }
 
 impl Drop for Camera {

@@ -25,7 +25,7 @@ import {
   type Target,
 } from "../api";
 import { useRecStatus } from "../useRecStatus";
-import { drawToggle, onDrawMode } from "../liveApi";
+import { camOn, camSet, drawToggle, onCamState, onDrawMode } from "../liveApi";
 
 /**
  * The compact bar: one always-on-top row with the everyday controls, so recording and
@@ -41,9 +41,11 @@ export default function ControlBar() {
   const [note, setNote] = useState("");
   const rowRef = useRef<HTMLDivElement>(null);
   const [drawing, setDrawing] = useState(false);
+  const [camera, setCamera] = useState(false);
   useEffect(() => {
-    const off = onDrawMode(setDrawing);
-    return () => void off.then((u) => u());
+    camOn().then(setCamera).catch(() => {});
+    const offs = [onDrawMode(setDrawing), onCamState(setCamera)];
+    return () => offs.forEach((o) => void o.then((u) => u()));
   }, []);
   const { state } = status;
   const active = state !== "idle";
@@ -191,6 +193,9 @@ export default function ControlBar() {
         <>
           <BarButton on={drawing} title={`Vẽ lên màn hình (${settings?.hotkey_draw ?? ""})`} onClick={() => run(drawToggle)}>
             ✎ Vẽ
+          </BarButton>
+          <BarButton on={camera} title={camera ? "Tắt webcam" : "Bật webcam ở góc video"} onClick={() => run(() => camSet(!camera))}>
+            📷 Webcam
           </BarButton>
           <BarButton title={`Tạm dừng / tiếp tục (${settings?.hotkey_pause ?? ""})`} onClick={() => run(recTogglePause)}>
             {state === "paused" ? "▶ Tiếp tục" : "❚❚ Tạm dừng"}
