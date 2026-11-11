@@ -80,6 +80,11 @@ impl LiveLayer {
     }
 
     #[cfg(test)]
+    pub fn has_camera(&self) -> bool {
+        lock(&self.camera).is_some()
+    }
+
+    #[cfg(test)]
     pub fn stroke_count(&self) -> usize {
         lock(&self.strokes).len()
     }

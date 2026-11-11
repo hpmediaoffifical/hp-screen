@@ -50,6 +50,8 @@ export default function DrawOverlay() {
   // Paint every animation frame: strokes fade on screen exactly as in the video.
   useEffect(() => {
     let frame = 0;
+    // Nothing to show and already cleared: skip the work, the layer stays on screen all recording.
+    let blank = false;
     const paint = () => {
       const c = canvas.current;
       const ctx = c?.getContext("2d");
@@ -59,11 +61,15 @@ export default function DrawOverlay() {
         if (c.width !== w || c.height !== h) {
           c.width = w;
           c.height = h;
+          blank = false;
         }
-        ctx.clearRect(0, 0, w, h);
         const now = performance.now();
         shown.current = shown.current.filter((s) => alphaAt(s.finishedAt, now, holdMs.current) > 0);
-        for (const s of shown.current) drawOne(ctx, s.stroke, alphaAt(s.finishedAt, now, holdMs.current));
+        if (shown.current.length > 0 || !blank) {
+          ctx.clearRect(0, 0, w, h);
+          for (const s of shown.current) drawOne(ctx, s.stroke, alphaAt(s.finishedAt, now, holdMs.current));
+          blank = shown.current.length === 0;
+        }
       }
       frame = requestAnimationFrame(paint);
     };

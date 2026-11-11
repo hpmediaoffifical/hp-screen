@@ -150,6 +150,7 @@ impl Inner {
     fn reset_live(&self) {
         self.live.set_drawing(false);
         self.live.clear();
+        self.live.set_camera(None);
     }
 
     fn apply(&self, command: Command) -> Result<RecState, String> {
@@ -386,12 +387,14 @@ mod live_tests {
         let live = recorder.live();
         live.upsert_stroke(Stroke { id: 1, tool: Tool::Pen, color: COLORS[0], width: 4.0, points: vec![(1.0, 1.0)], finished_ms: None });
         live.set_drawing(true);
+        live.set_camera(Some((Arc::new(Mutex::new(None)), hp_core::webcam::WebcamSettings::default())));
         let dir = std::env::temp_dir().join("hp-screen-tests").join("live-cancel");
         let settings = Settings { output_dir: Some(dir), countdown_secs: 3, ..Settings::default() };
         recorder.start(Target::Monitor { index: 0 }, settings).unwrap();
         recorder.cancel().unwrap();
         assert!(!live.is_drawing());
         assert_eq!(live.stroke_count(), 0);
+        assert!(!live.has_camera(), "a webcam never carries over to the next recording");
     }
 }
 

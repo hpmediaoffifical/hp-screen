@@ -39,6 +39,27 @@ fn should_auto_start(state: RecState, enabled: bool, attempted: bool) -> bool {
     state == RecState::Recording && enabled && !attempted
 }
 
+/// Voids a slow start (the camera takes up to seconds to open) when a stop or a newer start
+/// happens meanwhile.
+#[derive(Default)]
+pub struct StartGate {
+    generation: std::sync::atomic::AtomicU64,
+}
+
+impl StartGate {
+    /// A ticket for a start that is beginning now; it voids any earlier one.
+    pub fn begin(&self) -> u64 {
+        self.generation.fetch_add(1, Ordering::SeqCst) + 1
+    }
+    /// A stop: every start still under way is void.
+    pub fn cancel(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
+    }
+    pub fn still_valid(&self, ticket: u64) -> bool {
+        self.generation.load(Ordering::SeqCst) == ticket
+    }
+}
+
 /// Height of the bubble's preview picture.
 const PREVIEW_HEIGHT: u32 = 240;
 const PREVIEW_EVERY: Duration = Duration::from_millis(100);
@@ -99,6 +120,9 @@ impl Drop for CamSession {
 pub struct CamState {
     session: Mutex<Option<CamSession>>,
     attempted: AtomicBool,
+    /// Set while a camera is being opened, so a second start does not open it twice.
+    starting: AtomicBool,
+    gate: StartGate,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -108,6 +132,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// Turns the webcam off: out of the video, bubble closed, device released.
 pub fn stop_camera(app: &AppHandle) {
     let (Some(state), Some(cams)) = (app.try_state::<AppState>(), app.try_state::<CamState>()) else { return };
+    cams.gate.cancel();
     state.recorder.live().set_camera(None);
     let session = lock(&cams.session).take();
     drop(session);
@@ -129,15 +154,23 @@ pub async fn set_camera(app: AppHandle, on: bool) -> Result<(), String> {
     if !recording(&state) {
         return Err("Chỉ bật webcam được khi đang quay".to_string());
     }
-    if lock(&cams.session).is_some() {
-        return Ok(());
+    if lock(&cams.session).is_some() || cams.starting.swap(true, Ordering::SeqCst) {
+        return Ok(()); // already on, or being opened
     }
+    let ticket = cams.gate.begin();
     let settings = state.settings();
     let ws = settings.webcam.clone();
     let device = ws.device.clone();
-    let camera = tauri::async_runtime::spawn_blocking(move || Camera::open(device.as_deref())).await.map_err(|e| e.to_string())??;
+    let opened = tauri::async_runtime::spawn_blocking(move || Camera::open(device.as_deref())).await.map_err(|e| e.to_string());
+    cams.starting.store(false, Ordering::SeqCst);
+    let camera = opened??;
+    // The recording may have stopped while the camera was opening: then let it go at once.
+    if !cams.gate.still_valid(ticket) || !recording(&state) {
+        drop(camera);
+        return Ok(());
+    }
     let target = state.recorder.last_target().ok_or("Chưa chọn vùng quay")?;
-    let area = overlay_rect(capture::target_rect(&target)?);
+    let area = overlay_rect(capture::visible_rect(&target)?);
     let bubble = bubble_rect(area.w, area.h, &ws);
     live.set_camera(Some((camera.latest(), ws.clone())));
 
@@ -211,8 +244,8 @@ pub fn on_rec_state(app: &AppHandle, state: RecState) {
         return;
     }
     let enabled = app.try_state::<AppState>().is_some_and(|s| s.settings().webcam.enabled);
-    if should_auto_start(state, enabled, cams.attempted.load(Ordering::SeqCst)) {
-        cams.attempted.store(true, Ordering::SeqCst);
+    // Several reports say Recording; only the first may start the webcam.
+    if should_auto_start(state, enabled, cams.attempted.load(Ordering::SeqCst)) && !cams.attempted.swap(true, Ordering::SeqCst) {
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
             if let Err(message) = set_camera(app.clone(), true).await {
@@ -259,7 +292,7 @@ pub async fn set_drawing(app: AppHandle, on: bool) -> Result<(), String> {
         None if !on => return Ok(()),
         None => {
             let target = state.recorder.last_target().ok_or("Chưa chọn vùng quay")?;
-            let area = overlay_rect(capture::target_rect(&target)?);
+            let area = overlay_rect(capture::visible_rect(&target)?);
             let w = WebviewWindowBuilder::new(&app, DRAW_WINDOW, WebviewUrl::App("index.html".into()))
                 .title("HP Screen - Vẽ")
                 .decorations(false)
@@ -274,6 +307,11 @@ pub async fn set_drawing(app: AppHandle, on: bool) -> Result<(), String> {
             let _ = w.set_position(PhysicalPosition::new(area.x, area.y));
             let _ = w.set_size(PhysicalSize::new(area.w, area.h));
             exclude_from_capture(&w);
+            // The recording may have ended while the window was being made.
+            if !recording(&state) {
+                let _ = w.close();
+                return Ok(());
+            }
             let _ = w.show();
             w
         }
@@ -333,6 +371,20 @@ pub fn draw_context(state: State<'_, AppState>) -> DrawContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_start_overtaken_by_a_stop_is_abandoned() {
+        let gate = StartGate::default();
+        let ticket = gate.begin();
+        assert!(gate.still_valid(ticket));
+        gate.cancel();
+        assert!(!gate.still_valid(ticket), "a stop during the slow camera open voids the start");
+        let next = gate.begin();
+        assert!(gate.still_valid(next));
+        let overtaken = next;
+        let newer = gate.begin();
+        assert!(!gate.still_valid(overtaken) && gate.still_valid(newer), "only the latest start counts");
+    }
 
     #[test]
     fn bubble_window_rect_on_screen() {

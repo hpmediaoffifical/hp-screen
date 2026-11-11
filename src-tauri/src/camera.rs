@@ -111,10 +111,6 @@ impl Camera {
         self.latest.clone()
     }
 
-    pub fn is_alive(&self) -> bool {
-        self.alive.load(Ordering::SeqCst)
-    }
-
     /// Cleared when the reading thread stops (device unplugged or failed).
     pub fn alive_flag(&self) -> Arc<AtomicBool> {
         self.alive.clone()
@@ -192,23 +188,49 @@ unsafe fn read_camera(id: Option<&str>, latest: &SharedFrame, stop: &AtomicBool,
     }
 }
 
-/// The largest native picture no taller than `MAX_HEIGHT`, with its frame rate.
+/// The native picture to read (see `pick_native`), with its packed frame rate.
 unsafe fn best_native_size(reader: &IMFSourceReader) -> (u32, u32, Option<u64>) {
     unsafe {
-        let mut best = (0u32, 0u32, None);
-        for i in 0.. {
+        let mut found: Vec<(u32, u32, f64, Option<u64>)> = Vec::new();
+        for i in 0..256 {
             let Ok(t) = reader.GetNativeMediaType(VIDEO, i) else { break };
             let Ok(size) = t.GetUINT64(&MF_MT_FRAME_SIZE) else { continue };
-            let (w, h) = ((size >> 32) as u32, size as u32);
-            if h <= MAX_HEIGHT && w as u64 * h as u64 > best.0 as u64 * best.1 as u64 {
-                best = (w, h, t.GetUINT64(&MF_MT_FRAME_RATE).ok());
-            }
-            if i > 200 {
-                break;
-            }
+            let rate = t.GetUINT64(&MF_MT_FRAME_RATE).ok();
+            let fps = rate.map_or(0.0, |r| {
+                let (num, den) = ((r >> 32) as u32, r as u32);
+                if den == 0 { 0.0 } else { num as f64 / den as f64 }
+            });
+            found.push(((size >> 32) as u32, size as u32, fps, rate));
         }
-        best
+        let sizes: Vec<(u32, u32, f64)> = found.iter().map(|&(w, h, fps, _)| (w, h, fps)).collect();
+        match pick_native(&sizes) {
+            Some(i) => (found[i].0, found[i].1, found[i].3),
+            None => (0, 0, None),
+        }
     }
+}
+
+/// Index of the native format to use: the largest no taller than `MAX_HEIGHT`, and among
+/// those the highest frame rate. `types` holds (width, height, fps).
+fn pick_native(types: &[(u32, u32, f64)]) -> Option<usize> {
+    let mut best: Option<usize> = None;
+    for (i, &(w, h, fps)) in types.iter().enumerate() {
+        if h > MAX_HEIGHT {
+            continue;
+        }
+        let better = match best {
+            None => true,
+            Some(b) => {
+                let (bw, bh, bfps) = types[b];
+                let (area, best_area) = (w as u64 * h as u64, bw as u64 * bh as u64);
+                area > best_area || (area == best_area && fps > bfps)
+            }
+        };
+        if better {
+            best = Some(i);
+        }
+    }
+    best
 }
 
 /// A camera error as the user should read it.
@@ -228,6 +250,15 @@ mod tests {
     use super::*;
     use windows::Win32::Foundation::E_ACCESSDENIED;
     use windows::Win32::Media::MediaFoundation::{MF_E_HW_MFT_FAILED_START_STREAMING, MF_E_VIDEO_RECORDING_DEVICE_INVALIDATED};
+
+    #[test]
+    fn the_smoothest_of_the_largest_formats_is_chosen() {
+        // (width, height, frames per second)
+        let types = [(1280, 720, 10.0), (640, 480, 30.0), (1280, 720, 30.0), (1920, 1080, 30.0)];
+        assert_eq!(pick_native(&types), Some(2), "720p at 30 fps beats 720p at 10 and anything above 720p");
+        assert_eq!(pick_native(&[(1920, 1080, 30.0)]), None);
+        assert_eq!(pick_native(&[(640, 480, 15.0), (640, 480, 30.0), (640, 480, 25.0)]), Some(1));
+    }
 
     #[test]
     fn listing_cameras_never_fails() {
@@ -256,6 +287,6 @@ mod tests {
         let f = latest.lock().unwrap().clone().unwrap();
         println!("camera frame {}x{}", f.width, f.height);
         assert!(f.height <= 720 && f.bgra.len() == (f.width * f.height * 4) as usize);
-        assert!(cam.is_alive());
+        assert!(cam.alive_flag().load(Ordering::SeqCst));
     }
 }

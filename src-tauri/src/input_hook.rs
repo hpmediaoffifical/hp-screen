@@ -228,9 +228,10 @@ fn write_log(
     let _ = out.flush();
 }
 
-/// Whether an event goes into the log: button presses are left out while the user draws.
+/// Whether an event goes into the log: button presses and keys (Esc leaves drawing) are left
+/// out while the user draws.
 fn keep_event(e: &Event, drawing: bool) -> bool {
-    !(drawing && matches!(e, Event::Down { .. } | Event::Up { .. }))
+    !(drawing && matches!(e, Event::Down { .. } | Event::Up { .. } | Event::Key { .. }))
 }
 
 #[cfg(test)]
@@ -245,8 +246,9 @@ mod filter_tests {
         let wheel = Event::Wheel { t: 4, dx: 0, dy: 120, x: 0, y: 0 };
         let key = Event::Key { t: 5, k: "Ctrl+S".into() };
         assert!(!keep_event(&down, true) && !keep_event(&up, true));
-        assert!(keep_event(&mv, true) && keep_event(&wheel, true) && keep_event(&key, true));
-        assert!(keep_event(&down, false) && keep_event(&up, false));
+        assert!(!keep_event(&key, true), "keys pressed while drawing (Esc to leave) are not shortcuts to show");
+        assert!(keep_event(&mv, true) && keep_event(&wheel, true));
+        assert!(keep_event(&down, false) && keep_event(&up, false) && keep_event(&key, false));
     }
 }
 

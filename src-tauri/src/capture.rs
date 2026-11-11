@@ -189,6 +189,25 @@ pub fn target_rect(target: &Target) -> Result<Rect, String> {
     }
 }
 
+/// The area that appears in the recording, on screen. For a window this is its visible frame
+/// (what Windows Graphics Capture records), without the invisible resize borders that
+/// `target_rect` includes.
+pub fn visible_rect(target: &Target) -> Result<Rect, String> {
+    use windows::Win32::Foundation::{HWND, RECT};
+    use windows::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
+    let Target::Window { hwnd } = target else { return target_rect(target) };
+    let mut r = RECT::default();
+    // SAFETY: `r` is a RECT of the size passed; any window handle value is accepted.
+    let ok = unsafe {
+        DwmGetWindowAttribute(HWND(*hwnd as *mut _), DWMWA_EXTENDED_FRAME_BOUNDS, &mut r as *mut RECT as *mut _, std::mem::size_of::<RECT>() as u32)
+    }
+    .is_ok();
+    if !ok || r.right <= r.left || r.bottom <= r.top {
+        return target_rect(target);
+    }
+    Ok(Rect { x: r.left, y: r.top, w: (r.right - r.left) as u32, h: (r.bottom - r.top) as u32 })
+}
+
 /// Starts capturing video frames: even dimensions, cursor included, no yellow border.
 pub fn start_capture(target: &Target, sink: Box<dyn FrameSink>) -> Result<CaptureSession, String> {
     start(target, sink, true)
