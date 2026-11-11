@@ -265,3 +265,52 @@ html[data-window="control-bar"] #root { height: auto; }
 .snip-tools > .snip-options { border-left: 1px solid var(--border); padding-left: 6px; }
 .snip-tools.snip-flip > .snip-options { border-left: 0; border-right: 1px solid var(--border); padding: 0 6px 0 0; }
 .snip-hsep { height: 1px; align-self: stretch; background: var(--border); margin: 3px 2px; }
+
+/* Capture-and-annotate upgrades: highlighter icon, window snapping, text recognition */
+.snip-hl-icon { display: block; width: 18px; height: 9px; border-radius: 2px; background: rgba(255, 204, 0, .75); transform: rotate(-12deg); }
+.snip-snap-tag { max-width: 60vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.snip-ocr {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(640px, calc(100vw - 32px));
+  display: flex; flex-direction: column; gap: 8px; padding: 12px;
+  background: rgba(15, 19, 27, .98); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 36px rgba(0, 0, 0, .55);
+  user-select: text;
+}
+.snip-ocr-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.snip-ocr-note { margin: 0; font-size: 12px; line-height: 1.45; color: var(--warn); }
+.snip-ocr-text {
+  min-height: 180px; max-height: 50vh; resize: vertical; padding: 8px 10px; border-radius: 8px;
+  background: var(--bg); color: var(--text); border: 1px solid var(--border); font: 14px/1.5 "Segoe UI", sans-serif;
+}
+.snip-ocr-text:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.snip-ocr-actions { justify-content: flex-end; }
+
+/* Pinned pictures */
+html[data-window^="pin-"], html[data-window^="pin-"] body { background: #000; overflow: hidden; }
+html[data-window^="pin-"] #root { height: 100vh; }
+.pin { position: fixed; inset: 0; border: 1px solid rgba(76, 141, 255, .55); }
+.pin-image { width: 100%; height: 100%; object-fit: contain; display: block; cursor: move; }
+.pin-controls { position: absolute; top: 4px; right: 4px; display: flex; gap: 4px; opacity: 0; transition: opacity .12s; }
+.pin:hover .pin-controls, .pin:focus-within .pin-controls { opacity: 1; }
+.pin-btn {
+  width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--border); padding: 0;
+  background: rgba(15, 19, 27, .9); color: var(--text); font-size: 13px; display: inline-flex; align-items: center; justify-content: center;
+}
+.pin-btn:hover { background: #1e2636; border-color: var(--accent); }
+.pin-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pin-note {
+  position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); pointer-events: none; white-space: nowrap;
+  background: rgba(15, 19, 27, .9); color: #fff; font-size: 12px; padding: 2px 8px; border-radius: 999px;
+}
+.pin-grip {
+  position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; opacity: 0;
+  background: linear-gradient(135deg, transparent 50%, rgba(76, 141, 255, .9) 50%);
+}
+.pin:hover .pin-grip { opacity: 1; }
+
+/* Scrolling capture: frame around the area and the bar beside it */
+html[data-window="scroll-frame"], html[data-window="scroll-frame"] body { background: transparent; overflow: hidden; }
+.scroll-frame { position: fixed; inset: 0; border: 3px solid var(--accent); box-sizing: border-box; border-radius: 3px; pointer-events: none; }
+html[data-window="scroll-bar"], html[data-window="scroll-bar"] body { background: #0f131b; overflow: hidden; }
+.scroll-bar { display: flex; align-items: center; gap: 6px; height: 100vh; padding: 0 10px; font-size: 13px; }
+.scroll-msg { flex: 1; min-width: 0; line-height: 1.3; }
+.scroll-msg.warn { color: var(--warn); }

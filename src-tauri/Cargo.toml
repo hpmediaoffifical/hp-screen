@@ -29,3 +29,8 @@ tauri-plugin-dialog = "2"
 tauri-plugin-autostart = "2"
 base64 = "0.23.1"
 
+
+# Capture-and-annotate: window frames for snapping the selection, and Windows' own offline
+# text recognition (OCR). Kept apart from the list above so both can grow without conflicts.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Graphics_Dwm", "Media_Ocr", "Graphics_Imaging", "Storage_Streams", "Globalization", "Foundation", "Foundation_Collections"] }

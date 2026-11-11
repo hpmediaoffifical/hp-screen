@@ -14,6 +14,9 @@ mod recorder;
 mod screenshot;
 mod shell;
 mod snip;
+mod pin;
+mod ocr;
+mod scroll;
 
 use commands::AppState;
 use hotkeys::HotkeyRegistry;
@@ -76,6 +79,16 @@ pub fn run() {
             commands::compact_hide,
             commands::open_main,
             commands::get_target,
+            commands::snip_pin,
+            commands::snip_ocr,
+            commands::copy_text,
+            commands::pin_image,
+            commands::pin_copy,
+            commands::pin_close,
+            commands::pin_ready,
+            commands::snip_scroll_start,
+            commands::snip_scroll_stop,
+            commands::scroll_close,
         ])
         .run(tauri::generate_context!())
         .expect("error while running HP Screen");

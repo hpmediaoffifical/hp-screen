@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "snip-extras",
+  "description": "Pinned pictures and the scrolling-capture bar and frame (capture and annotate)",
+  "windows": ["pin-*", "scroll-bar", "scroll-frame"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-start-resize-dragging",
+    "core:window:allow-set-size"
+  ]
+}
