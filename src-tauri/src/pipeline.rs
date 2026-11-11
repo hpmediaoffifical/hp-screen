@@ -309,7 +309,7 @@ fn source_warning(target: &Target) -> Option<String> {
 }
 
 /// Best effort: a missing thumbnail only means the library shows a placeholder.
-fn save_thumbnail(bgra: &[u8], width: u32, height: u32, path: &std::path::Path) {
+pub(crate) fn save_thumbnail(bgra: &[u8], width: u32, height: u32, path: &std::path::Path) {
     let step = width.div_ceil(THUMB_WIDTH).max(1) as usize;
     let (tw, th) = (width as usize / step, height as usize / step);
     if tw == 0 || th == 0 {

@@ -83,6 +83,19 @@ impl Cuts {
         None
     }
 
+    /// As `to_output`, for fractional milliseconds (audio sample positions).
+    pub fn to_output_f64(&self, src_ms: f64) -> Option<f64> {
+        let mut before = 0.0;
+        for k in &self.keep {
+            let (start, end) = (k.start_ms as f64, k.end_ms as f64);
+            if src_ms >= start && src_ms < end {
+                return Some(before + src_ms - start);
+            }
+            before += end - start;
+        }
+        None
+    }
+
     /// Audio gain at source time `src_ms`: 1 inside kept spans, ramping to 0 over
     /// `JOIN_FADE_MS` towards each join between two kept spans; 0 where cut.
     pub fn join_gain(&self, src_ms: f64) -> f32 {
@@ -166,6 +179,16 @@ mod tests {
         assert!(c.keep().is_empty());
         assert_eq!(c.output_ms(), 0);
         assert_eq!(c.to_source(0), None);
+    }
+
+    #[test]
+    fn fractional_source_time_maps_to_output() {
+        let c = sample();
+        assert_eq!(c.to_output_f64(1000.5), Some(0.5));
+        assert_eq!(c.to_output_f64(5000.25), Some(2000.25));
+        assert!((c.to_output_f64(2999.9).unwrap() - 1999.9).abs() < 1e-9);
+        assert_eq!(c.to_output_f64(3000.0), None);
+        assert_eq!(c.to_output_f64(999.9), None);
     }
 
     #[test]

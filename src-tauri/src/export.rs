@@ -1,0 +1,312 @@
+//! Writes an edited copy of a recording: decode, compose, encode into a `.part` file that is
+//! renamed into place only when everything succeeded. The source file is only ever read.
+use crate::compositor::{Compositor, Device};
+use crate::decoder::{AudioDecoder, VideoDecoder};
+use crate::encoder::{AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, EncoderConfig, Mp4Encoder};
+use crate::library_fs::{stem_in_use, write_meta};
+use hp_core::cut::Cuts;
+use hp_core::library::{DATA_DIR, MediaMeta, thumb_path};
+use hp_core::naming::unique_path;
+use hp_core::plan::Plan;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+pub const EDIT_SUFFIX: &str = "_edit";
+/// Audio is written up to this far ahead of the video so the writer can interleave.
+const AUDIO_LEAD_MS: f64 = 500.0;
+const PROGRESS_EVERY: u64 = 10;
+
+/// `<dir>/<stem>_edit.mp4`, or the next free `_edit_2`, `_edit_3`…
+pub fn export_path(source: &Path) -> PathBuf {
+    let dir = source.parent().unwrap_or_else(|| Path::new(""));
+    let stem = source.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let taken = |p: &Path| p.exists() || p.file_stem().is_some_and(|s| stem_in_use(dir, &s.to_string_lossy()));
+    unique_path(dir, &format!("{stem}{EDIT_SUFFIX}"), "mp4", &taken)
+}
+
+/// The temporary file an export writes before it is renamed to `out`.
+pub fn part_path(out: &Path) -> PathBuf {
+    let dir = out.parent().unwrap_or_else(|| Path::new(""));
+    let name = out.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    dir.join(DATA_DIR).join(format!("{name}.part"))
+}
+
+/// Exports `plan` of `source` to `out`. `progress(done, total)` is called every few frames.
+pub fn run_export(
+    source: &Path,
+    out: &Path,
+    plan: &Plan,
+    bitrate: u32,
+    progress: &mut dyn FnMut(u64, u64),
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let part = part_path(out);
+    if let Some(dir) = part.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("Không tạo được thư mục tạm: {e}"))?;
+    }
+    let result = write_all(source, &part, plan, bitrate, progress, cancel);
+    let first_frame = match result {
+        Ok(frame) => frame,
+        Err(e) => {
+            let _ = std::fs::remove_file(&part);
+            return Err(e);
+        }
+    };
+    if let Err(e) = std::fs::rename(&part, out) {
+        let _ = std::fs::remove_file(&part);
+        return Err(format!("Không lưu được file xuất: {e}"));
+    }
+    let (w, h) = plan.out_size();
+    if let Some(frame) = first_frame {
+        crate::pipeline::save_thumbnail(&frame, w, h, &thumb_path(out));
+    }
+    write_meta(out, &MediaMeta::from_frames(plan.frames(), plan.fps(), w, h));
+    Ok(())
+}
+
+/// Encodes every planned frame into `part`; returns the first output frame for the thumbnail.
+fn write_all(
+    source: &Path,
+    part: &Path,
+    plan: &Plan,
+    bitrate: u32,
+    progress: &mut dyn FnMut(u64, u64),
+    cancel: &AtomicBool,
+) -> Result<Option<Vec<u8>>, String> {
+    let (mut video, info) = VideoDecoder::open(source)?;
+    let mut audio = AudioDecoder::open(source)?.map(|dec| AudioPump::new(dec, plan.cuts().clone()));
+    let (out_w, out_h) = plan.out_size();
+    let fps = plan.fps();
+    let cfg = EncoderConfig { path: part.to_path_buf(), width: out_w, height: out_h, fps, video_bitrate: bitrate, audio: audio.is_some() };
+    let mut enc = Mp4Encoder::new(&cfg)?;
+    let mut compositor: Option<Compositor> = None;
+    let total = plan.frames();
+    let mut first = None;
+    for n in 0..total {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Đã hủy".to_string());
+        }
+        let Some(fp) = plan.frame(n) else { break };
+        let src = video.frame_at(fp.src_ms)?;
+        // Same size and nothing to draw: the encoder crops an odd source edge by itself.
+        let direct = fp.draws.is_empty() && info.width >= out_w && info.height >= out_h && info.width - out_w <= 1 && info.height - out_h <= 1;
+        let (frame, stride): (&[u8], u32) = if direct {
+            (src, info.width * 4)
+        } else {
+            if compositor.is_none() {
+                compositor = Some(Compositor::new(out_w, out_h, Device::Hardware)?);
+            }
+            let c = compositor.as_mut().expect("just created");
+            (c.render(src, info.width, info.height, &fp.draws)?, out_w * 4)
+        };
+        if first.is_none() {
+            first = Some(tight(frame, stride, out_w, out_h));
+        }
+        enc.write_video(frame, stride, n as i64 * 10_000_000 / fps as i64)?;
+        if let Some(pump) = audio.as_mut() {
+            pump.write_until(&mut enc, fp.out_ms as f64 + AUDIO_LEAD_MS)?;
+        }
+        if (n + 1) % PROGRESS_EVERY == 0 || n + 1 == total {
+            progress(n + 1, total);
+        }
+    }
+    if let Some(pump) = audio.as_mut() {
+        pump.write_until(&mut enc, f64::INFINITY)?;
+    }
+    enc.finish()?;
+    Ok(first)
+}
+
+fn tight(frame: &[u8], stride: u32, w: u32, h: u32) -> Vec<u8> {
+    let row = w as usize * 4;
+    frame.chunks(stride as usize).take(h as usize).flat_map(|r| r[..row].iter().copied()).collect()
+}
+
+/// Feeds decoded audio to the encoder in output time, dropping removed spans and fading
+/// around joins.
+struct AudioPump {
+    dec: AudioDecoder,
+    cuts: Cuts,
+    /// Decoded samples not yet written: source ms of the first frame, interleaved stereo.
+    pending: Option<(f64, Vec<f32>)>,
+    ended: bool,
+}
+
+impl AudioPump {
+    fn new(dec: AudioDecoder, cuts: Cuts) -> Self {
+        AudioPump { dec, cuts, pending: None, ended: false }
+    }
+
+    /// Writes every kept sample whose output time is before `until_out_ms`.
+    fn write_until(&mut self, enc: &mut Mp4Encoder, until_out_ms: f64) -> Result<(), String> {
+        let ms_per_frame = 1000.0 / AUDIO_SAMPLE_RATE as f64;
+        let ch = AUDIO_CHANNELS as usize;
+        loop {
+            if self.pending.is_none() {
+                if self.ended {
+                    return Ok(());
+                }
+                self.pending = self.dec.next_chunk()?;
+                if self.pending.is_none() {
+                    self.ended = true;
+                    return Ok(());
+                }
+            }
+            let (start, pcm) = self.pending.take().expect("checked above");
+            let frames = pcm.len() / ch;
+            // Stop before a chunk whose kept part starts beyond the window.
+            let first_out = (0..frames).find_map(|i| self.cuts.to_output_f64(start + i as f64 * ms_per_frame));
+            if first_out.is_some_and(|o| o >= until_out_ms) {
+                self.pending = Some((start, pcm));
+                return Ok(());
+            }
+            // Split the chunk into runs that are contiguous in output time.
+            let mut run: Vec<f32> = Vec::new();
+            let mut run_start: Option<f64> = None;
+            let mut expected = 0.0;
+            for i in 0..frames {
+                let s = start + i as f64 * ms_per_frame;
+                match self.cuts.to_output_f64(s) {
+                    Some(o) => {
+                        if run_start.is_some() && (o - expected).abs() > ms_per_frame / 2.0 {
+                            write_run(enc, run_start.take(), &mut run)?;
+                        }
+                        if run_start.is_none() {
+                            run_start = Some(o);
+                        }
+                        let g = self.cuts.join_gain(s);
+                        run.extend(pcm[i * ch..(i + 1) * ch].iter().map(|v| v * g));
+                        expected = o + ms_per_frame;
+                    }
+                    None => write_run(enc, run_start.take(), &mut run)?,
+                }
+            }
+            write_run(enc, run_start.take(), &mut run)?;
+        }
+    }
+}
+
+fn write_run(enc: &mut Mp4Encoder, start_out_ms: Option<f64>, run: &mut Vec<f32>) -> Result<(), String> {
+    if let Some(start) = start_out_ms
+        && !run.is_empty()
+    {
+        enc.write_audio(run, (start * 10_000.0).round() as i64)?;
+    }
+    run.clear();
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::decoder::VideoDecoder;
+    use crate::encoder::probe;
+    use crate::test_media::*;
+    use hp_core::cut::Span;
+    use hp_core::edit::EditDoc;
+    use hp_core::library::DATA_DIR;
+    use hp_core::plan::Source;
+    use std::sync::atomic::Ordering;
+
+    fn plan_for(path: &Path, cuts: Vec<Span>) -> Plan {
+        let (_, info) = VideoDecoder::open(path).unwrap();
+        let src = Source { width: info.width, height: info.height, duration_ms: info.duration_ms, fps: info.fps };
+        Plan::new(src, &EditDoc { cuts, ..EditDoc::default() })
+    }
+
+    fn export(source: &Path, plan: &Plan) -> Result<PathBuf, String> {
+        let out = export_path(source);
+        run_export(source, &out, plan, 2_000_000, &mut |_, _| {}, &AtomicBool::new(false)).map(|_| out)
+    }
+
+    #[test]
+    fn export_drops_the_removed_span() {
+        let source = temp_path("exp-cut", "a.mp4");
+        make_sample(&source, 3, 320, 240, true);
+        let plan = plan_for(&source, vec![Span { start_ms: 1000, end_ms: 2000 }]);
+        let out = export(&source, &plan).unwrap();
+        let (frames, last, audio) = probe(&out).unwrap();
+        assert!((59..=61).contains(&frames), "{frames} frames");
+        assert!(last < 20_000_000, "last frame at {last}");
+        assert!(audio > 0);
+        let (mut dec, _) = VideoDecoder::open(&out).unwrap();
+        assert!(near(centre_rgb(dec.frame_at(500).unwrap(), 320, 240), [255, 0, 0]));
+        assert!(near(centre_rgb(dec.frame_at(1500).unwrap(), 320, 240), [0, 0, 255]));
+        let mut ms = 0;
+        while ms < 2000 {
+            assert!(!near(centre_rgb(dec.frame_at(ms).unwrap(), 320, 240), [0, 255, 0]), "green frame at {ms} ms");
+            ms += 33;
+        }
+    }
+
+    #[test]
+    fn export_never_touches_the_source() {
+        let source = temp_path("exp-src", "a.mp4");
+        make_sample(&source, 1, 320, 240, false);
+        let before = std::fs::metadata(&source).unwrap();
+        export(&source, &plan_for(&source, vec![])).unwrap();
+        let after = std::fs::metadata(&source).unwrap();
+        assert_eq!(before.len(), after.len());
+        assert_eq!(before.modified().unwrap(), after.modified().unwrap());
+    }
+
+    #[test]
+    fn export_name_does_not_overwrite() {
+        let source = temp_path("exp-name", "a.mp4");
+        assert_eq!(export_path(&source), source.with_file_name("a_edit.mp4"));
+        std::fs::write(source.with_file_name("a_edit.mp4"), b"x").unwrap();
+        assert_eq!(export_path(&source), source.with_file_name("a_edit_2.mp4"));
+    }
+
+    #[test]
+    fn export_writes_thumbnail_and_meta() {
+        let source = temp_path("exp-meta", "a.mp4");
+        make_sample(&source, 1, 320, 240, false);
+        let out = export(&source, &plan_for(&source, vec![])).unwrap();
+        assert!(hp_core::library::thumb_path(&out).exists());
+        assert!(hp_core::library::meta_path(&out).exists());
+    }
+
+    #[test]
+    fn cancelled_export_leaves_no_file() {
+        let source = temp_path("exp-cancel", "a.mp4");
+        make_sample(&source, 1, 320, 240, false);
+        let out = export_path(&source);
+        let cancel = AtomicBool::new(true);
+        let r = run_export(&source, &out, &plan_for(&source, vec![]), 2_000_000, &mut |_, _| {}, &cancel);
+        assert!(r.is_err());
+        assert!(!cancel.load(Ordering::Relaxed) || !out.exists());
+        let data = source.parent().unwrap().join(DATA_DIR);
+        let parts = std::fs::read_dir(&data).map(|d| d.filter_map(|e| e.ok()).filter(|e| e.path().extension().is_some_and(|x| x == "part")).count()).unwrap_or(0);
+        assert_eq!(parts, 0);
+    }
+
+    #[test]
+    fn video_without_audio_exports() {
+        let source = temp_path("exp-noaudio", "a.mp4");
+        make_sample(&source, 1, 320, 240, false);
+        let out = export(&source, &plan_for(&source, vec![])).unwrap();
+        let (frames, _, audio) = probe(&out).unwrap();
+        assert!(frames >= 29);
+        assert_eq!(audio, 0);
+    }
+
+    #[test]
+    fn vietnamese_names_export() {
+        let source = temp_path("exp-vi", "bài giảng.mp4");
+        make_sample(&source, 1, 320, 240, false);
+        let out = export(&source, &plan_for(&source, vec![])).unwrap();
+        assert_eq!(out.file_name().unwrap().to_string_lossy(), "bài giảng_edit.mp4");
+        assert!(out.exists());
+    }
+
+    #[test]
+    fn progress_reaches_the_total() {
+        let source = temp_path("exp-progress", "a.mp4");
+        make_sample(&source, 1, 320, 240, false);
+        let plan = plan_for(&source, vec![]);
+        let mut last = (0, 0);
+        run_export(&source, &export_path(&source), &plan, 2_000_000, &mut |d, t| last = (d, t), &AtomicBool::new(false)).unwrap();
+        assert_eq!(last, (plan.frames(), plan.frames()));
+    }
+}
