@@ -40,6 +40,9 @@
     }
   },
   "bundle": {
+    "publisher": "HP Media",
+    "copyright": "© 2026 HP Media — Nguyễn Hoàng Phụng",
+    "homepage": "https://github.com/hpmediaoffifical/hp-screen",
     "active": true,
     "targets": ["nsis"],
     "icon": [

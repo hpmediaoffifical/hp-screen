@@ -1,5 +1,8 @@
 {
   "name": "hp-screen",
+  "author": "Nguyễn Hoàng Phụng (HP Media)",
+  "license": "MIT",
+  "repository": "https://github.com/hpmediaoffifical/hp-screen",
   "private": true,
   "version": "0.1.0",
   "type": "module",

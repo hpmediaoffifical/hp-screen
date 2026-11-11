@@ -3,6 +3,9 @@ name = "hp-core"
 version = "0.1.0"
 edition = "2024"
 description = "HP Screen pure logic (no Windows calls)"
+authors = ["Nguyễn Hoàng Phụng (HP Media)"]
+license = "MIT"
+repository = "https://github.com/hpmediaoffifical/hp-screen"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

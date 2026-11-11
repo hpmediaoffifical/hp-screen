@@ -2,6 +2,9 @@
 name = "hp-screen"
 version = "0.1.0"
 description = "HP Screen - quay màn hình cho Windows 11"
+authors = ["Nguyễn Hoàng Phụng (HP Media)"]
+license = "MIT"
+repository = "https://github.com/hpmediaoffifical/hp-screen"
 edition = "2024"
 
 [lib]
