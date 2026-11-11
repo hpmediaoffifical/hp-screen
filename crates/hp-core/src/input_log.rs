@@ -39,8 +39,7 @@ pub enum Event {
 
 /// Serializes a header or event as one JSON line without the trailing newline.
 pub fn to_line<T: Serialize>(v: &T) -> String {
-    let _ = v;
-    todo!()
+    serde_json::to_string(v).unwrap_or_default()
 }
 
 /// A key-down as seen by the keyboard hook.
@@ -60,8 +59,53 @@ pub struct KeyStroke {
 /// Never logged: letters, digits and punctuation typed plainly or with Shift, so passwords
 /// and other typed text cannot end up in the log.
 pub fn loggable_combo(k: &KeyStroke) -> Option<String> {
-    let _ = k;
-    todo!()
+    let has_command_modifier = k.ctrl || k.alt || k.win;
+    let name = match special_key_name(k.vk) {
+        Some(name) => name,
+        None if has_command_modifier => character_key_name(k.vk)?,
+        None => return None,
+    };
+    let mut out = String::new();
+    for (on, prefix) in [(k.ctrl, "Ctrl+"), (k.alt, "Alt+"), (k.shift, "Shift+"), (k.win, "Win+")] {
+        if on {
+            out.push_str(prefix);
+        }
+    }
+    out.push_str(&name);
+    Some(out)
+}
+
+/// Keys that produce no text: safe to log even without a modifier.
+fn special_key_name(vk: u32) -> Option<String> {
+    let name = match vk {
+        0x70..=0x87 => return Some(format!("F{}", vk - 0x70 + 1)),
+        0x08 => "Backspace",
+        0x09 => "Tab",
+        0x0D => "Enter",
+        0x1B => "Esc",
+        0x21 => "PageUp",
+        0x22 => "PageDown",
+        0x23 => "End",
+        0x24 => "Home",
+        0x25 => "Left",
+        0x26 => "Up",
+        0x27 => "Right",
+        0x28 => "Down",
+        0x2C => "PrintScreen",
+        0x2D => "Insert",
+        0x2E => "Delete",
+        _ => return None,
+    };
+    Some(name.to_string())
+}
+
+/// Keys that type text: only logged as part of a Ctrl/Alt/Win shortcut.
+fn character_key_name(vk: u32) -> Option<String> {
+    match vk {
+        0x30..=0x39 | 0x41..=0x5A => char::from_u32(vk).map(String::from),
+        0x20 => Some("Space".to_string()),
+        _ => None,
+    }
 }
 
 /// Limits mouse-move events to 60 per second.
@@ -77,8 +121,14 @@ impl MoveSampler {
 
     /// Whether a move at `t_ms` should be written.
     pub fn accept(&mut self, t_ms: i64) -> bool {
-        let _ = (t_ms, self.last_ms);
-        todo!()
+        const MIN_GAP_MS: i64 = 16;
+        match self.last_ms {
+            Some(last) if t_ms - last < MIN_GAP_MS => false,
+            _ => {
+                self.last_ms = Some(t_ms);
+                true
+            }
+        }
     }
 }
 

@@ -3,8 +3,12 @@
 /// Adds two sample buffers, clamping to [-1, 1]. The result is as long as the longer input;
 /// the shorter one is treated as silence past its end.
 pub fn mix_f32(a: &[f32], b: &[f32]) -> Vec<f32> {
-    let _ = (a, b);
-    todo!()
+    (0..a.len().max(b.len()))
+        .map(|i| {
+            let sum = a.get(i).copied().unwrap_or(0.0) + b.get(i).copied().unwrap_or(0.0);
+            sum.clamp(-1.0, 1.0)
+        })
+        .collect()
 }
 
 #[cfg(test)]

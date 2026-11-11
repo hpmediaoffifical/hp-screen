@@ -6,3 +6,6 @@ pub mod timeline;
 pub mod quality;
 pub mod hotkey;
 pub mod settings;
+pub mod input_log;
+pub mod mix;
+pub mod library;

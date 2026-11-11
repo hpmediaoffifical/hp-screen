@@ -24,26 +24,37 @@ pub struct Item {
 
 /// `.mp4` is a video and `.png` an image (any letter case); anything else is not ours.
 pub fn kind_of(path: &Path) -> Option<Kind> {
-    let _ = path;
-    todo!()
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "mp4" => Some(Kind::Video),
+        "png" => Some(Kind::Image),
+        _ => None,
+    }
 }
 
 /// Newest first, optionally keeping one kind only.
-pub fn sort_and_filter(items: Vec<Item>, filter: Option<Kind>) -> Vec<Item> {
-    let _ = (items, filter);
-    todo!()
+pub fn sort_and_filter(mut items: Vec<Item>, filter: Option<Kind>) -> Vec<Item> {
+    if let Some(kind) = filter {
+        items.retain(|i| i.kind == kind);
+    }
+    items.sort_by(|a, b| b.created_ms.cmp(&a.created_ms).then_with(|| a.path.cmp(&b.path)));
+    items
 }
 
 /// `<dir>/.hpscreen/<stem>.input.jsonl`
 pub fn sidecar_path(media: &Path) -> PathBuf {
-    let _ = media;
-    todo!()
+    companion(media, "input.jsonl")
 }
 
 /// `<dir>/.hpscreen/<stem>.thumb.png`
 pub fn thumb_path(media: &Path) -> PathBuf {
-    let _ = media;
-    todo!()
+    companion(media, "thumb.png")
+}
+
+fn companion(media: &Path, suffix: &str) -> PathBuf {
+    let stem = media.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let dir = media.parent().unwrap_or_else(|| Path::new(""));
+    dir.join(DATA_DIR).join(format!("{stem}.{suffix}"))
 }
 
 #[cfg(test)]
