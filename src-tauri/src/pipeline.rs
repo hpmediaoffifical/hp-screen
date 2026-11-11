@@ -241,11 +241,10 @@ fn pace_loop(
                 }
             }
             if width != 0 {
-                if written == 0 {
-                    if let Some(thumb) = &cfg.thumb {
+                if written == 0
+                    && let Some(thumb) = &cfg.thumb {
                         save_thumbnail(&canvas, width, height, thumb);
                     }
-                }
                 // Keep the frame count in step with the clock: repeat the current picture when
                 // nothing changed on screen, skip ahead when the encoder cannot keep up.
                 let due = video_time / frame_duration;

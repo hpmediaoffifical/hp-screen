@@ -62,7 +62,7 @@ impl Mp4Encoder {
     /// Opens `cfg.path` for writing. Tries the hardware encoder first, then software.
     pub fn new(cfg: &EncoderConfig) -> Result<Self, String> {
         init_thread();
-        if cfg.width == 0 || cfg.height == 0 || cfg.width % 2 != 0 || cfg.height % 2 != 0 {
+        if cfg.width == 0 || cfg.height == 0 || !cfg.width.is_multiple_of(2) || !cfg.height.is_multiple_of(2) {
             return Err(format!("Kích thước video không hợp lệ: {}x{}", cfg.width, cfg.height));
         }
         // SAFETY: Media Foundation is started; all pointers passed are valid for the calls.

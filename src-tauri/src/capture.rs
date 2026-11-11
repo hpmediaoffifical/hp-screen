@@ -203,7 +203,7 @@ pub fn grab_frame(target: &Target) -> Result<image::RgbaImage, String> {
             let row_bytes = f.width as usize * 4;
             let mut rgba = Vec::with_capacity(row_bytes * f.height as usize);
             for row in f.bgra.chunks(f.stride as usize).take(f.height as usize) {
-                for px in row[..row_bytes].chunks_exact(4) {
+                for px in row[..row_bytes].as_chunks::<4>().0 {
                     rgba.extend_from_slice(&[px[2], px[1], px[0], 255]);
                 }
             }
