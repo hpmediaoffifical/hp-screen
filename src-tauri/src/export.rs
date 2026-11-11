@@ -109,8 +109,9 @@ fn write_all(
         }
         let Some(fp) = plan.frame(n) else { break };
         let src = video.frame_at(fp.src_ms)?;
-        // Same size and nothing to draw: the encoder crops an odd source edge by itself.
-        let direct = fp.draws.is_empty() && info.width >= out_w && info.height >= out_h && info.width - out_w <= 1 && info.height - out_h <= 1;
+        // Same size, no zoom and nothing to draw: the encoder crops an odd source edge by itself.
+        let zoomed = fp.camera.scale > 1.0001;
+        let direct = !zoomed && fp.draws.is_empty() && info.width >= out_w && info.height >= out_h && info.width - out_w <= 1 && info.height - out_h <= 1;
         let (frame, stride): (&[u8], u32) = if direct {
             (src, info.width * 4)
         } else {
@@ -118,7 +119,8 @@ fn write_all(
                 compositor = Some(Compositor::new(out_w, out_h, Device::Hardware)?);
             }
             let c = compositor.as_mut().expect("just created");
-            (c.render(src, info.width, info.height, &fp.draws)?, out_w * 4)
+            let view = zoomed.then(|| fp.camera.view(info.width, info.height));
+            (c.render(src, info.width, info.height, view, &fp.draws)?, out_w * 4)
         };
         if first.is_none() {
             first = Some(tight(frame, stride, out_w, out_h));
@@ -291,6 +293,40 @@ mod tests {
         assert_eq!(std::fs::read(&planned).unwrap(), b"precious");
         assert_eq!(written, source.with_file_name("a_edit_2.mp4"));
         assert!(written.exists());
+    }
+
+    fn zoomed(cuts: Vec<Span>, start_ms: i64, end_ms: i64) -> EditDoc {
+        use hp_core::zoom::{ZoomDoc, ZoomSegment};
+        let segments = vec![ZoomSegment { start_ms, end_ms, scale: 2.0, center: Some((0.25, 0.25)), manual: true }];
+        EditDoc { cuts, zoom: ZoomDoc { enabled: true, segments }, ..EditDoc::default() }
+    }
+
+    fn plan_doc(path: &Path, doc: &EditDoc) -> Plan {
+        let (_, info) = VideoDecoder::open(path).unwrap();
+        let src = Source { width: info.width, height: info.height, duration_ms: info.duration_ms, fps: info.fps };
+        Plan::new(src, doc, None)
+    }
+
+    #[test]
+    fn zoomed_export_shows_the_zoomed_area() {
+        let source = temp_path("exp-zoom", "a.mp4");
+        make_quadrants(&source, 2, 320, 240);
+        let out = export(&source, &plan_doc(&source, &zoomed(vec![], 0, 2000))).unwrap();
+        let (mut dec, _) = VideoDecoder::open(&out).unwrap();
+        let f = dec.frame_at(1800).unwrap();
+        assert!(near(centre_rgb(f, 320, 240), [255, 0, 0]), "centre shows the zoomed top-left: {:?}", centre_rgb(f, 320, 240));
+        // At 2x on the top-left quarter, the whole frame is red.
+        let i = ((230 * 320 + 310) * 4) as usize;
+        assert!(near([f[i + 2], f[i + 1], f[i]], [255, 0, 0]), "bottom-right corner is still red: {:?}", [f[i + 2], f[i + 1], f[i]]);
+    }
+
+    #[test]
+    fn zoom_inside_a_cut_exports() {
+        let source = temp_path("exp-zoom-cut", "a.mp4");
+        make_quadrants(&source, 2, 320, 240);
+        let out = export(&source, &plan_doc(&source, &zoomed(vec![Span { start_ms: 500, end_ms: 1500 }], 600, 1400))).unwrap();
+        let (frames, _, _) = probe(&out).unwrap();
+        assert!((29..=31).contains(&frames), "{frames}");
     }
 
     #[test]

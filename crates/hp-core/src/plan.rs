@@ -4,6 +4,10 @@ use crate::edit::EditDoc;
 use crate::edit::EffectToggles;
 use crate::effects::{Draw, Effects, draws_at};
 use crate::geometry::make_even;
+use crate::zoom::{Camera, camera_at, camera_track};
+
+/// Camera samples per second for zoom.
+const CAMERA_STEP_MS: i64 = 1000 / 60;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Source {
@@ -18,6 +22,8 @@ pub struct FramePlan {
     pub out_ms: i64,
     pub src_ms: i64,
     pub draws: Vec<Draw>,
+    /// Where the zoom camera looks in the source frame.
+    pub camera: Camera,
 }
 
 #[derive(Clone, Debug)]
@@ -26,12 +32,24 @@ pub struct Plan {
     cuts: Cuts,
     effects: Option<Effects>,
     toggles: EffectToggles,
+    /// Zoom camera over source time; `None` when zoom is off.
+    track: Option<Vec<(i64, Camera)>>,
 }
 
 impl Plan {
     /// `effects` is `None` for a video without an input log.
     pub fn new(src: Source, doc: &EditDoc, effects: Option<Effects>) -> Plan {
-        Plan { src, cuts: doc.cuts(src.duration_ms), effects, toggles: doc.effects }
+        let track = doc.zoom.enabled.then(|| {
+            let (w, h) = (src.width.max(1) as f32, src.height.max(1) as f32);
+            let cursor = |t: i64| effects.as_ref().and_then(|e| e.cursor_at(t)).map(|(x, y)| (x / w, y / h));
+            camera_track(&doc.zoom, &cursor, src.duration_ms, CAMERA_STEP_MS)
+        });
+        Plan { src, cuts: doc.cuts(src.duration_ms), effects, toggles: doc.effects, track }
+    }
+
+    /// The zoom camera samples (for the preview).
+    pub fn camera_track(&self) -> Option<&[(i64, Camera)]> {
+        self.track.as_deref()
     }
 
     pub fn frames(&self) -> u64 {
@@ -56,7 +74,8 @@ impl Plan {
             Some(e) => draws_at(e, src_ms, &self.toggles, self.src.height),
             None => Vec::new(),
         };
-        Some(FramePlan { out_ms, src_ms, draws })
+        let camera = self.track.as_deref().map_or(Camera::WHOLE, |t| camera_at(t, src_ms));
+        Some(FramePlan { out_ms, src_ms, draws, camera })
     }
 
     pub fn cuts(&self) -> &Cuts {
@@ -119,6 +138,18 @@ mod tests {
         assert_eq!(f.src_ms, 6000);
         assert!(matches!(f.draws.as_slice(), [Draw::Ring { .. }]), "{:?}", f.draws);
         assert!(p.frame(0).unwrap().draws.is_empty());
+    }
+
+    #[test]
+    fn plan_frames_carry_the_camera() {
+        use crate::zoom::{ZoomDoc, ZoomSegment};
+        let zoom = ZoomDoc { enabled: true, segments: vec![ZoomSegment { start_ms: 0, end_ms: 10_000, scale: 2.0, center: Some((0.25, 0.25)), manual: true }] };
+        let p = Plan::new(src(640, 480), &EditDoc { zoom, ..EditDoc::default() }, None);
+        assert_eq!(p.frame(0).unwrap().camera.scale, 1.0, "eases in from the whole frame");
+        let late = p.frame(250).unwrap().camera;
+        assert!((late.scale - 2.0).abs() < 0.02 && (late.cx - 0.25).abs() < 0.01, "{late:?}");
+        let off = Plan::new(src(640, 480), &EditDoc::default(), None);
+        assert_eq!(off.frame(100).unwrap().camera, crate::zoom::Camera::WHOLE);
     }
 
     #[test]

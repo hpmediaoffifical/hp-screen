@@ -50,6 +50,29 @@ pub fn make_sample(path: &Path, secs: u32, w: u32, h: u32, audio: bool) {
     enc.finish().unwrap();
 }
 
+/// Writes `secs` seconds of `w`×`h` video whose quarters are red (top left), green (top
+/// right), blue (bottom left) and white (bottom right).
+pub fn make_quadrants(path: &Path, secs: u32, w: u32, h: u32) {
+    let cfg = EncoderConfig { path: path.to_path_buf(), width: w, height: h, fps: FPS, video_bitrate: 2_000_000, audio: false };
+    let mut enc = Mp4Encoder::new(&cfg).expect("encoder opens");
+    let mut frame = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let [r, g, b] = match (x < w / 2, y < h / 2) {
+                (true, true) => [255, 0, 0],
+                (false, true) => [0, 255, 0],
+                (true, false) => [0, 0, 255],
+                (false, false) => [255, 255, 255],
+            };
+            frame.extend_from_slice(&[b, g, r, 255]);
+        }
+    }
+    for n in 0..secs * FPS {
+        enc.write_video(&frame, w * 4, n as i64 * 10_000_000 / FPS as i64).unwrap();
+    }
+    enc.finish().unwrap();
+}
+
 /// Centre pixel of a BGRA frame as RGB.
 pub fn centre_rgb(bgra: &[u8], w: u32, h: u32) -> [u8; 3] {
     let i = ((h / 2 * w + w / 2) * 4) as usize;
