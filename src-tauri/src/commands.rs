@@ -105,7 +105,7 @@ pub fn settings_set(app: AppHandle, state: State<'_, AppState>, settings: Settin
     let previous = std::mem::replace(&mut *state.settings.lock().unwrap_or_else(|e| e.into_inner()), settings.clone());
     // Re-registering briefly drops the hotkeys, so only do it when one of them changed.
     let hotkeys = |s: &Settings| {
-        [s.hotkey_toggle.clone(), s.hotkey_pause.clone(), s.hotkey_screenshot.clone(), s.hotkey_quickshot.clone()]
+        [s.hotkey_toggle.clone(), s.hotkey_pause.clone(), s.hotkey_screenshot.clone(), s.hotkey_quickshot.clone(), s.hotkey_draw.clone()]
     };
     if hotkeys(&previous) != hotkeys(&settings) {
         crate::hotkeys::register_hotkeys(&app, &settings);

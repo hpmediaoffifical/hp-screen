@@ -19,6 +19,7 @@ mod compositor;
 mod export;
 mod edit_cmds;
 mod live_layer;
+mod live_cmds;
 #[cfg(test)]
 mod test_media;
 
@@ -93,6 +94,11 @@ pub fn run() {
             edit_cmds::edit_keep,
             edit_cmds::export_start,
             edit_cmds::export_cancel,
+            live_cmds::draw_set,
+            live_cmds::draw_toggle,
+            live_cmds::draw_stroke,
+            live_cmds::draw_clear,
+            live_cmds::draw_context,
         ])
         .run(tauri::generate_context!())
         .expect("error while running HP Screen");

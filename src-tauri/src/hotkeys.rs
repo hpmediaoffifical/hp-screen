@@ -17,6 +17,8 @@ pub enum HotkeyAction {
     Screenshot,
     /// Instant screenshot of the selected source.
     Quickshot,
+    /// Draw on screen while recording.
+    Draw,
 }
 
 /// Outcome of registering one hotkey, shown next to its field in Settings.
@@ -42,6 +44,7 @@ pub fn register_hotkeys(app: &AppHandle, settings: &Settings) -> Vec<HotkeyStatu
         (HotkeyAction::Pause, &settings.hotkey_pause),
         (HotkeyAction::Screenshot, &settings.hotkey_screenshot),
         (HotkeyAction::Quickshot, &settings.hotkey_quickshot),
+        (HotkeyAction::Draw, &settings.hotkey_draw),
     ]
     .into_iter()
     .map(|(action, hotkey)| {
@@ -100,6 +103,16 @@ pub fn run_action(app: &AppHandle, action: HotkeyAction) {
             std::thread::spawn(move || match screenshot::take_screenshot(&app, &settings, &target) {
                 Ok(_) => events::library_changed(&app),
                 Err(message) => events::rec_error(&app, &message),
+            });
+            Ok(())
+        }
+        HotkeyAction::Draw => {
+            let app = app.clone();
+            // Opening the drawing window must not run on the hotkey (event loop) thread.
+            tauri::async_runtime::spawn(async move {
+                if let Err(message) = crate::live_cmds::toggle_drawing(app.clone()).await {
+                    events::rec_error(&app, &message);
+                }
             });
             Ok(())
         }

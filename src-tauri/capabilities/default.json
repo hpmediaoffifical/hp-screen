@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for HP Screen's own windows",
-  "windows": ["main", "control-bar", "picker", "snip"],
+  "windows": ["main", "control-bar", "picker", "snip", "draw", "cam"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

@@ -202,6 +202,7 @@ pub fn sync_windows(app: &AppHandle, state: RecState) {
         }
         show_bar(app);
     } else {
+        crate::live_cmds::close_windows(app);
         if !COMPACT.load(Ordering::SeqCst) {
             if let Some(bar) = app.get_webview_window(CONTROL_BAR) {
                 let _ = bar.hide();
