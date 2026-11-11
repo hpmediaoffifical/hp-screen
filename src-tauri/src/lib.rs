@@ -22,6 +22,7 @@ mod edit_cmds;
 mod live_layer;
 mod live_cmds;
 mod camera;
+mod asr;
 #[cfg(test)]
 mod test_media;
 
