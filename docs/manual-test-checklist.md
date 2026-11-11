@@ -101,21 +101,21 @@ Cột "Máy" ghi những gì kiểm thử tự động đã phủ (video mẫu d
 
 | # | Việc cần thử | Máy | Người |
 |---|---|---|---|
-| E1 | Thư viện → thẻ video → "Chỉnh sửa": trang Chỉnh sửa mở ra, có hình video | — | |
-| E2 | Bấm ▶ hoặc Space: video phát; tua bằng cách bấm lên dòng thời gian, bấm ←/→ (Shift + ←/→ là 1 giây) | — | |
-| E3 | Kéo hai tay vàng ở đầu và cuối dòng thời gian: khi phát, video bắt đầu và dừng đúng chỗ đó | Đạt (`frame_times_skip_the_removed_span`) | |
-| E4 | Kéo chọn một đoạn giữa (hoặc I rồi O) → "Bỏ đoạn này": đoạn thành sọc, khi phát nhảy qua | Đạt (`export_drops_the_removed_span`) | |
-| E5 | Bấm vào đoạn sọc → "Giữ lại": đoạn được giữ lại | — | |
-| E6 | Ctrl+Z / Ctrl+Y hoàn tác và làm lại; một lần kéo tay cắt là một bước hoàn tác | — | |
-| E7 | Thoát trang rồi mở lại: các chỉnh sửa vẫn còn | Đạt (`save_then_load_round_trips`) | |
-| E8 | Thẻ Xuất → "Xuất MP4": thanh tiến độ chạy, xong hiện "Đã lưu …_edit.mp4"; thẻ mới có trong Thư viện | Đạt (`export_writes_thumbnail_and_meta`) | |
-| E9 | Phát file `_edit.mp4`: đúng phần giữ lại, hình và tiếng khớp, chỗ nối không có tiếng "bụp" | Đạt một phần (số khung, không còn khung của đoạn bỏ); tai người chưa nghe | |
-| E10 | File gốc vẫn còn nguyên, phát được như cũ | Đạt (`export_never_touches_the_source`) | |
-| E11 | Bấm "Hủy" giữa lúc xuất: không có file `_edit` dở trong thư mục | Đạt (`cancelled_export_leaves_no_file`) | |
-| E12 | Xuất lần hai: file mới tên `_edit_2.mp4`, file cũ không bị ghi đè | Đạt (`export_name_does_not_overwrite`) | |
-| E13 | Quay một đoạn có click trái, phải, giữa, kéo thả, cuộn chuột, bấm Ctrl+C hai lần: xem trước có vòng màu đúng nút, chấm khi giữ nút, biểu tượng cuộn, chip "Ctrl + C ×2" | Đạt cho bản xuất (`export_draws_click_effects`, test vẽ của compositor) | |
-| E14 | Thẻ Hiệu ứng: tắt "Vòng click" / "Phím tắt" thì xem trước và bản xuất đều không còn hiệu ứng đó | Đạt cho bản xuất (`toggles_hide_effects`) | |
-| E15 | Hiệu ứng trong xem trước trông giống bản xuất (vị trí, màu, cỡ) | — | |
-| E16 | Mở một video cũ (quay trước khi có nhật ký) hoặc một file `_edit.mp4`: vẫn cắt và xuất được; thẻ Hiệu ứng báo "không có nhật ký thao tác" | — | |
+| E1 | Thư viện → thẻ video → "Chỉnh sửa": trang Chỉnh sửa mở ra, có hình video | — | Đạt (người dùng xác nhận 2026-11-12) |
+| E2 | Bấm ▶ hoặc Space: video phát; tua bằng cách bấm lên dòng thời gian, bấm ←/→ (Shift + ←/→ là 1 giây) | — | Đạt (người dùng xác nhận 2026-11-12) |
+| E3 | Kéo hai tay vàng ở đầu và cuối dòng thời gian: khi phát, video bắt đầu và dừng đúng chỗ đó | Đạt (`frame_times_skip_the_removed_span`) | Đạt (người dùng xác nhận 2026-11-12) |
+| E4 | Kéo chọn một đoạn giữa (hoặc I rồi O) → "Bỏ đoạn này": đoạn thành sọc, khi phát nhảy qua | Đạt (`export_drops_the_removed_span`) | Đạt (người dùng xác nhận 2026-11-12) |
+| E5 | Bấm vào đoạn sọc → "Giữ lại": đoạn được giữ lại | — | Đạt (người dùng xác nhận 2026-11-12) |
+| E6 | Ctrl+Z / Ctrl+Y hoàn tác và làm lại; một lần kéo tay cắt là một bước hoàn tác | — | Đạt (người dùng xác nhận 2026-11-12) |
+| E7 | Thoát trang rồi mở lại: các chỉnh sửa vẫn còn | Đạt (`save_then_load_round_trips`) | Đạt (người dùng xác nhận 2026-11-12) |
+| E8 | Thẻ Xuất → "Xuất MP4": thanh tiến độ chạy, xong hiện "Đã lưu …_edit.mp4"; thẻ mới có trong Thư viện | Đạt (`export_writes_thumbnail_and_meta`) | Đạt (người dùng xác nhận 2026-11-12) |
+| E9 | Phát file `_edit.mp4`: đúng phần giữ lại, hình và tiếng khớp, chỗ nối không có tiếng "bụp" | Đạt một phần (số khung, không còn khung của đoạn bỏ); tai người chưa nghe | Đạt (người dùng xác nhận 2026-11-12) |
+| E10 | File gốc vẫn còn nguyên, phát được như cũ | Đạt (`export_never_touches_the_source`) | Đạt (người dùng xác nhận 2026-11-12) |
+| E11 | Bấm "Hủy" giữa lúc xuất: không có file `_edit` dở trong thư mục | Đạt (`cancelled_export_leaves_no_file`) | Đạt (người dùng xác nhận 2026-11-12) |
+| E12 | Xuất lần hai: file mới tên `_edit_2.mp4`, file cũ không bị ghi đè | Đạt (`export_name_does_not_overwrite`) | Đạt (người dùng xác nhận 2026-11-12) |
+| E13 | Quay một đoạn có click trái, phải, giữa, kéo thả, cuộn chuột, bấm Ctrl+C hai lần: xem trước có vòng màu đúng nút, chấm khi giữ nút, biểu tượng cuộn, chip "Ctrl + C ×2" | Đạt cho bản xuất (`export_draws_click_effects`, test vẽ của compositor) | Đạt (người dùng xác nhận 2026-11-12) |
+| E14 | Thẻ Hiệu ứng: tắt "Vòng click" / "Phím tắt" thì xem trước và bản xuất đều không còn hiệu ứng đó | Đạt cho bản xuất (`toggles_hide_effects`) | Đạt (người dùng xác nhận 2026-11-12) |
+| E15 | Hiệu ứng trong xem trước trông giống bản xuất (vị trí, màu, cỡ) | — | Đạt (người dùng xác nhận 2026-11-12) |
+| E16 | Mở một video cũ (quay trước khi có nhật ký) hoặc một file `_edit.mp4`: vẫn cắt và xuất được; thẻ Hiệu ứng báo "không có nhật ký thao tác" | — | Đạt (người dùng xác nhận 2026-11-12) |
 | E17 | Đổi tên video đã chỉnh sửa rồi mở lại trang Chỉnh sửa: chỉnh sửa đi theo | Đạt (`rename_moves_companions_and_cleans_the_name`) | |
 | E18 | Đang quay thì bấm Xuất: báo "Đang quay, hãy xuất sau khi dừng" | — | |
