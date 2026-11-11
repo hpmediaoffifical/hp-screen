@@ -30,6 +30,8 @@ pub struct EditSession {
     pub info: VideoInfo,
     pub doc: EditDoc,
     pub has_log: bool,
+    /// Click and key effects from the input log, for the preview.
+    pub effects: Option<Effects>,
     pub warning: Option<String>,
 }
 
@@ -126,7 +128,8 @@ pub async fn edit_open(app: AppHandle, state: State<'_, AppState>, path: String)
     let media = video_item(&app, &state, &path)?;
     let info = open_video(&media)?;
     let (doc, warning) = load_doc(&media)?;
-    Ok(EditSession { info, doc, has_log: sidecar_path(&media).is_file(), warning })
+    let effects = effects_for(&media, &info);
+    Ok(EditSession { info, doc, has_log: sidecar_path(&media).is_file(), effects, warning })
 }
 
 #[tauri::command]

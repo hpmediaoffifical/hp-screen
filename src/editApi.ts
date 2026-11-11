@@ -9,12 +9,29 @@ export interface Span {
   end_ms: number;
 }
 
+export interface EffectToggles {
+  clicks: boolean;
+  keys: boolean;
+}
+
 export interface EditDoc {
   v: number;
   trim: { start_ms: number; end_ms: number | null };
   /** Removed spans, in source time. */
   cuts: Span[];
-  effects: { clicks: boolean; keys: boolean };
+  effects: EffectToggles;
+}
+
+export type MouseButton = "left" | "right" | "middle";
+
+/** Effects from the input log (hp-core::effects::Effects); positions in source pixels. */
+export interface Effects {
+  ripples: { t_ms: number; x: number; y: number; button: MouseButton }[];
+  holds: { start_ms: number; end_ms: number; button: MouseButton }[];
+  wheels: { start_ms: number; end_ms: number; up: boolean }[];
+  chips: { start_ms: number; end_ms: number; text: string }[];
+  /** [ms, x, y] */
+  cursor: [number, number, number][];
 }
 
 export interface VideoInfo {
@@ -29,6 +46,7 @@ export interface EditSession {
   info: VideoInfo;
   doc: EditDoc;
   has_log: boolean;
+  effects: Effects | null;
   warning: string | null;
 }
 

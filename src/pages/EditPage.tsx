@@ -4,10 +4,12 @@ import { editKeep, editOpen, editSave, type EditDoc, type EditSession, type Keep
 import ExportPanel from "../editor/ExportPanel";
 import Preview, { type PreviewHandle } from "../editor/Preview";
 import Timeline from "../editor/Timeline";
+import { drawEffects } from "../editor/drawEffects";
 
-type Tab = "cut" | "export";
+type Tab = "cut" | "effects" | "export";
 const TABS: { id: Tab; label: string }[] = [
   { id: "cut", label: "Cắt" },
+  { id: "effects", label: "Hiệu ứng" },
   { id: "export", label: "Xuất" },
 ];
 
@@ -191,6 +193,11 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
           onTime={setPlayhead}
           onPlaying={setPlaying}
           onError={() => setMessage("Không phát được video này trong trang chỉnh sửa.")}
+          draw={
+            session.effects
+              ? (ctx, ms) => drawEffects(ctx, session.effects!, ms, doc.effects, session.info.height, ctx.canvas.height / session.info.height)
+              : undefined
+          }
         />
         <aside className="editor-side">
           <div className="tabs" role="tablist">
@@ -211,6 +218,38 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
                 <button className="btn btn-small" disabled={past.current.length === 0} onClick={() => undoRedo(true)}>Hoàn tác</button>
                 <button className="btn btn-small" disabled={future.current.length === 0} onClick={() => undoRedo(false)}>Làm lại</button>
               </div>
+            </div>
+          )}
+          {tab === "effects" && (
+            <div className="panel-body">
+              {session.has_log && session.effects ? (
+                <>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={doc.effects.clicks}
+                      onChange={(e) => change({ ...doc, effects: { ...doc.effects, clicks: e.target.checked } })}
+                    />
+                    <span>
+                      Vòng click
+                      <span className="hint check-hint">Vòng lan ra mỗi lần bấm chuột: đỏ cam là chuột trái, xanh dương là chuột phải, xanh lá là chuột giữa. Có cả biểu tượng cuộn chuột.</span>
+                    </span>
+                  </label>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={doc.effects.keys}
+                      onChange={(e) => change({ ...doc, effects: { ...doc.effects, keys: e.target.checked } })}
+                    />
+                    <span>
+                      Phím tắt
+                      <span className="hint check-hint">Hiện tổ hợp phím như Ctrl + S ở cạnh dưới video. Chữ bạn gõ không bao giờ hiện.</span>
+                    </span>
+                  </label>
+                </>
+              ) : (
+                <p className="hint">Video này không có nhật ký thao tác, nên không có vòng click hay phím tắt.</p>
+              )}
             </div>
           )}
           {tab === "export" && (

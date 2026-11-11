@@ -1,5 +1,5 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { forwardRef, useEffect, useImperativeHandle, useRef, type ReactNode } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { keptTime, type Span } from "../editApi";
 
 export interface PreviewHandle {
@@ -16,8 +16,8 @@ interface Props {
   onTime: (ms: number) => void;
   onPlaying: (playing: boolean) => void;
   onError: () => void;
-  /** Drawn over the video, same size as the picture (effects canvas). */
-  overlay?: ReactNode;
+  /** Draws over the picture at source time `ms`; the canvas covers the whole video. */
+  draw?: (ctx: CanvasRenderingContext2D, ms: number) => void;
 }
 
 /** The video with playback that jumps over removed spans and stops at the trim end. */
@@ -27,6 +27,12 @@ const Preview = forwardRef<PreviewHandle, Props>(function Preview(props, ref) {
   keep.current = props.keep;
   const onTime = useRef(props.onTime);
   onTime.current = props.onTime;
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const draw = useRef(props.draw);
+  draw.current = props.draw;
+  const repaint = useRef<() => void>(() => {});
+  // Redraw when what is drawn changes, also while paused (no frames arrive then).
+  useEffect(() => repaint.current(), [props.draw]);
 
   // Keep playback inside kept spans on every frame.
   useEffect(() => {
@@ -47,7 +53,23 @@ const Preview = forwardRef<PreviewHandle, Props>(function Preview(props, ref) {
         }
       }
       onTime.current(v.currentTime * 1000);
+      paint();
     };
+    // The overlay canvas follows the size the video is shown at, in device pixels.
+    const paint = () => {
+      const c = canvas.current;
+      const ctx = c?.getContext("2d");
+      if (!c || !ctx) return;
+      const w = Math.round(v.clientWidth * devicePixelRatio);
+      const h = Math.round(v.clientHeight * devicePixelRatio);
+      if (c.width !== w || c.height !== h) {
+        c.width = w;
+        c.height = h;
+      }
+      if (draw.current) draw.current(ctx, v.currentTime * 1000);
+      else ctx.clearRect(0, 0, w, h);
+    };
+    repaint.current = paint;
     const supportsFrames = "requestVideoFrameCallback" in v;
     const loop = () => {
       if (stopped) return;
@@ -55,7 +77,10 @@ const Preview = forwardRef<PreviewHandle, Props>(function Preview(props, ref) {
       handle = supportsFrames ? v.requestVideoFrameCallback(loop) : requestAnimationFrame(loop);
     };
     loop();
-    const onSeeked = () => onTime.current(v.currentTime * 1000);
+    const onSeeked = () => {
+      onTime.current(v.currentTime * 1000);
+      paint();
+    };
     v.addEventListener("seeked", onSeeked);
     return () => {
       stopped = true;
@@ -101,7 +126,7 @@ const Preview = forwardRef<PreviewHandle, Props>(function Preview(props, ref) {
           onPause={() => props.onPlaying(false)}
           onError={props.onError}
         />
-        {props.overlay}
+        <canvas ref={canvas} className="preview-overlay" aria-hidden="true" />
       </div>
     </div>
   );
