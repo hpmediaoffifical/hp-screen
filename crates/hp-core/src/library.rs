@@ -103,3 +103,50 @@ mod tests {
         assert_eq!(sidecar_path(Path::new("d/a.b.mp4")), Path::new("d").join(".hpscreen").join("a.b.input.jsonl"));
     }
 }
+
+/// `<dir>/.hpscreen/<stem>.meta.json`: duration and size of a recording, written when it ends.
+pub fn meta_path(media: &Path) -> PathBuf {
+    companion(media, "meta.json")
+}
+
+/// Every file that accompanies `media`; they are renamed and deleted together with it.
+pub fn companion_paths(media: &Path) -> [PathBuf; 3] {
+    [sidecar_path(media), thumb_path(media), meta_path(media)]
+}
+
+/// What is known about a recording without opening the video file.
+#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
+pub struct MediaMeta {
+    pub duration_ms: u64,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl MediaMeta {
+    /// Duration from the number of frames written at a constant frame rate.
+    pub fn from_frames(frames: u64, fps: u32, width: u32, height: u32) -> Self {
+        Self { duration_ms: frames * 1000 / fps.max(1) as u64, width, height }
+    }
+}
+
+#[cfg(test)]
+mod companion_tests {
+    use super::*;
+
+    #[test]
+    fn meta_file_sits_with_the_other_companions() {
+        let data = Path::new("d").join(".hpscreen");
+        assert_eq!(meta_path(Path::new("d/hp_a.mp4")), data.join("hp_a.meta.json"));
+        assert_eq!(
+            companion_paths(Path::new("d/hp_a.mp4")),
+            [data.join("hp_a.input.jsonl"), data.join("hp_a.thumb.png"), data.join("hp_a.meta.json")]
+        );
+    }
+
+    #[test]
+    fn duration_comes_from_frame_count_and_rate() {
+        assert_eq!(MediaMeta::from_frames(90, 30, 1920, 1080), MediaMeta { duration_ms: 3000, width: 1920, height: 1080 });
+        assert_eq!(MediaMeta::from_frames(91, 60, 640, 480).duration_ms, 1516);
+        assert_eq!(MediaMeta::from_frames(10, 0, 2, 2).duration_ms, 10_000); // fps 0 is treated as 1
+    }
+}

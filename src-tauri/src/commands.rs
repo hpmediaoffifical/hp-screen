@@ -105,3 +105,66 @@ pub fn settings_set(app: AppHandle, state: State<'_, AppState>, settings: Settin
     crate::hotkeys::register_hotkeys(&app, &settings);
     Ok(settings)
 }
+
+fn library_dir(app: &AppHandle, state: &State<'_, AppState>) -> Result<std::path::PathBuf, String> {
+    crate::paths::output_dir(app, &state.settings())
+}
+
+/// A library path must be a media file directly inside the output folder: the UI only ever
+/// sends such paths, and nothing else may be renamed, deleted or opened through these commands.
+fn library_item(app: &AppHandle, state: &State<'_, AppState>, path: &str) -> Result<std::path::PathBuf, String> {
+    let path = std::path::PathBuf::from(path);
+    let dir = library_dir(app, state)?;
+    let inside = path.parent().is_some_and(|p| p == dir.as_path());
+    if !inside || hp_core::library::kind_of(&path).is_none() || !path.is_file() {
+        return Err("File không thuộc thư viện HP Screen".to_string());
+    }
+    Ok(path)
+}
+
+#[tauri::command]
+pub fn library_list(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    filter: Option<hp_core::library::Kind>,
+) -> Result<Vec<crate::library_fs::LibraryEntry>, String> {
+    Ok(crate::library_fs::list(&library_dir(&app, &state)?, filter))
+}
+
+#[tauri::command]
+pub fn library_rename(app: AppHandle, state: State<'_, AppState>, path: String, new_stem: String) -> Result<String, String> {
+    let renamed = crate::library_fs::rename(&library_item(&app, &state, &path)?, &new_stem)?;
+    events::library_changed(&app);
+    Ok(renamed.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub fn library_delete(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<(), String> {
+    crate::library_fs::delete(&library_item(&app, &state, &path)?)?;
+    events::library_changed(&app);
+    Ok(())
+}
+
+/// Opens the file with the default Windows app.
+#[tauri::command]
+pub fn library_open(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let path = library_item(&app, &state, &path)?;
+    app.opener().open_path(path.to_string_lossy(), None::<&str>).map_err(|e| format!("Không mở được file: {e}"))
+}
+
+/// Shows the file in File Explorer, or the output folder when no file is given.
+#[tauri::command]
+pub fn library_reveal(app: AppHandle, state: State<'_, AppState>, path: Option<String>) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    match path {
+        Some(path) => app
+            .opener()
+            .reveal_item_in_dir(library_item(&app, &state, &path)?)
+            .map_err(|e| format!("Không mở được thư mục: {e}")),
+        None => app
+            .opener()
+            .open_path(library_dir(&app, &state)?.to_string_lossy(), None::<&str>)
+            .map_err(|e| format!("Không mở được thư mục: {e}")),
+    }
+}

@@ -117,3 +117,34 @@ export const hotkeyStatus = () => invoke<HotkeyStatus[]>("hotkey_status");
 
 /** Smallest region side the recorder accepts, in physical pixels (mirrors hp-core MIN_SIZE). */
 export const MIN_REGION = 64;
+
+export type MediaKind = "video" | "image";
+export interface LibraryEntry {
+  path: string;
+  name: string;
+  kind: MediaKind;
+  created_ms: number;
+  size: number;
+  thumb: string | null;
+  duration_ms: number | null;
+  width: number | null;
+  height: number | null;
+}
+export const libraryList = (filter: MediaKind | null) => invoke<LibraryEntry[]>("library_list", { filter });
+export const libraryRename = (path: string, newStem: string) => invoke<string>("library_rename", { path, newStem });
+export const libraryDelete = (path: string) => invoke<void>("library_delete", { path });
+export const libraryOpen = (path: string) => invoke<void>("library_open", { path });
+export const libraryReveal = (path: string | null) => invoke<void>("library_reveal", { path });
+
+/** 1536 → "1,5 KB"; sizes use Vietnamese decimal commas. */
+export function formatSize(bytes: number): string {
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  const text = unit === 0 ? String(value) : value.toFixed(1).replace(".", ",");
+  return `${text} ${units[unit]}`;
+}

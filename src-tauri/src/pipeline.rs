@@ -49,6 +49,7 @@ pub type SharedEncoder = Arc<Mutex<Option<Mp4Encoder>>>;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Stats {
     pub frames: u64,
+    pub fps: u32,
     pub width: u32,
     pub height: u32,
 }
@@ -273,7 +274,7 @@ fn pace_loop(
             None => next_tick = Instant::now(), // running late; do not try to make up sleeps
         }
     }
-    Ok(Stats { frames: written.max(0) as u64, width, height })
+    Ok(Stats { frames: written.max(0) as u64, width, height, fps })
 }
 
 /// Copies the frame into the fixed-size canvas. A window that changed size is cropped or

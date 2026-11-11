@@ -227,7 +227,12 @@ impl Inner {
             lock(&self.input_hook).take(); // remove the hooks as soon as recording ends
             let pipeline = lock(&self.pipeline).take();
             let result = match pipeline {
-                Some(pipeline) => pipeline.finish().map(|_| ()),
+                Some(pipeline) => pipeline.finish().map(|stats| {
+                    if let Some(path) = lock(&self.file).clone() {
+                        let meta = hp_core::library::MediaMeta::from_frames(stats.frames, stats.fps, stats.width, stats.height);
+                        crate::library_fs::write_meta(&path, &meta);
+                    }
+                }),
                 None => Ok(()),
             };
             self.finalized(result.err());

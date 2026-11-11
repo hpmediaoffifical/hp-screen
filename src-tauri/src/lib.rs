@@ -6,6 +6,7 @@ mod encoder;
 mod events;
 mod hotkeys;
 mod input_hook;
+mod library_fs;
 mod paths;
 mod picker;
 mod pipeline;
@@ -52,6 +53,11 @@ pub fn run() {
             commands::picker_done,
             commands::settings_get,
             commands::settings_set,
+            commands::library_list,
+            commands::library_rename,
+            commands::library_delete,
+            commands::library_open,
+            commands::library_reveal,
         ])
         .run(tauri::generate_context!())
         .expect("error while running HP Screen");
