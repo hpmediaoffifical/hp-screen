@@ -12,3 +12,4 @@ pub mod library;
 pub mod cut;
 pub mod edit;
 pub mod effects;
+pub mod plan;
