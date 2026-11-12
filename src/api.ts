@@ -108,6 +108,7 @@ export interface Settings {
   input_log: boolean;
   autostart: boolean;
   last_region: Rect | null;
+  auto_update: boolean;
 }
 export const settingsGet = () => invoke<Settings>("settings_get");
 export const settingsSet = (settings: Settings) => invoke<Settings>("settings_set", { settings });
@@ -218,3 +219,24 @@ export const snipScrollStop = (keep: boolean) => invoke<[string, number, number]
 export const scrollClose = () => invoke<void>("scroll_close");
 export const onScrollProgress = (handler: (p: ScrollProgress) => void): Promise<UnlistenFn> =>
   listen<ScrollProgress>("scroll-progress", (e) => handler(e.payload));
+
+// Self-update from GitHub Releases (src-tauri/src/updater.rs).
+export interface UpdateInfo {
+  version: string;
+  current_version: string;
+  notes: string | null;
+}
+export type UpdateProgress =
+  | { phase: "downloading"; downloaded: number; total: number | null }
+  | { phase: "waiting_for_recording" }
+  | { phase: "installing" }
+  | { phase: "failed"; message: string };
+/** Looks for a new release now; null when HP Screen is up to date. */
+export const updateCheck = () => invoke<UpdateInfo | null>("update_check");
+export const updatePending = () => invoke<UpdateInfo | null>("update_pending");
+/** Downloads, waits for any recording to end, then installs and restarts HP Screen. */
+export const updateInstall = () => invoke<void>("update_install");
+export const onUpdateAvailable = (handler: (u: UpdateInfo) => void): Promise<UnlistenFn> =>
+  listen<UpdateInfo>("update-available", (e) => handler(e.payload));
+export const onUpdateProgress = (handler: (p: UpdateProgress) => void): Promise<UnlistenFn> =>
+  listen<UpdateProgress>("update-progress", (e) => handler(e.payload));

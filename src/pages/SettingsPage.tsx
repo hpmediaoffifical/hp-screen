@@ -1,4 +1,6 @@
 import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
+import { getVersion } from "@tauri-apps/api/app";
+import { checkForUpdate, installUpdate, progressText, useUpdate } from "../useUpdate";
 import {
   errorMessage,
   hotkeyStatus,
@@ -197,7 +199,41 @@ export default function SettingsPage() {
         />
         <Check label="Khởi động HP Screen cùng Windows" checked={settings.autostart} onChange={(autostart) => save({ autostart })} />
       </Group>
+
+      <UpdateGroup autoUpdate={settings.auto_update} onAutoUpdate={(auto_update) => save({ auto_update })} />
     </section>
+  );
+}
+
+function UpdateGroup(props: { autoUpdate: boolean; onAutoUpdate: (on: boolean) => void }) {
+  const { available, checking, progress, note } = useUpdate();
+  const [version, setVersion] = useState("");
+  useEffect(() => {
+    getVersion().then(setVersion).catch(() => {});
+  }, []);
+  const busy = progress !== null;
+
+  return (
+    <Group title="Cập nhật">
+      <Check
+        label="Tự động cập nhật"
+        hint="Tự kiểm tra bản mới trên GitHub khi mở HP Screen và vài giờ một lần, rồi hỏi bạn trước khi cài. Không bao giờ cài khi đang quay."
+        checked={props.autoUpdate}
+        onChange={props.onAutoUpdate}
+      />
+      <div className="row">
+        <button className="btn btn-small" disabled={checking || busy} onClick={checkForUpdate}>
+          {checking ? "Đang kiểm tra…" : "Kiểm tra cập nhật"}
+        </button>
+        {available && !busy && (
+          <button className="btn btn-small btn-accent" onClick={installUpdate}>Cập nhật lên {available.version}</button>
+        )}
+        {version && <span className="hint update-version">Phiên bản hiện tại: {version}</span>}
+      </div>
+      {busy && <p className="status" role="status">{progressText(progress)}</p>}
+      {!busy && available && !note && <p className="status" role="status">Có bản mới {available.version}.</p>}
+      {note && <p className={"status" + (note.error ? " err" : "")} role="status">{note.text}</p>}
+    </Group>
   );
 }
 

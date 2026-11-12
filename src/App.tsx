@@ -3,6 +3,7 @@ import { compactShow } from "./api";
 import RecordPage from "./pages/RecordPage";
 import LibraryPage from "./pages/LibraryPage";
 import SettingsPage from "./pages/SettingsPage";
+import UpdateNotice from "./components/UpdateNotice";
 
 type PageId = "record" | "library" | "settings";
 
@@ -39,6 +40,7 @@ export default function App() {
         {page === "library" && <LibraryPage />}
         {page === "settings" && <SettingsPage />}
       </main>
+      <UpdateNotice />
     </div>
   );
 }
