@@ -73,6 +73,13 @@ pub struct Effects {
     pub elements: Vec<UiBox>,
     /// When another window came to the front, and its box.
     pub windows: Vec<(i64, [f32; 4])>,
+    /// The video has no Windows cursor: it is drawn from `smooth` with `shapes`.
+    pub drawn_cursor: bool,
+    pub shapes: Vec<crate::cursor::CursorShape>,
+    /// (ms, shape id) as the cursor changed shape; 0 is hidden.
+    pub cursor_ids: Vec<(i64, u32)>,
+    /// The smooth, self-hiding cursor path (video pixels); empty unless `drawn_cursor`.
+    pub smooth: Vec<crate::cursor::CursorSample>,
 }
 
 /// The box of a UI element (video pixels): under a click (`kind` "click") or receiving keys ("focus").
@@ -94,6 +101,8 @@ pub enum Draw {
     Subtitle { text: String },
     /// A spotlight: the video outside this box (source pixels) is darkened by `alpha`.
     Spot { x: f32, y: f32, w: f32, h: f32, alpha: f32 },
+    /// The drawn cursor: tip at (x, y) in source pixels, `scale` times the shape's size.
+    Cursor { x: f32, y: f32, scale: f32, alpha: f32, shape: u32 },
 }
 
 pub fn build_effects(log: &ParsedLog, video_w: u32, video_h: u32) -> Effects {
@@ -102,7 +111,11 @@ pub fn build_effects(log: &ParsedLog, video_w: u32, video_h: u32) -> Effects {
         _ => (1.0, 1.0),
     };
     let at = |x: i32, y: i32| (x as f32 * sx, y as f32 * sy);
-    let mut fx = Effects { edge_guard: log.header.as_ref().is_some_and(|h| h.mode == "monitor"), ..Effects::default() };
+    let mut fx = Effects {
+        edge_guard: log.header.as_ref().is_some_and(|h| h.mode == "monitor"),
+        drawn_cursor: log.header.as_ref().is_some_and(|h| h.cursor),
+        ..Effects::default()
+    };
     let mut open_holds: Vec<(i64, Button)> = Vec::new();
     let mut chip_key: Option<(String, u32)> = None;
     for e in &log.events {
@@ -148,6 +161,11 @@ pub fn build_effects(log: &ParsedLog, video_w: u32, video_h: u32) -> Effects {
                 let (x, y) = at(r[0], r[1]);
                 fx.elements.push(UiBox { t_ms: *t, kind: k.clone(), rect: [x, y, r[2] as f32 * sx, r[3] as f32 * sy] });
             }
+            Event::Shape { id, hx, hy, png } => {
+                // Shapes are in screen pixels; the hot spot scales with the video like positions.
+                fx.shapes.push(crate::cursor::CursorShape { id: *id, hx: (*hx as f32 * sx).round() as i32, hy: (*hy as f32 * sy).round() as i32, png: png.clone() });
+            }
+            Event::Cur { t, id } => fx.cursor_ids.push((*t, *id)),
             Event::Win { t, r } => {
                 let (x, y) = at(r[0], r[1]);
                 fx.windows.push((*t, [x, y, r[2] as f32 * sx, r[3] as f32 * sy]));
@@ -178,6 +196,13 @@ pub fn build_effects(log: &ParsedLog, video_w: u32, video_h: u32) -> Effects {
         fx.holds.push(Hold { start_ms: start, end_ms: last_t, button });
     }
     fx.holds.sort_by_key(|h| h.start_ms);
+    if fx.drawn_cursor {
+        // Long enough past the last event for an idle cursor to fade out.
+        let end = last_t + crate::cursor::IDLE_MS + crate::cursor::FADE_MS + 200;
+        let holds = fx.holds.clone();
+        let pressed = |t: i64| holds.iter().any(|h| h.start_ms <= t && t < h.end_ms);
+        fx.smooth = crate::cursor::smooth_cursor(&|t| fx.cursor_at(t), &pressed, end);
+    }
     fx
 }
 
@@ -233,6 +258,15 @@ pub fn draws_at(e: &Effects, t_ms: i64, on: &EffectToggles, video_h: u32) -> Vec
             }
         }
     }
+    if e.drawn_cursor
+        && on.cursor
+        && let Some(c) = crate::cursor::cursor_at(&e.smooth, t_ms)
+    {
+        let shape = e.cursor_ids.iter().rev().find(|(t, _)| *t <= t_ms).map_or_else(|| e.shapes.first().map_or(0, |s| s.id), |(_, id)| *id);
+        if c.alpha > 0.0 && shape != 0 {
+            out.push(Draw::Cursor { x: c.x, y: c.y, scale: on.cursor_size.clamp(1.0, 3.0) * c.press, alpha: c.alpha, shape });
+        }
+    }
     if on.keys
         && let Some(c) = e.chips.iter().find(|c| c.start_ms <= t_ms && t_ms < c.end_ms)
     {
@@ -247,7 +281,7 @@ mod tests {
     use crate::geometry::Rect;
     use crate::input_log::Header;
 
-    const ALL: EffectToggles = EffectToggles { clicks: true, keys: true };
+    const ALL: EffectToggles = EffectToggles { clicks: true, keys: true, cursor: true, cursor_size: 1.5 };
 
     fn log(events: Vec<Event>) -> ParsedLog {
         ParsedLog { header: None, events }
@@ -257,7 +291,7 @@ mod tests {
     fn element_boxes_and_window_switches_are_in_video_pixels() {
         use crate::geometry::Rect;
         use crate::input_log::Header;
-        let header = Header { v: 1, mode: "monitor".into(), region: Rect { x: 0, y: 0, w: 200, h: 100 }, width: 200, height: 100, fps: 30 };
+        let header = Header { v: 1, mode: "monitor".into(), region: Rect { x: 0, y: 0, w: 200, h: 100 }, width: 200, height: 100, fps: 30, cursor: false };
         let events = vec![Event::El { t: 10, k: "click".into(), r: [10, 20, 30, 40] }, Event::El { t: 20, k: "focus".into(), r: [0, 0, 50, 10] }, Event::Win { t: 30, r: [0, 0, 100, 50] }];
         let fx = build_effects(&ParsedLog { header: Some(header), events }, 400, 200);
         assert_eq!(fx.elements, vec![UiBox { t_ms: 10, kind: "click".into(), rect: [20.0, 40.0, 60.0, 80.0] }, UiBox { t_ms: 20, kind: "focus".into(), rect: [0.0, 0.0, 100.0, 20.0] }]);
@@ -268,7 +302,7 @@ mod tests {
     fn typing_scrolls_and_edge_guard_come_from_the_log() {
         use crate::geometry::Rect;
         use crate::input_log::Header;
-        let header = |mode: &str| Header { v: 1, mode: mode.into(), region: Rect { x: 0, y: 0, w: 200, h: 100 }, width: 200, height: 100, fps: 30 };
+        let header = |mode: &str| Header { v: 1, mode: mode.into(), region: Rect { x: 0, y: 0, w: 200, h: 100 }, width: 200, height: 100, fps: 30, cursor: false };
         let events = vec![Event::Type { t: 100 }, Event::Wheel { t: 200, dx: 0, dy: 120, x: 50, y: 40 }, Event::Type { t: 300 }];
         let fx = build_effects(&ParsedLog { header: Some(header("monitor")), events: events.clone() }, 400, 200);
         assert!(fx.edge_guard);
@@ -401,15 +435,15 @@ mod tests {
             100,
             100,
         );
-        let no_clicks = draws_at(&e, 100, &EffectToggles { clicks: false, keys: true }, 100);
+        let no_clicks = draws_at(&e, 100, &EffectToggles { clicks: false, keys: true, cursor: true, cursor_size: 1.5 }, 100);
         assert!(no_clicks.iter().all(|d| matches!(d, Draw::Chip { .. })) && !no_clicks.is_empty());
-        let no_keys = draws_at(&e, 100, &EffectToggles { clicks: true, keys: false }, 100);
+        let no_keys = draws_at(&e, 100, &EffectToggles { clicks: true, keys: false, cursor: true, cursor_size: 1.5 }, 100);
         assert!(!no_keys.iter().any(|d| matches!(d, Draw::Chip { .. })) && !no_keys.is_empty());
     }
 
     #[test]
     fn coordinates_are_scaled_to_the_video() {
-        let header = Header { v: 1, mode: "region".into(), region: Rect { x: 0, y: 0, w: 200, h: 100 }, width: 200, height: 100, fps: 30 };
+        let header = Header { v: 1, mode: "region".into(), region: Rect { x: 0, y: 0, w: 200, h: 100 }, width: 200, height: 100, fps: 30, cursor: false };
         let e = build_effects(&ParsedLog { header: Some(header), events: vec![Event::Down { t: 0, b: Button::Left, x: 50, y: 50 }] }, 400, 200);
         assert_eq!((e.ripples[0].x, e.ripples[0].y), (100.0, 100.0));
     }

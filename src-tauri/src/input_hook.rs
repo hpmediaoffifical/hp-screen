@@ -388,7 +388,7 @@ mod filter_tests {
     fn window_switches_are_logged_relative_to_the_capture_with_no_title() {
         let path = crate::test_media::temp_path("hook-win", "a.input.jsonl");
         let region = Rect { x: 100, y: 50, w: 800, h: 600 };
-        let header = Header { v: 1, mode: "monitor".into(), region, width: 800, height: 600, fps: 30 };
+        let header = Header { v: 1, mode: "monitor".into(), region, width: 800, height: 600, fps: 30, cursor: false };
         let (tx, rx) = mpsc::channel::<Raw>();
         // 1000 ticks a second, started at tick 0: tick 2000 is video 2000 ms.
         let timeline = Arc::new(Mutex::new(Timeline::new(0, 1000)));
@@ -407,7 +407,7 @@ mod filter_tests {
         // Window capture only shows the recorded window: other windows coming forward change nothing.
         let path = crate::test_media::temp_path("hook-win-mode", "a.input.jsonl");
         let region = Rect { x: 100, y: 50, w: 800, h: 600 };
-        let header = Header { v: 1, mode: "window".into(), region, width: 800, height: 600, fps: 30 };
+        let header = Header { v: 1, mode: "window".into(), region, width: 800, height: 600, fps: 30, cursor: false };
         let (tx, rx) = mpsc::channel::<Raw>();
         tx.send(Raw::Window { time: 2000, ltrb: [150, 60, 450, 360] }).unwrap();
         drop(tx);
@@ -452,6 +452,7 @@ mod desktop_tests {
             width: 1920,
             height: 1080,
             fps: 30,
+            cursor: false,
         };
         let timeline = Arc::new(Mutex::new(Timeline::new(clock::now_100ns(), clock::TICKS_PER_SEC)));
         let hook = start_input_hook(&path, header, timeline.clone(), Vec::new(), Arc::new(AtomicBool::new(false))).expect("hooks install");

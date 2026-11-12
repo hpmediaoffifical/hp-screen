@@ -16,6 +16,9 @@ pub struct Header {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
+    /// The video has no Windows cursor: HP Screen draws it (smooth cursor) from this log.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cursor: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,13 +45,18 @@ pub enum Event {
     El { t: i64, k: String, r: [i32; 4] },
     /// Another window came to the front; its box.
     Win { t: i64, r: [i32; 4] },
+    /// A cursor shape, logged once: hot spot and RGBA image as base64 PNG.
+    Shape { id: u32, hx: i32, hy: i32, png: String },
+    /// The cursor took shape `id` (0: Windows hides the cursor).
+    Cur { t: i64, id: u32 },
 }
 
 impl Event {
     /// Video time of the event in milliseconds.
     pub fn t(&self) -> i64 {
         match self {
-            Event::Move { t, .. } | Event::Down { t, .. } | Event::Up { t, .. } | Event::Wheel { t, .. } | Event::Key { t, .. } | Event::Type { t } | Event::El { t, .. } | Event::Win { t, .. } => *t,
+            Event::Move { t, .. } | Event::Down { t, .. } | Event::Up { t, .. } | Event::Wheel { t, .. } | Event::Key { t, .. } | Event::Type { t } | Event::El { t, .. } | Event::Win { t, .. } | Event::Cur { t, .. } => *t,
+            Event::Shape { .. } => 0,
         }
     }
 }
@@ -187,6 +195,16 @@ mod tests {
     }
 
     #[test]
+    fn cursor_shape_lines_are_read_and_old_headers_have_the_windows_cursor() {
+        let log = parse_log("{\"v\":1,\"mode\":\"monitor\",\"region\":{\"x\":0,\"y\":0,\"w\":10,\"h\":10},\"width\":10,\"height\":10,\"fps\":30}\n{\"e\":\"shape\",\"id\":3,\"hx\":1,\"hy\":2,\"png\":\"AA==\"}\n{\"e\":\"cur\",\"t\":5,\"id\":3}");
+        assert!(!log.header.as_ref().unwrap().cursor, "an old header: the cursor is in the video");
+        assert_eq!(log.events, vec![Event::Shape { id: 3, hx: 1, hy: 2, png: "AA==".into() }, Event::Cur { t: 5, id: 3 }]);
+        let h = Header { v: 1, mode: "monitor".into(), region: Rect { x: 0, y: 0, w: 1, h: 1 }, width: 1, height: 1, fps: 30, cursor: false };
+        assert!(!to_line(&h).contains("cursor"), "written only when the cursor is drawn");
+        assert!(to_line(&Header { cursor: true, ..h }).contains("\"cursor\":true"));
+    }
+
+    #[test]
     fn element_and_window_lines_are_read() {
         let log = parse_log("{\"e\":\"el\",\"t\":5,\"k\":\"click\",\"r\":[1,2,30,40]}\n{\"e\":\"win\",\"t\":9,\"r\":[0,0,800,600]}");
         assert_eq!(log.events, vec![Event::El { t: 5, k: "click".into(), r: [1, 2, 30, 40] }, Event::Win { t: 9, r: [0, 0, 800, 600] }]);
@@ -224,6 +242,7 @@ mod tests {
             width: 800,
             height: 600,
             fps: 30,
+            cursor: false,
         };
         let line = to_line(&h);
         assert_eq!(
@@ -316,7 +335,7 @@ mod parse_tests {
     use super::*;
 
     fn header(v: u32) -> Header {
-        Header { v, mode: "region".into(), region: Rect { x: 10, y: 20, w: 200, h: 100 }, width: 200, height: 100, fps: 30 }
+        Header { v, mode: "region".into(), region: Rect { x: 10, y: 20, w: 200, h: 100 }, width: 200, height: 100, fps: 30, cursor: false }
     }
 
     fn events() -> Vec<Event> {

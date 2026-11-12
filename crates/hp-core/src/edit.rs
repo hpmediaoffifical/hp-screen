@@ -23,11 +23,15 @@ impl Default for Trim {
 pub struct EffectToggles {
     pub clicks: bool,
     pub keys: bool,
+    /// Draw the smooth cursor (recordings made without the Windows cursor).
+    pub cursor: bool,
+    /// Its size, 1–3 times the Windows cursor.
+    pub cursor_size: f32,
 }
 
 impl Default for EffectToggles {
     fn default() -> Self {
-        EffectToggles { clicks: true, keys: true }
+        EffectToggles { clicks: true, keys: true, cursor: true, cursor_size: 1.5 }
     }
 }
 
@@ -97,7 +101,7 @@ mod tests {
         let doc = EditDoc {
             trim: Trim { start_ms: 200, end_ms: Some(9000) },
             cuts: vec![Span { start_ms: 1000, end_ms: 2000 }, Span { start_ms: 4000, end_ms: 4500 }],
-            effects: EffectToggles { clicks: true, keys: false },
+            effects: EffectToggles { clicks: true, keys: false, cursor: true, cursor_size: 1.5 },
             ..EditDoc::default()
         };
         assert_eq!(load_edit(&save_edit(&doc)), Ok(doc));

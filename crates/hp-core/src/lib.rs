@@ -19,3 +19,4 @@ pub mod spring;
 pub mod zoom;
 pub mod layout;
 pub mod subtitle;
+pub mod cursor;

@@ -334,4 +334,40 @@ mod tests {
         let join = p.frame(90).unwrap(); // output 3000 ms = source 4000 ms
         assert!(join.blur_views.is_empty(), "{:?}", join.blur_views);
     }
+
+    fn cursor_effects(drawn: bool) -> crate::effects::Effects {
+        use crate::geometry::Rect;
+        use crate::input_log::{Event, Header, ParsedLog};
+        let header = Header { v: 1, mode: "monitor".into(), region: Rect { x: 0, y: 0, w: 640, h: 480 }, width: 640, height: 480, fps: 30, cursor: drawn };
+        let events = vec![
+            Event::Shape { id: 1, hx: 0, hy: 0, png: String::new() },
+            Event::Cur { t: 0, id: 1 },
+            Event::Move { t: 0, x: 100, y: 100 },
+            Event::Move { t: 500, x: 200, y: 150 },
+        ];
+        crate::effects::build_effects(&ParsedLog { header: Some(header), events }, 640, 480)
+    }
+
+    #[test]
+    fn the_cursor_is_drawn_only_for_recordings_without_the_windows_cursor() {
+        let doc = EditDoc::default();
+        let p = Plan::new(src(640, 480), &doc, Some(cursor_effects(true)));
+        let cur = p.frame(30).unwrap().draws.into_iter().find_map(|d| if let Draw::Cursor { x, y, scale, alpha, shape } = d { Some((x, y, scale, alpha, shape)) } else { None });
+        let (x, y, scale, alpha, shape) = cur.expect("a drawn cursor at 1 s");
+        assert!((x - 200.0).abs() < 1.0 && (y - 150.0).abs() < 1.0 && alpha == 1.0 && shape == 1, "{cur:?}");
+        assert!((scale - 1.5).abs() < 1e-6, "default size 1.5x");
+        assert!(!Plan::new(src(640, 480), &doc, Some(cursor_effects(false))).frame(30).unwrap().draws.iter().any(|d| matches!(d, Draw::Cursor { .. })), "the video has its own cursor");
+        let mut off = EditDoc::default();
+        off.effects.cursor = false;
+        assert!(!Plan::new(src(640, 480), &off, Some(cursor_effects(true))).frame(30).unwrap().draws.iter().any(|d| matches!(d, Draw::Cursor { .. })), "turned off");
+        let d = cursor_effects(true).smooth;
+        assert!(!d.is_empty() && cursor_effects(false).smooth.is_empty(), "the path is made only when needed");
+    }
+
+    #[test]
+    fn old_edit_files_draw_the_cursor_at_one_and_a_half() {
+        let doc = crate::edit::load_edit(r#"{"v":1,"effects":{"clicks":true,"keys":false}}"#).unwrap();
+        assert!(doc.effects.cursor);
+        assert!((doc.effects.cursor_size - 1.5).abs() < 1e-6);
+    }
 }
