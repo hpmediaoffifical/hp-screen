@@ -178,6 +178,7 @@ fn write_log(
     let _ = writeln!(out, "{}", to_line(&header));
     let mut sampler = MoveSampler::new();
     let mut held_key: Option<u32> = None; // suppresses auto-repeat while a key stays down
+    let mut last_type: Option<i64> = None;
     let mut last_flush = Instant::now();
     let video_ms = |time: i64| timeline.lock().unwrap_or_else(|e| e.into_inner()).video_ms(time);
 
@@ -206,8 +207,13 @@ fn write_log(
             Some(Raw::KeyDown { time, key }) => {
                 let repeat = held_key == Some(key.vk);
                 held_key = Some(key.vk);
-                let combo = if repeat { None } else { loggable_combo(&key).filter(|k| !ignored.contains(k)) };
-                video_ms(time).zip(combo).map(|(t, k)| Event::Key { t, k })
+                let logged = if repeat { None } else { loggable_combo(&key) };
+                let combo = logged.clone().filter(|k| !ignored.contains(k));
+                match (video_ms(time), combo) {
+                    (Some(t), Some(k)) => Some(Event::Key { t, k }),
+                    (Some(t), None) if !repeat => typing_tick(&key, logged.is_some(), &mut last_type, t),
+                    _ => None,
+                }
             }
             Some(Raw::KeyUp { vk }) => {
                 if held_key == Some(vk) {
@@ -231,7 +237,24 @@ fn write_log(
 /// Whether an event goes into the log: button presses and keys (Esc leaves drawing) are left
 /// out while the user draws.
 fn keep_event(e: &Event, drawing: bool) -> bool {
-    !(drawing && matches!(e, Event::Down { .. } | Event::Up { .. } | Event::Key { .. }))
+    !(drawing && matches!(e, Event::Down { .. } | Event::Up { .. } | Event::Key { .. } | Event::Type { .. }))
+}
+
+/// Typing marks are at most this often.
+const TYPE_MARK_MS: i64 = 300;
+
+/// A "typing" mark for a key press that is not a logged shortcut: only the moment, never the
+/// key. Shortcuts (with Ctrl, Alt or Win) and modifier keys on their own are not typing.
+fn typing_tick(key: &KeyStroke, combo_logged: bool, last: &mut Option<i64>, t: i64) -> Option<Event> {
+    const MODIFIERS: [u32; 12] = [0x10, 0x11, 0x12, 0x14, 0x5B, 0x5C, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5];
+    if combo_logged || key.ctrl || key.alt || key.win || MODIFIERS.contains(&key.vk) {
+        return None;
+    }
+    if last.is_some_and(|l| t - l < TYPE_MARK_MS) {
+        return None;
+    }
+    *last = Some(t);
+    Some(Event::Type { t })
 }
 
 #[cfg(test)]
@@ -249,6 +272,43 @@ mod filter_tests {
         assert!(!keep_event(&key, true), "keys pressed while drawing (Esc to leave) are not shortcuts to show");
         assert!(keep_event(&mv, true) && keep_event(&wheel, true));
         assert!(keep_event(&down, false) && keep_event(&up, false) && keep_event(&key, false));
+    }
+
+    fn plain(vk: u32) -> KeyStroke {
+        KeyStroke { ctrl: false, alt: false, shift: false, win: false, vk }
+    }
+
+    #[test]
+    fn plain_keys_leave_a_type_mark_without_the_key() {
+        let mut last = None;
+        let e = typing_tick(&plain(0x41), false, &mut last, 1000).unwrap();
+        assert_eq!(e, Event::Type { t: 1000 });
+        assert_eq!(to_line(&e), "{\"e\":\"type\",\"t\":1000}", "the key itself is never written");
+        let shifted = KeyStroke { shift: true, ..plain(0x42) };
+        assert!(typing_tick(&shifted, false, &mut None, 0).is_some(), "capital letters are typing too");
+    }
+
+    #[test]
+    fn type_marks_are_at_most_every_300_ms() {
+        let mut last = None;
+        let marks: Vec<i64> = [0, 100, 299, 300, 450, 700].iter().filter_map(|&t| typing_tick(&plain(0x41), false, &mut last, t)).map(|e| e.t()).collect();
+        assert_eq!(marks, vec![0, 300, 700]);
+    }
+
+    #[test]
+    fn logged_combos_and_modifiers_make_no_type_mark() {
+        let ctrl_s = KeyStroke { ctrl: true, ..plain(0x53) };
+        assert_eq!(typing_tick(&ctrl_s, true, &mut None, 0), None);
+        assert_eq!(typing_tick(&KeyStroke { ctrl: true, ..plain(0x58) }, false, &mut None, 0), None, "an ignored shortcut is not typing");
+        for vk in [0x10, 0x11, 0x12, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x5B, 0x5C, 0x14] {
+            assert_eq!(typing_tick(&plain(vk), false, &mut None, 0), None, "modifier {vk:#x}");
+        }
+    }
+
+    #[test]
+    fn no_type_mark_while_drawing() {
+        assert!(!keep_event(&Event::Type { t: 1 }, true));
+        assert!(keep_event(&Event::Type { t: 1 }, false));
     }
 }
 
