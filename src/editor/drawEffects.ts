@@ -2,6 +2,7 @@
 // holds, wheel marks and chips exist, and when) come from the core; this only turns them into
 // pixels for a given time, with the same rules and numbers as the export.
 import type { EffectToggles, Effects, MouseButton, Spot } from "../editApi";
+import { sourceView } from "./layoutMath";
 
 // Same values as hp-core::effects and src-tauri compositor.
 const RIPPLE_MS = 480;
@@ -42,10 +43,10 @@ const fade = (t: number, start: number, end: number, fadeIn: number, fadeOut: nu
  * Draws the effects at source time `tMs` onto `ctx`, whose canvas shows the whole video:
  * `scale` is canvas pixels per source pixel, `videoH` the source height.
  */
-export function drawEffects(ctx: CanvasRenderingContext2D, fx: Effects, tMs: number, on: EffectToggles, videoH: number, scale: number, chipBottom = CHIP_BOTTOM, spot: Spot | null = null): void {
+export function drawEffects(ctx: CanvasRenderingContext2D, fx: Effects, tMs: number, on: EffectToggles, videoH: number, scale: number, chipBottom = CHIP_BOTTOM, spot: Spot | null = null, fill: number | null = null): void {
   const { width, height } = ctx.canvas;
   ctx.clearRect(0, 0, width, height);
-  if (spot) drawSpot(ctx, spot);
+  if (spot) drawSpot(ctx, spot, fill);
   const r = RIPPLE_RADIUS * videoH * scale;
   if (on.clicks) {
     ctx.save();
@@ -147,14 +148,11 @@ function drawChip(ctx: CanvasRenderingContext2D, text: string, size: number, bot
  * A spotlight on a canvas showing the whole video: everything outside the lit box is darkened,
  * with a thin light outline, as the export draws it.
  */
-export function drawSpot(ctx: CanvasRenderingContext2D, spot: Spot): void {
+export function drawSpot(ctx: CanvasRenderingContext2D, spot: Spot, fill: number | null = null): void {
   if (spot.alpha <= 0.01) return;
   const { width, height } = ctx.canvas;
-  const s = Math.max(1, spot.scale);
-  const w = width / s;
-  const h = height / s;
-  const x = spot.cx * width - w / 2;
-  const y = spot.cy * height - h / 2;
+  // The frame the user placed, with the Fill crop, as the export draws it.
+  const [x, y, w, h] = sourceView({ cx: spot.cx, cy: spot.cy, scale: spot.scale }, width, height, fill);
   const r = 0.02 * Math.min(width, height);
   ctx.save();
   ctx.beginPath();

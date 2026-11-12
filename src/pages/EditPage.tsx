@@ -453,10 +453,10 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
             // The spotlight (not while its frame is being edited), under the click marks.
             const spot = doc.zoom.enabled && !frameEditing ? spotAt(track, ms) : null;
             if (session.effects) {
-              drawEffects(ctx, session.effects, ms, { ...doc.effects, keys: false }, session.info.height, ctx.canvas.height / session.info.height, undefined, spot);
+              drawEffects(ctx, session.effects, ms, { ...doc.effects, keys: false }, session.info.height, ctx.canvas.height / session.info.height, undefined, spot, layout?.fill_aspect ?? null);
             } else {
               ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-              if (spot) drawSpot(ctx, spot);
+              if (spot) drawSpot(ctx, spot, layout?.fill_aspect ?? null);
             }
           }}
           motionBlur={doc.zoom.motion_blur}

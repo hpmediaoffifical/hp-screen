@@ -89,15 +89,19 @@ impl Plan {
     }
 
     /// Views across half a frame around output time `out_ms` when the camera moves; else empty.
-    fn blur_views(&self, out_ms: i64) -> Vec<(f32, f32, f32, f32)> {
+    fn blur_views(&self, out_ms: i64, src_ms: i64) -> Vec<(f32, f32, f32, f32)> {
         if !self.motion_blur || self.cameras.is_none() {
             return Vec::new();
         }
         let frame_ms = 1000.0 / self.fps() as f64;
+        // Samples from the other side of a cut would blend two different shots: none then.
         let views: Vec<_> = (0..BLUR_SAMPLES)
             .filter_map(|i| {
                 let off = (i as f64 / (BLUR_SAMPLES - 1) as f64 - 0.5) * frame_ms / 2.0;
-                self.cuts.to_source((out_ms as f64 + off).round() as i64).map(|s| self.view_at(s))
+                self.cuts
+                    .to_source((out_ms as f64 + off).round() as i64)
+                    .filter(|s| ((s - src_ms) as f64).abs() <= frame_ms)
+                    .map(|s| self.view_at(s))
             })
             .collect();
         let (first, last) = (views.first(), views.last());
@@ -149,11 +153,12 @@ impl Plan {
         if let Some(track) = self.track.as_deref() {
             let spot = spot_at(track, src_ms);
             if spot.alpha > 0.01 {
-                let (x, y, w, h) = source_view(Camera { cx: spot.cx, cy: spot.cy, scale: spot.scale }, self.src.width, self.src.height, None);
+                // The lit box is the frame the user placed, crop included.
+                let (x, y, w, h) = source_view(Camera { cx: spot.cx, cy: spot.cy, scale: spot.scale }, self.src.width, self.src.height, self.layout.fill_aspect);
                 draws.insert(0, Draw::Spot { x, y, w, h, alpha: spot.alpha });
             }
         }
-        let blur_views = self.blur_views(out_ms);
+        let blur_views = self.blur_views(out_ms, src_ms);
         Some(FramePlan { out_ms, src_ms, draws, camera, view, blur_views })
     }
 
@@ -305,5 +310,28 @@ mod tests {
         assert!(p.frame(0).unwrap().blur_views.is_empty(), "still camera");
         let off = Plan::new(src(640, 480), &zooming(false, crate::zoom::Style::Zoom), None);
         assert!(off.frame(34).unwrap().blur_views.is_empty(), "turned off");
+    }
+
+    #[test]
+    fn with_fill_the_lit_box_has_the_shape_of_the_frame() {
+        use crate::layout::{Aspect, Fit, FrameDoc};
+        let mut doc = zooming(true, crate::zoom::Style::Spotlight);
+        doc.frame = FrameDoc { aspect: Aspect::Tall, fit: Fit::Fill, ..FrameDoc::default() };
+        let p = Plan::new(src(640, 360), &doc, None);
+        let f = p.frame(75).unwrap();
+        let (w, h) = f.draws.iter().find_map(|d| if let Draw::Spot { w, h, .. } = d { Some((*w, *h)) } else { None }).unwrap();
+        assert!((w / h - 9.0 / 16.0).abs() < 0.01, "a 9:16 box like the dragged frame: {w}x{h}");
+    }
+
+    #[test]
+    fn motion_blur_never_mixes_both_sides_of_a_cut() {
+        let mut doc = zooming(true, crate::zoom::Style::Zoom);
+        // Zoomed in until 3 s; cut 3000–4000: the frame at the join must not blend 2x and 1x views.
+        doc.zoom.segments[0].end_ms = 3000;
+        doc.zoom.segments[0].speed = crate::zoom::Speed::Instant;
+        doc.cuts = vec![Span { start_ms: 3000, end_ms: 4000 }];
+        let p = Plan::new(src(640, 480), &doc, None);
+        let join = p.frame(90).unwrap(); // output 3000 ms = source 4000 ms
+        assert!(join.blur_views.is_empty(), "{:?}", join.blur_views);
     }
 }

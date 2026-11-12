@@ -668,6 +668,8 @@ pub fn zoom_track(z: &ZoomDoc, cursor: &dyn Fn(i64) -> Option<(f32, f32)>, durat
             (s.style, fixed.map_or(s.scale, |c| c.scale), aim)
         });
         // The camera's target, and the spotlight's target and strength.
+        // A spotlight that starts while none shows appears where it is (no sweep from the last one).
+        let snap_spot = matches!(aimed, Some((Style::Spotlight, ..))) && s_alpha.value < 0.05;
         let ((target_scale, target), (spot_scale, spot), spot_on) = match aimed {
             Some((Style::Spotlight, sc, aim)) => {
                 spot_rest = (sc, aim);
@@ -676,6 +678,9 @@ pub fn zoom_track(z: &ZoomDoc, cursor: &dyn Fn(i64) -> Option<(f32, f32)>, durat
             Some((Style::Zoom, sc, aim)) => ((sc, aim), spot_rest, 0.0),
             None => ((1.0, (0.5, 0.5)), spot_rest, 0.0),
         };
+        if snap_spot {
+            (s_scale, s_cx, s_cy) = (still(spot_scale), still(spot.0), still(spot.1));
+        }
         if t > 0 {
             match speed.factor() {
                 Some(f) => {
@@ -1259,5 +1264,14 @@ mod tests {
         let t = vec![(0, Camera::WHOLE, s(0.2, 0.0)), (100, Camera::WHOLE, s(0.4, 1.0))];
         let m = spot_at(&t, 50);
         assert!(close(m.cx, 0.3, 1e-5) && close(m.alpha, 0.5, 1e-5));
+    }
+
+    #[test]
+    fn a_new_spotlight_appears_where_it_is_not_where_the_last_one_was() {
+        let a = ZoomSegment { style: Style::Spotlight, speed: Speed::Fast, ..manual(1000, 2000, 2.0, Some((0.25, 0.25))) };
+        let b = ZoomSegment { style: Style::Spotlight, speed: Speed::Fast, ..manual(4000, 5000, 2.0, Some((0.75, 0.75))) };
+        let t = zoom_track(&on(vec![a, b]), NO_CURSOR, 6000, 10);
+        let spot = t.iter().find(|s| s.0 >= 4050).unwrap().2;
+        assert!(spot.cx > 0.7 && spot.cy > 0.7, "no sweep across the frame: {spot:?}");
     }
 }

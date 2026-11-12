@@ -33,8 +33,9 @@ pub struct Compositor {
     out_w: u32,
     out_h: u32,
     out: Vec<u8>,
-    /// The averaged frame of a motion-blurred render.
+    /// The averaged frame of a motion-blurred render, and its running sum (kept between frames).
     blended: Vec<u8>,
+    blend_sum: Vec<u32>,
     text: IDWriteFactory,
     chip_format: IDWriteTextFormat,
     /// Chip font size in pixels.
@@ -159,6 +160,7 @@ impl Compositor {
                 out_h,
                 out: vec![0; (out_w * out_h * 4) as usize],
                 blended: Vec::new(),
+                blend_sum: Vec::new(),
                 text,
                 chip_format,
                 chip_size,
@@ -186,7 +188,8 @@ impl Compositor {
         if views.len() <= 1 {
             return self.render(src, src_w, src_h, views.first().copied(), layout, draws);
         }
-        let mut acc: Vec<u32> = Vec::new();
+        let mut acc = std::mem::take(&mut self.blend_sum);
+        acc.iter_mut().for_each(|a| *a = 0);
         for v in views {
             let f = self.render(src, src_w, src_h, Some(*v), layout, draws)?;
             if acc.len() != f.len() {
@@ -194,7 +197,8 @@ impl Compositor {
             }
             add_into(&mut acc, f);
         }
-        self.blended = average(&acc, views.len() as u32);
+        average_into(&acc, views.len() as u32, &mut self.blended);
+        self.blend_sum = acc;
         Ok(&self.blended)
     }
 
@@ -231,7 +235,7 @@ impl Compositor {
                     Ok(())
                 }
             }
-            .and_then(|_| self.draw_effects(draws, view, video, src_h));
+            .and_then(|_| self.draw_effects(draws, view, video, src_h, layout.filter(|l| l.decorated).map_or(0.0, |l| l.radius)));
             self.ctx.EndDraw(None, None).map_err(err("Vẽ khung hình thất bại"))?;
             drawn?;
             self.readback.CopyFromBitmap(None, &self.target, None).map_err(err("Không đọc được khung hình"))?;
@@ -321,7 +325,7 @@ impl Compositor {
         Ok(())
     }
 
-    unsafe fn draw_effects(&mut self, draws: &[Draw], view: (f32, f32, f32, f32), video: (f32, f32, f32, f32), src_h: u32) -> Result<(), String> {
+    unsafe fn draw_effects(&mut self, draws: &[Draw], view: (f32, f32, f32, f32), video: (f32, f32, f32, f32), src_h: u32, corner: f32) -> Result<(), String> {
         let (vx, vy, vw, vh) = view;
         let (sx, sy) = (video.2 / vw.max(1.0), video.3 / vh.max(1.0));
         let at = |x: f32, y: f32| (video.0 + (x - vx) * sx, video.1 + (y - vy) * sy);
@@ -335,7 +339,7 @@ impl Compositor {
             // Marks on the picture stay inside the video window, as in the preview.
             self.ctx.PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
             let spot = match draws.iter().find(|d| matches!(d, Draw::Spot { .. })) {
-                Some(&Draw::Spot { x, y, w, h, alpha }) if alpha > 0.0 => self.draw_spot(clip, at(x, y), at(x + w, y + h), alpha, video.2.min(video.3)),
+                Some(&Draw::Spot { x, y, w, h, alpha }) if alpha > 0.0 => self.draw_spot(clip, corner, at(x, y), at(x + w, y + h), alpha, video.2.min(video.3)),
                 _ => Ok(()),
             };
             let on_video = spot.and_then(|_| self.draw_marks(draws, &at, sx, full_ring, stroke));
@@ -364,13 +368,18 @@ impl Compositor {
 
     /// A spotlight: the video outside the box (top-left `a`, bottom-right `b`, output pixels) is
     /// darkened, with a thin light outline round the box.
-    unsafe fn draw_spot(&self, video: D2D_RECT_F, a: (f32, f32), b: (f32, f32), alpha: f32, short_side: f32) -> Result<(), String> {
+    unsafe fn draw_spot(&self, video: D2D_RECT_F, corner: f32, a: (f32, f32), b: (f32, f32), alpha: f32, short_side: f32) -> Result<(), String> {
         // SAFETY: Direct2D calls with valid pointers, between BeginDraw and EndDraw.
         unsafe {
             let factory = self.ctx.GetFactory().map_err(err("Không vẽ được spotlight"))?;
             let r = 0.02 * short_side;
             let lit = D2D1_ROUNDED_RECT { rect: D2D_RECT_F { left: a.0, top: a.1, right: b.0, bottom: b.1 }, radiusX: r, radiusY: r };
-            let outer: ID2D1Geometry = factory.CreateRectangleGeometry(&video).map_err(err("Không vẽ được spotlight"))?.into();
+            // Only the video is darkened: a rounded video keeps its background corners.
+            let outer: ID2D1Geometry = if corner > 0.0 {
+                factory.CreateRoundedRectangleGeometry(&D2D1_ROUNDED_RECT { rect: video, radiusX: corner, radiusY: corner }).map_err(err("Không vẽ được spotlight"))?.into()
+            } else {
+                factory.CreateRectangleGeometry(&video).map_err(err("Không vẽ được spotlight"))?.into()
+            };
             let inner: ID2D1Geometry = factory.CreateRoundedRectangleGeometry(&lit).map_err(err("Không vẽ được spotlight"))?.into();
             let ring = factory.CreateGeometryGroup(D2D1_FILL_MODE_ALTERNATE, &[Some(outer), Some(inner)]).map_err(err("Không vẽ được spotlight"))?;
             self.ctx.FillGeometry(&ring, &self.brush((0.0, 0.0, 0.0), SPOT_DARK * alpha)?, None);
@@ -511,9 +520,17 @@ fn add_into(acc: &mut [u32], frame: &[u8]) {
     }
 }
 
+#[cfg(test)]
 fn average(acc: &[u32], n: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    average_into(acc, n, &mut out);
+    out
+}
+
+fn average_into(acc: &[u32], n: u32, out: &mut Vec<u8>) {
     let n = n.max(1);
-    acc.iter().map(|&a| ((a + n / 2) / n).min(255) as u8).collect()
+    out.clear();
+    out.extend(acc.iter().map(|&a| ((a + n / 2) / n).min(255) as u8));
 }
 
 /// How dark a spotlight makes the rest of the video.
@@ -722,6 +739,19 @@ mềm ghi màn hình thật nhanh và đơn giản nhé";
         let blurred = c.render_views(&src, 64, 64, &views, None, &[]).unwrap().to_vec();
         let at = |f: &[u8], x: usize| f[(32 * 64 + x) * 4 + 2];
         assert!(at(&sharp, 26) > 240 && at(&blurred, 26) < 240, "the edge is smeared: {} vs {}", at(&sharp, 26), at(&blurred, 26));
+    }
+
+    #[test]
+    fn a_spotlight_keeps_the_background_outside_rounded_corners() {
+        use hp_core::layout::{FrameDoc, layout};
+        let l = layout(200, 200, &FrameDoc { radius: 30.0, padding: 0.1, background: "white".into(), ..FrameDoc::default() });
+        let src = solid(200, 200, |_, _| [255, 0, 0]);
+        let mut c = Compositor::new(l.out_w, l.out_h, Device::Warp).unwrap();
+        let spot = Draw::Spot { x: 50.0, y: 50.0, w: 100.0, h: 100.0, alpha: 1.0 };
+        let out = c.render(&src, 200, 200, None, Some(&l), &[spot]).unwrap();
+        let (vx, vy) = (l.video.0 as u32, l.video.1 as u32);
+        assert_eq!(rgb_at(out, l.out_w, vx + 2, vy + 2), [255, 255, 255], "the background past the rounded corner stays white");
+        assert!(rgb_at(out, l.out_w, vx + 30, vy + 2)[0] < 160, "the video outside the lit box is dark");
     }
 
     #[test]
