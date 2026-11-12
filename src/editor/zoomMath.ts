@@ -167,3 +167,17 @@ export function frameRect(cam: Camera, srcW: number, srcH: number, fill: number 
   const [x, y, w, h] = sourceView(cam, srcW, srcH, fill);
   return { left: x / srcW, top: y / srcH, width: w / srcW, height: h / srcH };
 }
+
+/** Edge zone of a zoom-track block, in px: grabbing within it resizes. */
+export const EDGE_PX = 7;
+
+/**
+ * What a press `x` px into a `width` px block on the zoom track does. The edge zones shrink with
+ * the block (at most a quarter each), so even a few-pixel block can be moved by its middle.
+ */
+export function grabKind(x: number, width: number): "start" | "end" | "move" {
+  const edge = Math.min(EDGE_PX, width / 4);
+  if (x < edge) return "start";
+  if (width - x < edge) return "end";
+  return "move";
+}

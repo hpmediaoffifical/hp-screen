@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import type { ZoomSegment } from "../editApi";
-import { keepKeysInside, moveSegment } from "./zoomMath";
+import { grabKind, keepKeysInside, moveSegment } from "./zoomMath";
 
 interface Props {
   durationMs: number;
@@ -21,8 +21,6 @@ type Drag =
   | { kind: "create"; fromMs: number; index: number | null }
   | { kind: "key"; index: number; key: number; orig: ZoomSegment; moved: boolean };
 
-/** Grabbing a segment this close to its edge resizes it. */
-const EDGE_PX = 7;
 const MIN_LEN_MS = 200;
 /** Keyframes stay this far from each other and from the segment's ends. */
 const KEY_GAP = 51;
@@ -54,7 +52,7 @@ export default function ZoomTrack(props: Props) {
     e.stopPropagation();
     track.current?.setPointerCapture(e.pointerId);
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const kind = e.clientX - r.left <= EDGE_PX ? "start" : r.right - e.clientX <= EDGE_PX ? "end" : "move";
+    const kind = grabKind(e.clientX - r.left, r.width);
     drag.current = { kind, index, grabMs: msAt(e.clientX), orig: props.segments[index], moved: false };
     props.onSelect(index);
   };
@@ -118,13 +116,17 @@ export default function ZoomTrack(props: Props) {
   const up = () => {
     const g = drag.current;
     drag.current = null;
-    if (g?.kind === "create" && g.index === null) props.onSelect(null);
+    // A plain click on empty track: no segment, the playhead goes there.
+    if (g?.kind === "create" && g.index === null) {
+      props.onSelect(null);
+      props.onSeek(g.fromMs);
+    }
   };
 
   return (
     <div className="ztrack-row">
       <span className="ztrack-label">Zoom</span>
-      <div ref={track} className="track ztrack" onPointerDown={downOnTrack} onPointerMove={move} onPointerUp={up} title="Kéo trên chỗ trống để thêm một đoạn zoom">
+      <div ref={track} className="track ztrack" onPointerDown={downOnTrack} onPointerMove={move} onPointerUp={up} title="Bấm để tua tới đó; kéo trên chỗ trống để thêm một đoạn zoom">
         {props.segments.map((s, i) => (
           <div
             key={i}

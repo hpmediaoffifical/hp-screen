@@ -152,3 +152,14 @@ test("in Fill the frame is placed on the whole source, so it never leaves the ed
   const [x, , w] = sourceView(c(0.25, 0.5, 2), 1600, 900, 9 / 16);
   assert.ok(near(r.left, x / 1600) && near(r.width, w / 1600), "exactly the part the export shows");
 });
+
+import { grabKind } from "./zoomMath.ts";
+
+test("a narrow segment on the zoom track is moved, not resized", () => {
+  assert.equal(grabKind(6, 12), "move", "a 12 px block grabbed in its middle");
+  assert.equal(grabKind(2, 8), "move", "an 8 px block (3 s of a long video)");
+  assert.equal(grabKind(0.5, 12), "start", "its very edge still resizes");
+  assert.equal(grabKind(3, 200), "start");
+  assert.equal(grabKind(100, 200), "move");
+  assert.equal(grabKind(196, 200), "end");
+});
