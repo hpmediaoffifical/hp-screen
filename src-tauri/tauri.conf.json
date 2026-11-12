@@ -52,5 +52,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU3RDE0RUQ3OTg0NDBGNDYKUldSR0QwU1kxMDdSNTdEOWE4ZzQ0VnZlZk55b000VFl6R3JvdGlWNmp5Tm1PS0dBc0FmdGdjK0wK",
+      "endpoints": ["https://github.com/hpmediaoffifical/hp-screen/releases/latest/download/latest.json"],
+      "requireSignedVersion": true,
+      "windows": { "installMode": "passive" }
+    }
   }
 }

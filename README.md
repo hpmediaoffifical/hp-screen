@@ -52,6 +52,22 @@ cargo test -p hp-screen --lib
 pnpm tsc --noEmit
 ```
 
+## Phát hành và tự cập nhật
+
+HP Screen tự kiểm tra bản mới trên [GitHub Releases](https://github.com/hpmediaoffifical/hp-screen/releases) và hỏi người dùng trước khi cài. Cách phát hành một bản mới:
+
+1. Tăng `version` trong `src-tauri/tauri.conf.json` (và cho khớp trong `package.json`, `src-tauri/Cargo.toml`).
+2. Commit, rồi đẩy tag cùng số phiên bản, ví dụ `v0.2.0`.
+3. Workflow `.github/workflows/release.yml` build bộ cài Windows, ký và đăng Release kèm `latest.json`.
+
+Bản cài được ký bằng khóa riêng của HP Media, lưu trong GitHub Secrets `TAURI_SIGNING_PRIVATE_KEY` và `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Khóa riêng không bao giờ nằm trong repo. Mất khóa riêng thì các bản đã cài sẽ không nhận được cập nhật nữa, nên hãy giữ một bản sao an toàn.
+
+Build bộ cài có ký trên máy (cần hai biến môi trường trên):
+
+```bash
+pnpm tauri build --config src-tauri/tauri.release.conf.json
+```
+
 ---
 
 © 2026 HP Media — Nguyễn Hoàng Phụng

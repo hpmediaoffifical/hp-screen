@@ -17,6 +17,7 @@ mod snip;
 mod pin;
 mod ocr;
 mod scroll;
+mod updater;
 
 use commands::AppState;
 use hotkeys::HotkeyRegistry;
@@ -31,6 +32,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let handle = app.handle();
             let settings = paths::read_settings(handle);
@@ -39,6 +41,8 @@ pub fn run() {
             app.manage(snip::SnipState::default());
             app.manage(AppState { settings: Mutex::new(settings.clone()), recorder: Recorder::new(handle.clone()) });
             shell::setup(handle)?;
+            app.manage(updater::UpdateState::default());
+            updater::start_background(handle);
             let _registered = hotkeys::register_hotkeys(handle, &settings);
             #[cfg(debug_assertions)]
             eprintln!("[hp] hotkeys: {_registered:?}");
@@ -89,6 +93,9 @@ pub fn run() {
             commands::snip_scroll_start,
             commands::snip_scroll_stop,
             commands::scroll_close,
+            updater::update_check,
+            updater::update_pending,
+            updater::update_install,
         ])
         .run(tauri::generate_context!())
         .expect("error while running HP Screen");
