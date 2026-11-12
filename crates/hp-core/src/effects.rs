@@ -78,8 +78,11 @@ pub struct Effects {
     pub shapes: Vec<crate::cursor::CursorShape>,
     /// (ms, shape id) as the cursor changed shape; 0 is hidden.
     pub cursor_ids: Vec<(i64, u32)>,
-    /// The smooth, self-hiding cursor path (video pixels); empty unless `drawn_cursor`.
+    /// The smooth, self-hiding cursor path (video pixels); empty until `with_cursor_path`.
     pub smooth: Vec<crate::cursor::CursorSample>,
+    /// Time of the last logged event.
+    #[serde(skip)]
+    pub cursor_end: i64,
 }
 
 /// The box of a UI element (video pixels): under a click (`kind` "click") or receiving keys ("focus").
@@ -196,14 +199,22 @@ pub fn build_effects(log: &ParsedLog, video_w: u32, video_h: u32) -> Effects {
         fx.holds.push(Hold { start_ms: start, end_ms: last_t, button });
     }
     fx.holds.sort_by_key(|h| h.start_ms);
-    if fx.drawn_cursor {
-        // Long enough past the last event for an idle cursor to fade out.
-        let end = last_t + crate::cursor::IDLE_MS + crate::cursor::FADE_MS + 200;
-        let holds = fx.holds.clone();
-        let pressed = |t: i64| holds.iter().any(|h| h.start_ms <= t && t < h.end_ms);
-        fx.smooth = crate::cursor::smooth_cursor(&|t| fx.cursor_at(t), &pressed, end);
-    }
+    fx.cursor_end = last_t;
     fx
+}
+
+impl Effects {
+    /// Makes the drawn cursor's smooth path (only for recordings without the Windows cursor).
+    /// Costly on long videos: done only where the cursor is drawn (edit page, export).
+    pub fn with_cursor_path(mut self) -> Self {
+        if self.drawn_cursor && self.smooth.is_empty() {
+            // Long enough past the last event for an idle cursor to fade out.
+            let end = self.cursor_end + crate::cursor::IDLE_MS + crate::cursor::FADE_MS + 200;
+            let holds: Vec<(i64, i64)> = self.holds.iter().map(|h| (h.start_ms, h.end_ms)).collect();
+            self.smooth = crate::cursor::smooth_cursor(&|t| self.cursor_at(t), &holds, end);
+        }
+        self
+    }
 }
 
 /// "Ctrl+Shift+S" shown as "Ctrl + Shift + S".

@@ -350,7 +350,7 @@ mod tests {
             Event::Move { t: 0, x: 100, y: 100 },
             Event::Move { t: 500, x: 200, y: 150 },
         ];
-        crate::effects::build_effects(&ParsedLog { header: Some(header), events }, 640, 480)
+        crate::effects::build_effects(&ParsedLog { header: Some(header), events }, 640, 480).with_cursor_path()
     }
 
     #[test]
@@ -367,6 +367,9 @@ mod tests {
         assert!(!Plan::new(src(640, 480), &off, Some(cursor_effects(true))).frame(30).unwrap().draws.iter().any(|d| matches!(d, Draw::Cursor { .. })), "turned off");
         let d = cursor_effects(true).smooth;
         assert!(!d.is_empty() && cursor_effects(false).smooth.is_empty(), "the path is made only when needed");
+        let mut plain = cursor_effects(true);
+        plain.smooth.clear();
+        assert!(plain.clone().with_cursor_path().smooth.len() == d.len(), "made on request");
     }
 
     #[test]

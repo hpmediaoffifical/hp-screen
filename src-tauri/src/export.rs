@@ -424,7 +424,7 @@ mod tests {
             Event::Cur { t: 0, id: 1 },
             Event::Move { t: 0, x: 100, y: 100 },
         ];
-        let fx = hp_core::effects::build_effects(&ParsedLog { header: Some(header), events }, 320, 240);
+        let fx = hp_core::effects::build_effects(&ParsedLog { header: Some(header), events }, 320, 240).with_cursor_path();
         let (_, info) = VideoDecoder::open(&source).unwrap();
         let src = Source { width: info.width, height: info.height, duration_ms: info.duration_ms, fps: info.fps };
         let out = export(&source, &Plan::new(src, &EditDoc::default(), Some(fx))).unwrap();

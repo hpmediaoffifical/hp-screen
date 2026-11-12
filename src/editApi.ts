@@ -18,14 +18,8 @@ export interface EffectToggles {
   cursor_size: number;
 }
 
-/** One sample of the drawn cursor (hp-core::cursor::CursorSample), video pixels. */
-export interface CursorSample {
-  t_ms: number;
-  x: number;
-  y: number;
-  alpha: number;
-  press: number;
-}
+/** One sample of the drawn cursor (hp-core::cursor::CursorSample): [ms, x, y, alpha, press], video pixels. */
+export type CursorSample = [number, number, number, number, number];
 
 /** A cursor shape: hot spot and base64 PNG. */
 export interface CursorShape {

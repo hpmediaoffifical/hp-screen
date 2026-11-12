@@ -3,23 +3,31 @@
 import type { CursorSample, CursorShape } from "../editApi.ts";
 
 /** The drawn cursor at `t` ms, interpolated between samples (as hp-core cursor::cursor_at). */
-export function cursorSampleAt(samples: CursorSample[], t: number): CursorSample | null {
+export interface Cursor {
+  x: number;
+  y: number;
+  alpha: number;
+  press: number;
+}
+
+export function cursorSampleAt(samples: CursorSample[], t: number): Cursor | null {
   if (samples.length === 0) return null;
-  if (t <= samples[0].t_ms) return samples[0];
+  const at = (s: CursorSample): Cursor => ({ x: s[1], y: s[2], alpha: s[3], press: s[4] });
+  if (t <= samples[0][0]) return at(samples[0]);
   const last = samples[samples.length - 1];
-  if (t >= last.t_ms) return last;
+  if (t >= last[0]) return at(last);
   let lo = 0;
   let hi = samples.length;
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
-    if (samples[mid].t_ms <= t) lo = mid + 1;
+    if (samples[mid][0] <= t) lo = mid + 1;
     else hi = mid;
   }
   const a = samples[lo - 1];
   const b = samples[lo];
-  const f = (t - a.t_ms) / Math.max(1, b.t_ms - a.t_ms);
+  const f = (t - a[0]) / Math.max(1, b[0] - a[0]);
   const mix = (p: number, q: number) => p + (q - p) * f;
-  return { t_ms: t, x: mix(a.x, b.x), y: mix(a.y, b.y), alpha: mix(a.alpha, b.alpha), press: f < 0.5 ? a.press : b.press };
+  return { x: mix(a[1], b[1]), y: mix(a[2], b[2]), alpha: mix(a[3], b[3]), press: f < 0.5 ? a[4] : b[4] };
 }
 
 /** The cursor's shape id at `t` ms: the last change at or before it, else the first shape; 0 is hidden. */

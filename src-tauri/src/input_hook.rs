@@ -204,6 +204,13 @@ unsafe extern "system" fn foreground_proc(
     }
 }
 
+/// Where the mouse is now (screen pixels).
+fn cursor_pos() -> Option<(i32, i32)> {
+    let mut p = windows::Win32::Foundation::POINT::default();
+    // SAFETY: `p` is a valid POINT to write into.
+    unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut p) }.ok().map(|_| (p.x, p.y))
+}
+
 /// Typing asks UI Automation for the field at most this often (ms).
 const FOCUS_ASK_MS: i64 = 1000;
 /// When the recording stops, UI Automation answers are awaited this long at most.
@@ -221,7 +228,12 @@ fn write_log(
     let window_mode = header.mode == "window";
     // Recordings without the Windows cursor log its shapes, to draw it when editing.
     let mut shapes = header.cursor.then(crate::cursor_shape::ShapeTracker::default);
+    // The drawn cursor needs a position from the very start, even if the mouse never moves.
+    let start_pos = if header.cursor { cursor_pos() } else { None };
     let _ = writeln!(out, "{}", to_line(&header));
+    if let Some((x, y)) = start_pos {
+        let _ = writeln!(out, "{}", to_line(&Event::Move { t: 0, x: x - origin.x, y: y - origin.y }));
+    }
     let mut sampler = MoveSampler::new();
     let mut held_key: Option<u32> = None; // suppresses auto-repeat while a key stays down
     let mut last_type: Option<i64> = None;
@@ -442,6 +454,20 @@ mod filter_tests {
         let file = std::fs::File::create(&path).unwrap();
         write_log(BufWriter::new(file), header, region, rx, timeline, vec![], Arc::new(AtomicBool::new(false)));
         hp_core::input_log::parse_log(&std::fs::read_to_string(&path).unwrap()).events
+    }
+
+    #[test]
+    fn a_drawn_cursor_starts_where_the_mouse_is() {
+        // Even if the mouse never moves, the drawn cursor has a position from the start.
+        let path = crate::test_media::temp_path("hook-cur-start", "a.input.jsonl");
+        let region = Rect { x: -100_000, y: -100_000, w: 300_000, h: 300_000 };
+        let header = Header { v: 1, mode: "monitor".into(), region, width: 800, height: 600, fps: 30, cursor: true };
+        let (tx, rx) = mpsc::channel::<Raw>();
+        drop(tx);
+        let file = std::fs::File::create(&path).unwrap();
+        write_log(BufWriter::new(file), header, region, rx, Arc::new(Mutex::new(Timeline::new(0, 1000))), vec![], Arc::new(AtomicBool::new(false)));
+        let events = hp_core::input_log::parse_log(&std::fs::read_to_string(&path).unwrap()).events;
+        assert!(events.iter().any(|e| matches!(e, Event::Move { t: 0, .. })), "{events:?}");
     }
 
     #[test]

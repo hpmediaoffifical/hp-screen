@@ -76,8 +76,15 @@ pub fn image(handle: isize) -> Option<CursorImage> {
         ReleaseDC(None, screen);
         let (black, white) = (black?, white?);
         let mut rgba = vec![0u8; (w * h * 4) as usize];
+        // Inverting pixels (black-and-white cursors such as the cross): bright over black, dark
+        // over white. They are drawn black with a white edge, visible on any background.
+        let inverting: Vec<bool> = (0..(w * h) as usize).map(|i| (0..3).any(|k| black[i * 4 + k] > white[i * 4 + k])).collect();
         for i in 0..(w * h) as usize {
             let (b, wh) = (&black[i * 4..i * 4 + 3], &white[i * 4..i * 4 + 3]);
+            if inverting[i] {
+                rgba[i * 4 + 3] = 255;
+                continue;
+            }
             // Over black a pixel shows c·a, over white c·a + (1 − a): the gap is 1 − a.
             let a = 255 - (0..3).map(|k| wh[k].saturating_sub(b[k])).max().unwrap_or(0);
             let o = i * 4;
@@ -87,6 +94,19 @@ pub fn image(handle: isize) -> Option<CursorImage> {
                 }
             }
             rgba[o + 3] = a;
+        }
+        let (wi, hi) = (w as i64, h as i64);
+        for y in 0..hi {
+            for x in 0..wi {
+                let i = (y * wi + x) as usize;
+                let next_to_inverting = [(-1, 0), (1, 0), (0, -1), (0, 1)].iter().any(|(dx, dy)| {
+                    let (nx, ny) = (x + dx, y + dy);
+                    nx >= 0 && ny >= 0 && nx < wi && ny < hi && inverting[(ny * wi + nx) as usize]
+                });
+                if !inverting[i] && rgba[i * 4 + 3] == 0 && next_to_inverting {
+                    rgba[i * 4..i * 4 + 4].copy_from_slice(&[255, 255, 255, 255]);
+                }
+            }
         }
         Some(CursorImage { rgba, w, h, hx, hy })
     }
@@ -126,10 +146,11 @@ impl ShapeTracker {
             Some(h) => match self.ids.get(&h) {
                 Some(&id) => (id, None),
                 None => {
-                    let img = image(h)?;
+                    // A shape that cannot be read keeps an id (drawn as the plain arrow) and is
+                    // not read again.
                     let id = self.ids.len() as u32 + 1;
                     self.ids.insert(h, id);
-                    (id, Some((id, img)))
+                    (id, image(h).map(|img| (id, img)))
                 }
             },
         };
@@ -165,6 +186,23 @@ mod tests {
     fn the_text_cursor_is_read_too() {
         let img = image(system(IDC_IBEAM)).expect("I-beam image");
         assert!(img.rgba.chunks(4).any(|p| p[3] > 200), "{}x{}", img.w, img.h);
+    }
+
+    #[test]
+    fn inverting_cursors_are_drawn_dark_with_a_light_edge() {
+        use windows::Win32::UI::WindowsAndMessaging::IDC_CROSS;
+        let img = image(system(IDC_CROSS)).expect("cross image");
+        let solid: Vec<&[u8]> = img.rgba.chunks(4).filter(|p| p[3] == 255).collect();
+        assert!(solid.iter().any(|p| p[0] < 64), "visible on white pages");
+        assert!(solid.iter().any(|p| p[0] > 192), "and on dark ones");
+    }
+
+    #[test]
+    fn a_shape_that_cannot_be_read_still_gets_an_id_once() {
+        let mut t = ShapeTracker::default();
+        let bad = t.see(Some(12345)).expect("reported");
+        assert!(bad.id != 0 && bad.new_shape.is_none(), "drawn as the plain arrow");
+        assert!(t.see(Some(12345)).is_none(), "not retried");
     }
 
     #[test]

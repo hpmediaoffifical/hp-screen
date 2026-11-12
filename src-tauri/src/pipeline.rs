@@ -34,6 +34,16 @@ pub struct PipelineConfig {
     pub live: Option<Arc<LiveLayer>>,
     /// Capture the Windows cursor (false when a smooth cursor is drawn when editing).
     pub cursor: bool,
+    /// The recording clock, when made beforehand (to start the input log before the capture).
+    pub timeline: Option<Arc<Mutex<Timeline>>>,
+}
+
+/// A recording clock that starts paused: recording time only begins once every source is ready.
+pub fn waiting_timeline() -> Arc<Mutex<Timeline>> {
+    let now = clock::now_100ns();
+    let mut waiting = Timeline::new(now, clock::TICKS_PER_SEC);
+    waiting.pause(now);
+    Arc::new(Mutex::new(waiting))
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -108,12 +118,7 @@ impl Pipeline {
         let stop = Arc::new(AtomicBool::new(false));
         // The clock starts paused: recording time only begins once every source is ready, so a
         // slow-opening audio device cannot cost the first second of sound.
-        let timeline = {
-            let now = clock::now_100ns();
-            let mut waiting = Timeline::new(now, clock::TICKS_PER_SEC);
-            waiting.pause(now);
-            Arc::new(Mutex::new(waiting))
-        };
+        let timeline = cfg.timeline.clone().unwrap_or_else(waiting_timeline);
         let encoder: SharedEncoder = Arc::new(Mutex::new(None));
         let latest = Arc::new(Mutex::new(Latest::default()));
 
@@ -370,7 +375,7 @@ mod desktop_tests {
             let seen = seen.clone();
             Arc::new(move |e| seen.lock().unwrap().push(e))
         };
-        let cfg = PipelineConfig { target, path: path.clone(), thumb: None, fps: 30, quality: Quality::Standard, audio, live: None, cursor: true };
+        let cfg = PipelineConfig { target, path: path.clone(), thumb: None, fps: 30, quality: Quality::Standard, audio, live: None, cursor: true, timeline: None };
         let pipeline = Pipeline::start(cfg, events).expect("pipeline starts");
         script(&pipeline);
         let stats = pipeline.finish().expect("pipeline finishes");
@@ -396,7 +401,7 @@ mod desktop_tests {
         let (cx, cy) = ((area.w / 2) as f32, (area.h / 2) as f32);
         live.upsert_stroke(Stroke { id: 1, tool: Tool::Pen, color: COLORS[0], width: 14.0, points: vec![(cx - 100.0, cy), (cx + 100.0, cy)], finished_ms: None });
         let events: EventFn = Arc::new(|_| {});
-        let cfg = PipelineConfig { target, path: path.clone(), thumb: None, fps: 30, quality: Quality::Standard, audio: None, live: Some(live), cursor: true };
+        let cfg = PipelineConfig { target, path: path.clone(), thumb: None, fps: 30, quality: Quality::Standard, audio: None, live: Some(live), cursor: true, timeline: None };
         let pipeline = Pipeline::start(cfg, events).expect("pipeline starts");
         std::thread::sleep(Duration::from_secs(2));
         let stats = pipeline.finish().expect("pipeline finishes");
@@ -500,6 +505,7 @@ mod size_tests {
                 audio: Some(AudioConfig { system: true, mic: true }),
                 live: None,
                 cursor: true,
+                timeline: None,
             };
             let pipeline = Pipeline::start(cfg, events).expect("pipeline starts");
             std::thread::sleep(Duration::from_secs(2));

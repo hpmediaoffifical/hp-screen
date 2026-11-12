@@ -466,7 +466,7 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
             const sub = cue ? layoutSubtitle(ctx, cue.text) : null;
             const lift = sub && doc.subtitles.burn ? chipAbove(sub, ctx.canvas.height) : undefined;
             if (session.effects) {
-              drawEffects(ctx, session.effects, ms, { ...doc.effects, clicks: false }, session.info.height, ctx.canvas.height / session.info.height, lift);
+              drawEffects(ctx, session.effects, ms, { ...doc.effects, clicks: false, cursor: false }, session.info.height, ctx.canvas.height / session.info.height, lift);
             } else ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
             if (sub) paintSubtitle(ctx, sub);
           }}
@@ -534,7 +534,7 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
                         />
                         <span>
                           Con trỏ mượt
-                          <span className="hint check-hint">Video này quay không có con trỏ Windows: HP Screen vẽ lại con trỏ mượt, tự ẩn khi đứng yên.</span>
+                          <span className="hint check-hint">Video này quay không có con trỏ Windows: HP Screen vẽ lại con trỏ mượt, tự ẩn khi đứng yên. Tắt ô này thì video xuất ra không có con trỏ.</span>
                         </span>
                       </label>
                       {doc.effects.cursor && (

@@ -232,7 +232,7 @@ impl Inner {
         } else {
             None
         };
-        let cfg = PipelineConfig {
+        let mut cfg = PipelineConfig {
             target,
             path: path.clone(),
             thumb: Some(thumb_path(&path)),
@@ -241,7 +241,8 @@ impl Inner {
             audio: (settings.system_audio || settings.mic)
                 .then_some(crate::audio::AudioConfig { system: settings.system_audio, mic: settings.mic }),
             live: Some(self.live.clone()),
-            cursor: !(settings.smooth_cursor && log_header.is_some()),
+            cursor: true,
+            timeline: None,
         };
         self.reset_live();
         self.live.set_hold_ms(settings.draw_fade_secs as i64 * 1000);
@@ -281,10 +282,22 @@ impl Inner {
             settings.hotkey_quickshot.clone(),
             settings.hotkey_draw.clone(),
         ];
-        let pipeline = Pipeline::start(cfg, on_event)?;
-        // The input log is an extra: failing to start it must not stop the recording.
-        *lock(&self.input_hook) =
-            log_header.and_then(|header| start_input_hook(&sidecar_path(&path), header, pipeline.timeline(), own_hotkeys, self.live.drawing_flag()).ok());
+        // The input log starts first, on the recording's clock. It is an extra: failing to start
+        // it must not stop the recording, but then the Windows cursor is recorded as usual
+        // (a smooth cursor cannot be drawn without the log).
+        let timeline = crate::pipeline::waiting_timeline();
+        let hook = log_header.and_then(|header| start_input_hook(&sidecar_path(&path), header, timeline.clone(), own_hotkeys, self.live.drawing_flag()).ok());
+        cfg.cursor = !(settings.smooth_cursor && hook.is_some());
+        cfg.timeline = Some(timeline);
+        let pipeline = match Pipeline::start(cfg, on_event) {
+            Ok(p) => p,
+            Err(e) => {
+                drop(hook);
+                let _ = std::fs::remove_file(sidecar_path(&path));
+                return Err(e);
+            }
+        };
+        *lock(&self.input_hook) = hook;
         *lock(&self.file) = Some(path);
         Ok(pipeline)
     }

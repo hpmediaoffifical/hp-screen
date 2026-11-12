@@ -6,8 +6,8 @@ use serde::Serialize;
 /// The cursor follows the logged position on this fast, critically damped spring: hand
 /// jitter is filtered, the cursor still keeps up.
 pub const CURSOR_SPRING: Spring = Spring { tension: 600.0, mass: 1.0, friction: 49.0 };
-/// Samples of the smooth path per second.
-pub const SAMPLE_MS: i64 = 1000 / 60;
+/// One sample of the smooth path every this many ms (it is interpolated between samples).
+pub const SAMPLE_MS: i64 = 1000 / 30;
 /// The cursor fades out after this long without moving (unless a button is held)...
 pub const IDLE_MS: i64 = 1500;
 /// ...over this long; it comes back at once when it moves.
@@ -16,15 +16,27 @@ pub const FADE_MS: i64 = 300;
 pub const PRESS_SCALE: f32 = 0.85;
 /// Movement smaller than this (pixels per ms) is not "moving".
 const MOVE_EPS: f32 = 0.5;
+/// Faster than this (pixels per ms) is no hand movement: a jump across a pause, which the
+/// cursor follows at once instead of sliding across the cut.
+const SNAP_SPEED: f32 = 20.0;
 
 /// One sample of the drawn cursor: position (video pixels), opacity, and size factor (pressed).
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+/// Sent to the edit page as a short array `[t, x, y, alpha, press]`.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CursorSample {
     pub t_ms: i64,
     pub x: f32,
     pub y: f32,
     pub alpha: f32,
     pub press: f32,
+}
+
+impl Serialize for CursorSample {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let r = |v: f32| (v * 10.0).round() / 10.0;
+        let r2 = |v: f32| (v * 100.0).round() / 100.0;
+        (self.t_ms, r(self.x), r(self.y), r2(self.alpha), r2(self.press)).serialize(s)
+    }
 }
 
 /// A cursor shape: hot spot (pixels into the image) and the image as base64 PNG.
@@ -36,14 +48,16 @@ pub struct CursorShape {
     pub png: String,
 }
 
-/// The smooth path of the cursor from 0 to `duration_ms`. `at(t)` is the logged position,
-/// `pressed(t)` whether a button is held.
-pub fn smooth_cursor(at: &dyn Fn(i64) -> Option<(f32, f32)>, pressed: &dyn Fn(i64) -> bool, duration_ms: i64) -> Vec<CursorSample> {
+/// The smooth path of the cursor from 0 to `duration_ms`. `at(t)` is the logged position;
+/// `holds` are the spans `[start, end)` while a button is held, sorted by start.
+pub fn smooth_cursor(at: &dyn Fn(i64) -> Option<(f32, f32)>, holds: &[(i64, i64)], duration_ms: i64) -> Vec<CursorSample> {
     let Some(start) = at(0) else { return Vec::new() };
     let (mut x, mut y) = (SpringState { value: start.0, velocity: 0.0 }, SpringState { value: start.1, velocity: 0.0 });
     let mut last_move = 0i64;
     let mut prev = start;
     let mut alpha = 1.0f32;
+    let mut target_prev = start;
+    let mut hold_i = 0usize;
     let mut out = Vec::with_capacity((duration_ms.max(0) / SAMPLE_MS + 2) as usize);
     for t in 0..=duration_ms.max(0) {
         let target = at(t).unwrap_or(prev);
@@ -51,8 +65,15 @@ pub fn smooth_cursor(at: &dyn Fn(i64) -> Option<(f32, f32)>, pressed: &dyn Fn(i6
             last_move = t;
             prev = target;
         }
-        let down = pressed(t);
-        if t > 0 {
+        while hold_i < holds.len() && holds[hold_i].1 <= t {
+            hold_i += 1;
+        }
+        let down = holds.get(hold_i).is_some_and(|h| h.0 <= t);
+        let jump = (target.0 - target_prev.0).abs().max((target.1 - target_prev.1).abs());
+        target_prev = target;
+        if jump > SNAP_SPEED {
+            (x, y) = (SpringState { value: target.0, velocity: 0.0 }, SpringState { value: target.1, velocity: 0.0 });
+        } else if t > 0 {
             CURSOR_SPRING.step(&mut x, target.0, 0.001);
             CURSOR_SPRING.step(&mut y, target.1, 0.001);
         }
@@ -129,14 +150,11 @@ mod tests {
         assert_eq!(base64_decode("T!E="), None);
     }
 
-    fn still(_: i64) -> bool {
-        false
-    }
-
     #[test]
     fn the_path_keeps_up_with_the_mouse() {
-        let at = |t: i64| Some(if t < 1000 { (0.0, 0.0) } else { (100.0, 0.0) });
-        let s = smooth_cursor(&at, &still, 2000);
+        // A quick move of 100 px over 16 ms (logged positions are interpolated between samples).
+        let at = |t: i64| Some(((t - 1000).clamp(0, 16) as f32 * 100.0 / 16.0, 0.0));
+        let s = smooth_cursor(&at, &[], 2000);
         let x = |ms| cursor_at(&s, ms).unwrap().x;
         assert!(x(1050) > 20.0 && x(1050) < 100.0, "eases, does not jump: {}", x(1050));
         assert!(x(1400) > 99.0, "arrives quickly: {}", x(1400));
@@ -145,7 +163,7 @@ mod tests {
     #[test]
     fn hand_jitter_is_filtered() {
         let at = |t: i64| Some((if (t / 16) % 2 == 0 { 3.0 } else { -3.0 }, 0.0));
-        let s = smooth_cursor(&at, &still, 2000);
+        let s = smooth_cursor(&at, &[], 2000);
         let worst = s.iter().filter(|c| c.t_ms > 500).map(|c| c.x.abs()).fold(0.0f32, f32::max);
         assert!(worst < 1.5, "a 6 px shake moves the drawn cursor less than 1.5 px: {worst}");
     }
@@ -153,7 +171,7 @@ mod tests {
     #[test]
     fn an_idle_cursor_fades_out_and_comes_back_when_moved() {
         let at = |t: i64| Some(if t < 3000 { (10.0, 10.0) } else { (40.0, 10.0) });
-        let s = smooth_cursor(&at, &still, 4000);
+        let s = smooth_cursor(&at, &[], 4000);
         let a = |ms| cursor_at(&s, ms).unwrap().alpha;
         assert_eq!(a(1000), 1.0);
         assert!(a(1650) > 0.0 && a(1650) < 1.0, "fading: {}", a(1650));
@@ -164,16 +182,29 @@ mod tests {
     #[test]
     fn a_held_button_keeps_it_shown_and_presses_it() {
         let at = |_| Some((10.0, 10.0));
-        let held = |t: i64| (2500..3500).contains(&t);
-        let s = smooth_cursor(&at, &held, 4000);
+        let s = smooth_cursor(&at, &[(2500, 3500)], 4000);
         let c = cursor_at(&s, 3000).unwrap();
         assert_eq!((c.alpha, c.press), (1.0, PRESS_SCALE));
         assert_eq!(cursor_at(&s, 1000).unwrap().press, 1.0);
     }
 
     #[test]
+    fn a_jump_across_a_pause_does_not_glide() {
+        // Paused with the mouse on the left, resumed with it on the right: no slide across the cut.
+        let at = |t: i64| Some(if t < 1000 { (0.0, 0.0) } else if t < 1010 { ((t - 1000) as f32 * 60.0, 0.0) } else { (600.0, 0.0) });
+        let s = smooth_cursor(&at, &[], 2000);
+        assert!(cursor_at(&s, 1030).unwrap().x > 590.0, "at the next sample: {:?}", cursor_at(&s, 1030));
+    }
+
+    #[test]
+    fn samples_are_sent_as_short_arrays() {
+        let c = CursorSample { t_ms: 33, x: 10.04, y: 20.0, alpha: 0.5, press: 1.0 };
+        assert_eq!(serde_json::to_string(&c).unwrap(), "[33,10.0,20.0,0.5,1.0]");
+    }
+
+    #[test]
     fn no_positions_no_path() {
-        assert!(smooth_cursor(&|_| None, &still, 1000).is_empty());
+        assert!(smooth_cursor(&|_| None, &[], 1000).is_empty());
         assert_eq!(cursor_at(&[], 5), None);
     }
 }

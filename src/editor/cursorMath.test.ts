@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { cursorSampleAt, cursorShapeAt } from "./cursorMath.ts";
 
-const s = (t_ms: number, x: number, alpha = 1, press = 1) => ({ t_ms, x, y: 0, alpha, press });
+const s = (t_ms: number, x: number, alpha = 1, press = 1): [number, number, number, number, number] => [t_ms, x, 0, alpha, press];
 
 test("the drawn cursor is interpolated like the export", () => {
   const samples = [s(0, 0), s(100, 10, 0.5)];

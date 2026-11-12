@@ -107,14 +107,17 @@ fn plan_for(info: &VideoInfo, doc: &EditDoc, effects: Option<Effects>) -> Plan {
     Plan::new(src, doc, effects)
 }
 
-/// Effects from the input log next to `media`, or `None` when it has no (readable) log.
-fn effects_for(media: &Path, info: &VideoInfo) -> Option<Effects> {
+/// Effects from the input log next to `media`, or `None` when it has no (readable) log. The
+/// drawn cursor's path is made only when `cursor` (it is costly and only the edit page and the
+/// export draw it).
+fn effects_for(media: &Path, info: &VideoInfo, cursor: bool) -> Option<Effects> {
     let text = std::fs::read_to_string(sidecar_path(media)).ok()?;
     let log = parse_log(&text);
     if log.events.is_empty() {
         return None;
     }
-    Some(build_effects(&log, info.width, info.height))
+    let fx = build_effects(&log, info.width, info.height);
+    Some(if cursor { fx.with_cursor_path() } else { fx })
 }
 
 /// Automatic zoom segments from the clicks in `effects` inside the automatic regions, keeping
@@ -156,7 +159,7 @@ fn frame_info(f: &Frame) -> VideoInfo {
 #[tauri::command]
 pub async fn zoom_auto(app: AppHandle, state: State<'_, AppState>, path: String, doc: EditDoc, frame: Frame) -> Result<Vec<ZoomSegment>, String> {
     let media = video_item(&app, &state, &path)?;
-    let fx = effects_for(&media, &frame_info(&frame));
+    let fx = effects_for(&media, &frame_info(&frame), false);
     Ok(auto_zoom(fx.as_ref(), &doc, frame.width, frame.height, frame.duration_ms))
 }
 
@@ -164,7 +167,7 @@ pub async fn zoom_auto(app: AppHandle, state: State<'_, AppState>, path: String,
 #[tauri::command]
 pub async fn zoom_track(app: AppHandle, state: State<'_, AppState>, path: String, doc: EditDoc, frame: Frame) -> Result<Vec<(i64, Camera, Spot)>, String> {
     let media = video_item(&app, &state, &path)?;
-    let fx = effects_for(&media, &frame_info(&frame));
+    let fx = effects_for(&media, &frame_info(&frame), false);
     Ok(zoom_samples(fx.as_ref(), &doc, frame.width, frame.height, frame.duration_ms))
 }
 
@@ -205,7 +208,7 @@ pub async fn edit_open(app: AppHandle, state: State<'_, AppState>, path: String)
     let media = video_item(&app, &state, &path)?;
     let info = open_video(&media)?;
     let (doc, warning) = load_doc(&media)?;
-    let effects = effects_for(&media, &info);
+    let effects = effects_for(&media, &info, true);
     Ok(EditSession { info, doc, has_log: sidecar_path(&media).is_file(), effects, warning })
 }
 
@@ -241,7 +244,7 @@ pub async fn export_start(
         return Err("Đang xuất một video khác".to_string());
     }
     let info = open_video(&media)?;
-    let plan = plan_for(&info, &doc, effects_for(&media, &info));
+    let plan = plan_for(&info, &doc, effects_for(&media, &info, true));
     if !plan.can_export() {
         return Err("Phần giữ lại quá ngắn để xuất".to_string());
     }
@@ -339,12 +342,12 @@ mod tests {
     #[test]
     fn effects_come_from_the_input_log() {
         let media = temp_path("edit-log", "a.mp4");
-        assert_eq!(effects_for(&media, &info()), None);
+        assert_eq!(effects_for(&media, &info(), false), None);
         let log = sidecar_path(&media);
         std::fs::create_dir_all(log.parent().unwrap()).unwrap();
         std::fs::write(&log, "{\"e\":\"down\",\"t\":100,\"b\":\"right\",\"x\":5,\"y\":6}
 ").unwrap();
-        let fx = effects_for(&media, &info()).expect("effects from the log");
+        let fx = effects_for(&media, &info(), false).expect("effects from the log");
         assert_eq!(fx.ripples.len(), 1);
     }
 
