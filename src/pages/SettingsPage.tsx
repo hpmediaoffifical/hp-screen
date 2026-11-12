@@ -2,9 +2,11 @@ import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
 import { camList, type CameraInfo } from "../liveApi";
 import { getVersion } from "@tauri-apps/api/app";
 import { checkForUpdate, installUpdate, progressText, useUpdate } from "../useUpdate";
+import { switchHotkey } from "../components/HotkeyWarning";
 import {
   errorMessage,
   hotkeyStatus,
+  onHotkeysChanged,
   onSettingsChanged,
   outputFolder,
   pickFolder,
@@ -44,7 +46,7 @@ function comboFrom(e: KeyboardEvent): string | null {
   return parts.filter(Boolean).join("+");
 }
 
-export default function SettingsPage() {
+export default function SettingsPage({ focusHotkey = null }: { focusHotkey?: HotkeyField | null }) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [folder, setFolder] = useState("");
   const [pattern, setPattern] = useState("");
@@ -68,10 +70,22 @@ export default function SettingsPage() {
     refreshDerived();
     // Changes made elsewhere (the record page, the compact bar) show up here too.
     const unlisten = onSettingsChanged(setSettings);
+    // A hotkey another app let go of (or took) shows up without reopening the page.
+    const unlistenHotkeys = onHotkeysChanged(setHotkeys);
     return () => {
       unlisten.then((off) => off());
+      unlistenHotkeys.then((off) => off());
     };
   }, []);
+
+  // Opened from the hotkey warning: bring that field into view.
+  const loaded = settings !== null;
+  useEffect(() => {
+    if (!loaded || !focusHotkey) return;
+    const input = document.getElementById(focusHotkey);
+    input?.scrollIntoView({ block: "center" });
+    input?.focus();
+  }, [loaded, focusHotkey]);
 
   useEffect(() => {
     previewName(pattern).then(setPreview).catch(() => {});
@@ -205,6 +219,18 @@ export default function SettingsPage() {
                 onKeyDown={(e) => captureHotkey(field, e)}
               />
               {problem && <p id={`${field}-problem`} className="status warn">{problem}</p>}
+              {status && !status.ok && status.suggestion && !hotkeyNote[field] && (
+                <button
+                  className="btn btn-small hotkey-suggest"
+                  onClick={async () => {
+                    const failed = await switchHotkey(action, status.suggestion!);
+                    if (failed) setMessage(failed);
+                    else settingsGet().then(setSettings).catch(() => {});
+                  }}
+                >
+                  Dùng {status.suggestion} (đang trống)
+                </button>
+              )}
             </Field>
           );
         })}

@@ -80,6 +80,34 @@ pub fn format_hotkey(h: &Hotkey) -> String {
     out
 }
 
+/// Combinations to offer when a hotkey is held by another app, best first: `preferred`, then
+/// a few that few apps use, leaving out any in `taken` (compared in canonical form).
+pub fn alternatives(preferred: &str, taken: &[String]) -> Vec<String> {
+    const SPARE: [&str; 12] = [
+        "Ctrl+Alt+C",
+        "Ctrl+Alt+N",
+        "Ctrl+Alt+X",
+        "Ctrl+Alt+Q",
+        "Ctrl+Alt+W",
+        "Ctrl+Alt+Z",
+        "Ctrl+Alt+F9",
+        "Ctrl+Alt+F10",
+        "Ctrl+Alt+F11",
+        "Ctrl+Shift+F9",
+        "Ctrl+Shift+F10",
+        "Ctrl+Shift+F11",
+    ];
+    let canonical = |k: &str| parse_hotkey(k).ok().map(|h| format_hotkey(&h));
+    let taken: Vec<String> = taken.iter().filter_map(|t| canonical(t)).collect();
+    let mut out: Vec<String> = Vec::new();
+    for key in std::iter::once(preferred).chain(SPARE).filter_map(canonical) {
+        if !taken.contains(&key) && !out.contains(&key) {
+            out.push(key);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,5 +148,19 @@ mod tests {
         assert!(parse_hotkey("Ctrl+?").is_err());
         assert!(parse_hotkey("").is_err());
         assert!(parse_hotkey("Ctrl++A").is_err());
+    }
+
+    #[test]
+    fn alternatives_start_with_the_preferred_key_and_skip_taken_ones() {
+        let taken = ["Ctrl+Alt+R".to_string(), "ctrl+alt+c".to_string()];
+        let list = alternatives("Ctrl+Alt+R", &taken);
+        assert!(!list.iter().any(|k| k == "Ctrl+Alt+R" || k == "Ctrl+Alt+C"), "{list:?}");
+        assert_eq!(alternatives("Alt+Ctrl+N", &[])[0], "Ctrl+Alt+N");
+        let all = alternatives("Ctrl+Alt+N", &[]);
+        let mut unique = all.clone();
+        unique.dedup();
+        assert_eq!(all.len(), unique.len(), "no repeats");
+        assert!(all.len() >= 8);
+        assert!(all.iter().all(|k| parse_hotkey(k).is_ok()));
     }
 }

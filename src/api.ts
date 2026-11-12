@@ -138,6 +138,8 @@ export interface HotkeyStatus {
   hotkey: string;
   ok: boolean;
   message: string | null;
+  /** A free combination to switch to when another app holds this one. */
+  suggestion: string | null;
 }
 export const hotkeyStatus = () => invoke<HotkeyStatus[]>("hotkey_status");
 
@@ -260,3 +262,7 @@ export const onUpdateAvailable = (handler: (u: UpdateInfo) => void): Promise<Unl
   listen<UpdateInfo>("update-available", (e) => handler(e.payload));
 export const onUpdateProgress = (handler: (p: UpdateProgress) => void): Promise<UnlistenFn> =>
   listen<UpdateProgress>("update-progress", (e) => handler(e.payload));
+
+/** Hotkey registration changed: settings saved, or a key another app held became free. */
+export const onHotkeysChanged = (handler: (s: HotkeyStatus[]) => void): Promise<UnlistenFn> =>
+  listen<HotkeyStatus[]>("hotkeys-changed", (e) => handler(e.payload));

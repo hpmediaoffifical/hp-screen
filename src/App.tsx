@@ -5,6 +5,7 @@ import LibraryPage from "./pages/LibraryPage";
 import SettingsPage from "./pages/SettingsPage";
 import EditPage from "./pages/EditPage";
 import UpdateNotice from "./components/UpdateNotice";
+import HotkeyWarning, { type HotkeyField } from "./components/HotkeyWarning";
 
 type PageId = "record" | "library" | "settings";
 
@@ -18,6 +19,8 @@ export default function App() {
   const [page, setPage] = useState<PageId>("record");
   // A video open in the edit page replaces the current page until it is closed.
   const [editing, setEditing] = useState<string | null>(null);
+  /** Hotkey field to bring into view when Settings opens from the hotkey warning. */
+  const [focusHotkey, setFocusHotkey] = useState<HotkeyField | null>(null);
   return (
     <div className="app">
       <nav className="sidebar" aria-label="Điều hướng chính">
@@ -29,6 +32,7 @@ export default function App() {
             aria-current={page === n.id ? "page" : undefined}
             onClick={() => {
               setEditing(null);
+              setFocusHotkey(null);
               setPage(n.id);
             }}
           >
@@ -43,9 +47,19 @@ export default function App() {
       </nav>
       <main className="content">
         {editing && <EditPage key={editing} path={editing} onClose={() => setEditing(null)} />}
-        {!editing && page === "record" && <RecordPage />}
-        {!editing && page === "library" && <LibraryPage onEdit={setEditing} />}
-        {!editing && page === "settings" && <SettingsPage />}
+        {!editing && (
+          <>
+            <HotkeyWarning
+              onOpenSettings={(field) => {
+                setFocusHotkey(field);
+                setPage("settings");
+              }}
+            />
+            {page === "record" && <RecordPage />}
+            {page === "library" && <LibraryPage onEdit={setEditing} />}
+            {page === "settings" && <SettingsPage focusHotkey={focusHotkey} />}
+          </>
+        )}
       </main>
       <UpdateNotice />
     </div>

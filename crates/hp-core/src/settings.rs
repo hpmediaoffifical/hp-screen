@@ -6,17 +6,21 @@ use crate::quality::Quality;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-pub const SETTINGS_VERSION: u32 = 1;
+/// 2: the screenshot hotkeys moved off Ctrl+Alt+S / Ctrl+Alt+A, which Zalo holds.
+pub const SETTINGS_VERSION: u32 = 2;
 pub const DEFAULT_HOTKEY_TOGGLE: &str = "Ctrl+Alt+R";
 pub const DEFAULT_HOTKEY_PAUSE: &str = "Ctrl+Alt+P";
-/// Capture an area and draw notes on it.
-pub const DEFAULT_HOTKEY_SCREENSHOT: &str = "Ctrl+Alt+S";
-/// Instant screenshot of the selected source, no editing.
-pub const DEFAULT_HOTKEY_QUICKSHOT: &str = "Ctrl+Alt+A";
+/// Capture an area and draw notes on it ("C" for chụp).
+pub const DEFAULT_HOTKEY_SCREENSHOT: &str = "Ctrl+Alt+C";
+/// Instant screenshot of the selected source, no editing ("N" for nhanh).
+pub const DEFAULT_HOTKEY_QUICKSHOT: &str = "Ctrl+Alt+N";
 /// Draw on screen while recording.
 pub const DEFAULT_HOTKEY_DRAW: &str = "Ctrl+Alt+D";
 /// Seconds a finished stroke stays before fading; 0 keeps strokes until cleared.
 pub const DRAW_FADE_CHOICES: [u32; 5] = [0, 2, 3, 5, 10];
+/// Defaults before version 2. Zalo holds both for its own screenshots, so settings still on
+/// them move to the new defaults; a key the user picked themselves is never changed.
+const OLD_DEFAULTS: [(&str, &str); 2] = [("hotkey_screenshot", "Ctrl+Alt+S"), ("hotkey_quickshot", "Ctrl+Alt+A")];
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -79,9 +83,22 @@ impl Default for Settings {
 /// Parses settings JSON. Unreadable JSON gives the defaults; missing fields are filled in.
 pub fn load_settings(json: &str) -> Settings {
     use serde_json::Value;
-    let Ok(Value::Object(input)) = serde_json::from_str::<Value>(json) else {
+    let Ok(Value::Object(mut input)) = serde_json::from_str::<Value>(json) else {
         return Settings::default();
     };
+    let version = input.get("version").and_then(Value::as_u64).unwrap_or(0);
+    if version < 2 {
+        for (field, old) in OLD_DEFAULTS {
+            let on_old_default = input
+                .get(field)
+                .and_then(Value::as_str)
+                .and_then(|k| parse_hotkey(k).ok())
+                .is_some_and(|h| format_hotkey(&h) == old);
+            if on_old_default {
+                input.remove(field); // filled in with the new default below
+            }
+        }
+    }
     let Ok(Value::Object(mut merged)) = serde_json::to_value(Settings::default()) else {
         return Settings::default();
     };
@@ -214,7 +231,7 @@ mod tests {
         let s = load_settings(r#"{"hotkey_toggle":"abc","hotkey_pause":"alt+ctrl+k","hotkey_screenshot":"F12"}"#);
         assert_eq!(s.hotkey_toggle, "Ctrl+Alt+R");
         assert_eq!(s.hotkey_pause, "Ctrl+Alt+K");
-        assert_eq!(s.hotkey_screenshot, "Ctrl+Alt+S");
+        assert_eq!(s.hotkey_screenshot, DEFAULT_HOTKEY_SCREENSHOT);
     }
 
     #[test]
@@ -242,14 +259,13 @@ mod tests {
 mod quickshot_tests {
     use super::*;
 
-    /// Ctrl+Alt+S opens "capture and annotate"; the old instant screenshot has its own key.
+    /// "Capture and annotate" and the instant screenshot each have their own key.
     #[test]
-    fn instant_screenshot_has_its_own_hotkey_defaulting_to_ctrl_alt_a() {
+    fn instant_screenshot_has_its_own_hotkey() {
         let s = Settings::default();
-        assert_eq!(s.hotkey_screenshot, "Ctrl+Alt+S");
-        assert_eq!(s.hotkey_quickshot, "Ctrl+Alt+A");
+        assert_ne!(s.hotkey_screenshot, s.hotkey_quickshot);
         // Files written before this setting existed get the default.
-        assert_eq!(load_settings(r#"{"hotkey_screenshot":"Ctrl+Alt+S"}"#).hotkey_quickshot, "Ctrl+Alt+A");
+        assert_eq!(load_settings(r#"{"version":2,"hotkey_screenshot":"Ctrl+Alt+X"}"#).hotkey_quickshot, DEFAULT_HOTKEY_QUICKSHOT);
     }
 
     #[test]
@@ -261,7 +277,44 @@ mod quickshot_tests {
                 assert_ne!(a, b, "two actions share {a}");
             }
         }
-        assert_eq!(load_settings(r#"{"hotkey_quickshot":"bad"}"#).hotkey_quickshot, "Ctrl+Alt+A");
+        assert_eq!(load_settings(r#"{"hotkey_quickshot":"bad"}"#).hotkey_quickshot, DEFAULT_HOTKEY_QUICKSHOT);
+    }
+}
+
+#[cfg(test)]
+mod zalo_hotkey_tests {
+    //! Zalo, used on most Vietnamese PCs, holds Ctrl+Alt+S and Ctrl+Alt+A for its own
+    //! screenshots, so HP Screen's screenshot keys moved off them.
+    use super::*;
+
+    #[test]
+    fn screenshot_defaults_avoid_the_keys_zalo_holds() {
+        let s = Settings::default();
+        for zalo in ["Ctrl+Alt+S", "Ctrl+Alt+A"] {
+            assert!([&s.hotkey_toggle, &s.hotkey_pause, &s.hotkey_screenshot, &s.hotkey_quickshot].iter().all(|k| *k != zalo));
+        }
+        assert_eq!(s.hotkey_screenshot, "Ctrl+Alt+C");
+        assert_eq!(s.hotkey_quickshot, "Ctrl+Alt+N");
+        assert_eq!(s.version, 2);
+    }
+
+    #[test]
+    fn older_settings_still_on_the_old_defaults_move_to_the_new_ones() {
+        let s = load_settings(r#"{"version":1,"hotkey_screenshot":"Ctrl+Alt+S","hotkey_quickshot":"Ctrl+Alt+A","fps":60}"#);
+        assert_eq!((s.hotkey_screenshot.as_str(), s.hotkey_quickshot.as_str()), ("Ctrl+Alt+C", "Ctrl+Alt+N"));
+        assert_eq!(s.fps, 60, "other choices are kept");
+        // Files from before settings had a version count as old too.
+        assert_eq!(load_settings(r#"{"hotkey_screenshot":"Ctrl+Alt+S"}"#).hotkey_screenshot, "Ctrl+Alt+C");
+    }
+
+    #[test]
+    fn hotkeys_the_user_chose_are_never_moved() {
+        let s = load_settings(r#"{"version":1,"hotkey_screenshot":"Ctrl+Alt+F9","hotkey_quickshot":"Ctrl+Alt+A"}"#);
+        assert_eq!(s.hotkey_screenshot, "Ctrl+Alt+F9");
+        assert_eq!(s.hotkey_quickshot, "Ctrl+Alt+N");
+        // Picked again after the move: it stays.
+        let s = load_settings(r#"{"version":2,"hotkey_screenshot":"Ctrl+Alt+S"}"#);
+        assert_eq!(s.hotkey_screenshot, "Ctrl+Alt+S");
     }
 }
 

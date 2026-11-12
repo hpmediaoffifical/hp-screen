@@ -65,6 +65,7 @@ pub fn run() {
             app.manage(updater::UpdateState::default());
             updater::start_background(handle);
             let _registered = hotkeys::register_hotkeys(handle, &settings);
+            hotkeys::watch_taken(handle);
             #[cfg(debug_assertions)]
             eprintln!("[hp] hotkeys: {_registered:?}");
             Ok(())
