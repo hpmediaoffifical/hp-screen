@@ -184,6 +184,8 @@ export type SnipAction = "copy" | "save" | "both";
 export interface SnipContext {
   frozen: string;
   monitor: MonitorInfo;
+  /** Windows to snap to, top-most first. */
+  windows: SnapWindow[];
 }
 /** Opens "capture and annotate" from the main window. */
 export const snipStart = () => invoke<void>("snip_start");
@@ -202,3 +204,37 @@ export const onSettingsChanged = (handler: (s: Settings) => void): Promise<Unlis
   listen<Settings>("settings-changed", (e) => handler(e.payload));
 /** The frozen screen's image bytes (BMP). */
 export const snipFrozen = () => invoke<ArrayBuffer>("snip_frozen");
+
+/** A window the capture-and-annotate selection can snap to (monitor-relative physical pixels). */
+export interface SnapWindow {
+  rect: Rect;
+  title: string;
+}
+/** Pins the annotated picture on screen where `rect` was; the overlay closes. */
+export const snipPin = (png: string, rect: Rect) => invoke<void>("snip_pin", { png, rect });
+export interface OcrResult {
+  text: string;
+  /** Language it was read in, e.g. "tiếng Việt". */
+  language: string;
+  vietnamese: boolean;
+  note: string | null;
+}
+export const snipOcr = (png: string) => invoke<OcrResult>("snip_ocr", { png });
+export const copyText = (text: string) => invoke<void>("copy_text", { text });
+// Pinned picture windows: each acts on the window that calls it.
+export const pinImage = () => invoke<ArrayBuffer>("pin_image");
+export const pinCopy = () => invoke<void>("pin_copy");
+export const pinClose = () => invoke<void>("pin_close");
+export const pinReady = () => invoke<void>("pin_ready");
+// Scrolling capture.
+export interface ScrollProgress {
+  width: number;
+  height: number;
+  status: "started" | "added" | "same" | "lost" | "full";
+}
+export const snipScrollStart = (rect: Rect) => invoke<void>("snip_scroll_start", { rect });
+/** With `keep`, saves and copies the long picture: [path, width, height]. */
+export const snipScrollStop = (keep: boolean) => invoke<[string, number, number] | null>("snip_scroll_stop", { keep });
+export const scrollClose = () => invoke<void>("scroll_close");
+export const onScrollProgress = (handler: (p: ScrollProgress) => void): Promise<UnlistenFn> =>
+  listen<ScrollProgress>("scroll-progress", (e) => handler(e.payload));

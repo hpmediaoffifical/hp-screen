@@ -2,6 +2,9 @@
 name = "hp-screen"
 version = "0.1.0"
 description = "HP Screen - quay màn hình cho Windows 11"
+authors = ["Nguyễn Hoàng Phụng (HP Media)"]
+license = "MIT"
+repository = "https://github.com/hpmediaoffifical/hp-screen"
 edition = "2024"
 
 [lib]
@@ -33,3 +36,8 @@ gif = "0.13"
 sha2 = "0.10"
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 
+
+# Capture-and-annotate: window frames for snapping the selection, and Windows' own offline
+# text recognition (OCR). Kept apart from the list above so both can grow without conflicts.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Graphics_Dwm", "Media_Ocr", "Graphics_Imaging", "Storage_Streams", "Globalization", "Foundation", "Foundation_Collections"] }

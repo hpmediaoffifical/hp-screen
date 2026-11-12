@@ -1,41 +1,57 @@
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { errorMessage, snipCancel, snipContext, snipFinish, snipFrozen, snipReady, type SnipAction } from "../api";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import {
+  copyText,
+  errorMessage,
+  snipCancel,
+  snipContext,
+  snipFinish,
+  snipFrozen,
+  snipOcr,
+  snipPin,
+  snipReady,
+  snipScrollStart,
+  type OcrResult,
+  type SnapWindow,
+  type SnipAction,
+  type SnipContext,
+} from "../api";
+import {
+  blockArrowOutline,
+  commit,
+  historyOf,
+  moveShape,
+  nextStepNumber,
+  normalize,
+  redo,
+  shapeAt,
+  shapeBounds,
+  stepNumbers,
+  undo,
+  type Box,
+  type History,
+  type Point,
+  type Shape,
+  type TextBg,
+  type TextShape,
+} from "./snipModel";
 
 /**
- * "Capture and annotate": the frozen screen fills this window. Drag to choose an area, adjust
- * it with its handles, draw on it, then copy and/or save. Everything is kept in the frozen
- * image's physical pixels, so the result is as sharp as the screen.
+ * "Capture and annotate": the frozen screen fills this window. Point at a window and click to
+ * take it, or drag to choose an area; adjust it with its handles, draw on it, then copy, save,
+ * pin it on the screen or read its text. Everything is kept in the frozen image's physical
+ * pixels, so the result is as sharp as the screen.
  */
 
-type Tool = "pen" | "rect" | "ellipse" | "arrow" | "blockArrow" | "line" | "text" | "mosaic";
-interface Point {
-  x: number;
-  y: number;
-}
-interface Box {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-type Shape =
-  | { kind: "pen"; color: string; width: number; points: Point[] }
-  | { kind: "rect" | "ellipse" | "arrow" | "blockArrow" | "line"; color: string; width: number; from: Point; to: Point }
-  | { kind: "mosaic"; from: Point; to: Point }
-  | { kind: "text"; color: string; size: number; at: Point; text: string; bg: TextBg };
+type Tool = "pen" | "highlight" | "rect" | "ellipse" | "arrow" | "blockArrow" | "line" | "text" | "step" | "mosaic";
 type Handle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 type Drag =
-  | { kind: "select"; start: Point }
+  | { kind: "select"; start: Point; snap: SnapWindow | null }
   | { kind: "move"; start: Point; origin: Box }
   | { kind: "resize"; handle: Handle; origin: Box }
   | { kind: "draw"; shape: Shape }
-  | { kind: "moveText"; index: number; start: Point; origin: Point; moved: boolean };
+  | { kind: "moveShape"; index: number; start: Point; origin: Shape; before: Shape[]; moved: boolean };
 
-type TextShape = Extract<Shape, { kind: "text" }>;
-
-/** Box behind text so it stands out. Boxes are slightly see-through so they do not feel heavy. */
-type TextBg = "none" | "dark" | "light" | "orange" | "color";
 const TEXT_BGS: { value: TextBg; label: string }[] = [
   { value: "none", label: "Không nền" },
   { value: "dark", label: "Nền đen" },
@@ -51,16 +67,15 @@ const withAlpha = (hex: string, alpha: number) =>
     .toString(16)
     .padStart(2, "0");
 
+/** Swatches that need dark text on top of them. */
+const LIGHT_COLORS = ["#ffcc00", "#34c759", "#ffffff"];
+
 /** Text and box colours for a text annotation. */
 function textColors(color: string, bg: TextBg): { fill: string; box: string | null } {
   if (bg === "dark") return { fill: color === "#111111" ? "#ffffff" : color, box: "rgba(0, 0, 0, 0.55)" };
   if (bg === "light") return { fill: color === "#ffffff" ? "#111111" : color, box: "rgba(255, 255, 255, 0.72)" };
   if (bg === "orange") return { fill: "#111111", box: withAlpha(ORANGE, 0.82) };
-  if (bg === "color") {
-    // Light swatches get dark text, dark ones white text.
-    const light = ["#ffcc00", "#34c759", "#ffffff"].includes(color);
-    return { fill: light ? "#111111" : "#ffffff", box: withAlpha(color, 0.8) };
-  }
+  if (bg === "color") return { fill: LIGHT_COLORS.includes(color) ? "#111111" : "#ffffff", box: withAlpha(color, 0.8) };
   return { fill: color, box: null };
 }
 
@@ -81,30 +96,29 @@ function textBox(s: TextShape): Box {
 
 const COLORS = ["#ff3b30", "#ffcc00", "#34c759", "#0a84ff", "#ffffff", "#111111"];
 const COLOR_NAMES = ["Đỏ", "Vàng", "Xanh lá", "Xanh dương", "Trắng", "Đen"];
+/** Per size: line width, font size, highlighter width and step radius, in CSS pixels. */
 const SIZES = [
-  { label: "Mảnh", stroke: 2, font: 16 },
-  { label: "Vừa", stroke: 4, font: 24 },
-  { label: "Đậm", stroke: 8, font: 36 },
+  { label: "Mảnh", stroke: 2, font: 16, marker: 12, step: 11 },
+  { label: "Vừa", stroke: 4, font: 24, marker: 20, step: 15 },
+  { label: "Đậm", stroke: 8, font: 36, marker: 32, step: 21 },
 ];
-const TOOLS: { id: Tool; label: string; icon: string; key: string }[] = [
+const TOOLS: { id: Tool; label: string; icon: ReactNode; key: string }[] = [
   { id: "pen", label: "Bút vẽ tự do", icon: "✎", key: "P" },
+  { id: "highlight", label: "Bút tô sáng", icon: <span className="snip-hl-icon" />, key: "H" },
   { id: "rect", label: "Hình chữ nhật", icon: "▭", key: "R" },
   { id: "ellipse", label: "Hình tròn / elip", icon: "◯", key: "O" },
   { id: "arrow", label: "Mũi tên", icon: "↗", key: "A" },
   { id: "blockArrow", label: "Mũi tên khối", icon: "⇨", key: "B" },
   { id: "line", label: "Đường thẳng", icon: "╱", key: "L" },
   { id: "text", label: "Chữ", icon: "T", key: "T" },
+  { id: "step", label: "Đánh số bước", icon: "①", key: "N" },
   { id: "mosaic", label: "Làm mờ (che thông tin)", icon: "▦", key: "M" },
 ];
+const HIGHLIGHT_DEFAULT = "#ffcc00";
 const HANDLE_CSS = 9; // handle square size, CSS pixels
 const MOSAIC_BLOCK_CSS = 10;
-
-const normalize = (a: Point, b: Point): Box => ({
-  x: Math.min(a.x, b.x),
-  y: Math.min(a.y, b.y),
-  w: Math.abs(b.x - a.x),
-  h: Math.abs(b.y - a.y),
-});
+/** How close (CSS pixels) a press must be to a line to pick it. */
+const PICK_CSS = 5;
 
 function handlePoints(b: Box): [Handle, Point][] {
   const cx = b.x + b.w / 2;
@@ -144,16 +158,24 @@ const CURSORS: Record<Handle, string> = {
   w: "ew-resize",
 };
 
-/** Draws one annotation; `dx/dy` shift it (used when exporting just the selection). */
-function drawShape(ctx: CanvasRenderingContext2D, s: Shape, image: HTMLImageElement, block: number, dx = 0, dy = 0) {
+/**
+ * Draws one annotation; `dx/dy` shift it (used when exporting just the selection). `number`
+ * is the label of a step.
+ */
+function drawShape(ctx: CanvasRenderingContext2D, s: Shape, image: HTMLImageElement, block: number, number: number, dx = 0, dy = 0) {
   ctx.save();
   ctx.translate(-dx, -dy);
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   switch (s.kind) {
-    case "pen": {
+    case "pen":
+    case "highlight": {
       ctx.strokeStyle = s.color;
       ctx.lineWidth = s.width;
+      // A highlighter tints what is under it instead of covering it: multiplying keeps dark
+      // text dark and turns the light background around it into the marker colour. The whole
+      // stroke is one path, so where it crosses itself it does not get darker.
+      if (s.kind === "highlight") ctx.globalCompositeOperation = "multiply";
       ctx.beginPath();
       s.points.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
       if (s.points.length === 1) ctx.lineTo(s.points[0].x + 0.1, s.points[0].y);
@@ -203,33 +225,15 @@ function drawShape(ctx: CanvasRenderingContext2D, s: Shape, image: HTMLImageElem
       break;
     }
     case "blockArrow": {
-      // An outlined "fat" arrow: a shaft and a wide triangular head, drawn as one shape
-      // along the drag direction. Its thickness grows with its length.
-      const dx = s.to.x - s.from.x;
-      const dy = s.to.y - s.from.y;
-      const length = Math.hypot(dx, dy);
-      if (length < 2) break;
-      const shaftHalf = Math.max(length * 0.11, s.width * 2.5);
-      const headHalf = shaftHalf * 2.1;
-      const headLength = Math.min(length * 0.45, headHalf * 1.3);
-      const neck = length - headLength;
-      ctx.save();
-      ctx.translate(s.from.x, s.from.y);
-      ctx.rotate(Math.atan2(dy, dx));
+      // An outlined "fat" arrow: a shaft and a wide triangular head, drawn as one shape.
+      const outline = blockArrowOutline(s.from, s.to, s.width);
+      if (outline.length === 0) break;
       ctx.beginPath();
-      ctx.moveTo(0, -shaftHalf);
-      ctx.lineTo(neck, -shaftHalf);
-      ctx.lineTo(neck, -headHalf);
-      ctx.lineTo(length, 0);
-      ctx.lineTo(neck, headHalf);
-      ctx.lineTo(neck, shaftHalf);
-      ctx.lineTo(0, shaftHalf);
+      outline.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
       ctx.closePath();
-      ctx.lineJoin = "round";
       ctx.strokeStyle = s.color;
       ctx.lineWidth = s.width;
       ctx.stroke();
-      ctx.restore();
       break;
     }
     case "mosaic": {
@@ -265,26 +269,63 @@ function drawShape(ctx: CanvasRenderingContext2D, s: Shape, image: HTMLImageElem
       s.text.split("\n").forEach((line, i) => ctx.fillText(line, s.at.x, s.at.y + (i + 0.5) * lineHeight));
       break;
     }
+    case "step": {
+      // A filled disc with a light ring, so it reads on dark and light pictures alike.
+      const r = s.size;
+      ctx.beginPath();
+      ctx.arc(s.at.x, s.at.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = s.color;
+      ctx.shadowColor = "rgba(0, 0, 0, 0.35)";
+      ctx.shadowBlur = r * 0.35;
+      ctx.fill();
+      ctx.shadowColor = "transparent";
+      ctx.lineWidth = Math.max(1.5, r * 0.14);
+      ctx.strokeStyle = s.color === "#ffffff" ? "rgba(0, 0, 0, 0.6)" : "rgba(255, 255, 255, 0.92)";
+      ctx.stroke();
+      const label = String(number);
+      ctx.fillStyle = LIGHT_COLORS.includes(s.color) ? "#111111" : "#ffffff";
+      ctx.font = `700 ${r * (label.length > 2 ? 0.8 : label.length > 1 ? 1 : 1.2)}px "Segoe UI", sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      // Digits sit a little high in Segoe UI's line box; nudge them to the optical centre.
+      ctx.fillText(label, s.at.x, s.at.y + r * 0.06);
+      break;
+    }
   }
   ctx.restore();
 }
 
+type OcrState = { busy: true } | { busy: false; result: OcrResult; text: string; copied: boolean };
+
 export default function SnipOverlay() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
+  const [context, setContext] = useState<SnipContext | null>(null);
   const [scale, setScale] = useState(1); // image pixels per CSS pixel
   const [selection, setSelection] = useState<Box | null>(null);
   const [tool, setTool] = useState<Tool | null>(null);
   const [color, setColor] = useState(COLORS[0]);
+  const [markerColor, setMarkerColor] = useState(HIGHLIGHT_DEFAULT);
   const [sizeIndex, setSizeIndex] = useState(1);
-  const [shapes, setShapes] = useState<Shape[]>([]);
+  const [history, setHistory] = useState<History>(() => historyOf([]));
+  const shapes = history.present;
+  /** Shape picked with no tool on: it can be dragged or deleted. */
+  const [picked, setPicked] = useState<number | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const [hover, setHover] = useState<Point | null>(null);
   const [textAt, setTextAt] = useState<Point | null>(null);
   const [textValue, setTextValue] = useState("");
   const [textBg, setTextBg] = useState<TextBg>("none");
+  /** Shapes as they were before a text was opened for editing (the edit is one undo step). */
+  const editBase = useRef<Shape[] | null>(null);
+  /** The area whose drawings were cleared when a new area was chosen, and at which undo depth:
+   * undoing that step brings the area back with them. */
+  const clearedArea = useRef<{ depth: number; area: Box } | null>(null);
+  /** Counts text readings, so a reading cancelled with Esc does not reappear when it ends. */
+  const ocrRun = useRef(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [ocr, setOcr] = useState<OcrState | null>(null);
   // Measured sizes of the two floating panels (CSS pixels), used to keep them on screen.
   const toolsRef = useRef<HTMLDivElement>(null);
   const actionsRef = useRef<HTMLDivElement>(null);
@@ -306,6 +347,7 @@ export default function SnipOverlay() {
     snipContext()
       .then(async (ctx) => {
         if (!ctx) return snipCancel();
+        setContext(ctx);
         const bytes = await snipFrozen();
         url = URL.createObjectURL(new Blob([bytes], { type: "image/bmp" }));
         const img = new Image();
@@ -324,8 +366,27 @@ export default function SnipOverlay() {
 
   const block = MOSAIC_BLOCK_CSS * scale;
   const toImage = (e: { clientX: number; clientY: number }): Point => ({ x: e.clientX * scale, y: e.clientY * scale });
+  const inside = (p: Point, b: Box | null) => !!b && p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h;
+
+  /** The whole screen, offered where no window is (the desktop). */
+  const wholeScreen = useMemo<SnapWindow | null>(
+    () => (image ? { title: "Cả màn hình", rect: { x: 0, y: 0, w: image.naturalWidth, h: image.naturalHeight } } : null),
+    [image],
+  );
+  /** The top-most window under `p` (windows come top-most first, in image pixels). */
+  const windowAt = useCallback(
+    (p: Point): SnapWindow | null => context?.windows.find((w) => inside(p, w.rect)) ?? wholeScreen,
+    [context, wholeScreen],
+  );
 
   const draft = drag?.kind === "draw" ? drag.shape : null;
+  // No area chosen yet (or a press that has not moved): the window under the pointer is offered.
+  const choosing = !selection || (drag?.kind === "select" && selection.w < 4 && selection.h < 4);
+  const snap = choosing ? (drag?.kind === "select" ? drag.snap : hover ? windowAt(hover) : null) : null;
+  const pickedShape = picked !== null && !drag ? (shapes[picked] ?? null) : null;
+
+  /** Edits the shapes as one undo step. */
+  const change = useCallback((edit: (shapes: Shape[]) => Shape[]) => setHistory((h) => commit(h, edit(h.present))), []);
 
   // Repaint everything whenever something visible changes.
   useEffect(() => {
@@ -337,6 +398,14 @@ export default function SnipOverlay() {
     ctx.drawImage(image, 0, 0);
     ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (snap) {
+      const { x, y, w, h } = snap.rect;
+      ctx.drawImage(image, x, y, w, h, x, y, w, h);
+      const line = Math.max(2, 2 * scale);
+      ctx.strokeStyle = "#4c8dff";
+      ctx.lineWidth = line;
+      ctx.strokeRect(x + line / 2, y + line / 2, w - line, h - line);
+    }
     if (selection && selection.w > 0 && selection.h > 0) {
       const { x, y, w, h } = selection;
       ctx.drawImage(image, x, y, w, h, x, y, w, h);
@@ -344,7 +413,18 @@ export default function SnipOverlay() {
       ctx.beginPath();
       ctx.rect(x, y, w, h);
       ctx.clip();
-      [...shapes, ...(draft ? [draft] : [])].forEach((s) => drawShape(ctx, s, image, block));
+      const all = [...shapes, ...(draft ? [draft] : [])];
+      const numbers = stepNumbers(all);
+      all.forEach((s, i) => drawShape(ctx, s, image, block, numbers[i]));
+      if (pickedShape) {
+        const b = shapeBounds(pickedShape, textBox);
+        const pad = 4 * scale;
+        ctx.strokeStyle = "#4c8dff";
+        ctx.lineWidth = Math.max(1, 1.5 * scale);
+        ctx.setLineDash([5 * scale, 3 * scale]);
+        ctx.strokeRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2);
+        ctx.setLineDash([]);
+      }
       ctx.restore();
       ctx.strokeStyle = "#4c8dff";
       ctx.lineWidth = Math.max(1, scale);
@@ -355,7 +435,7 @@ export default function SnipOverlay() {
       ctx.fillStyle = "#4c8dff";
       handlePoints(selection).forEach(([, p]) => ctx.fillRect(p.x - hs / 2, p.y - hs / 2, hs, hs));
     }
-  }, [image, selection, shapes, draft, scale, block]);
+  }, [image, selection, shapes, draft, scale, block, snap, pickedShape]);
 
   // Tell the core to show the window after the first paint.
   useEffect(() => {
@@ -368,26 +448,42 @@ export default function SnipOverlay() {
     const found = handlePoints(selection).find(([, h]) => Math.abs(h.x - p.x) <= r && Math.abs(h.y - p.y) <= r);
     return found ? found[0] : null;
   };
-  const inside = (p: Point, b: Box | null) => !!b && p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h;
+
+  const pendingText = useCallback(
+    (): Shape | null =>
+      textAt && textValue.trim()
+        ? { kind: "text", color, size: SIZES[sizeIndex].font * scale, at: textAt, text: textValue, bg: textBg }
+        : null,
+    [textAt, textValue, color, sizeIndex, scale, textBg],
+  );
 
   const commitText = useCallback(() => {
-    if (textAt && textValue.trim()) {
-      setShapes((s) => [...s, { kind: "text", color, size: SIZES[sizeIndex].font * scale, at: textAt, text: textValue, bg: textBg }]);
+    const text = pendingText();
+    const base = editBase.current;
+    editBase.current = null;
+    if (base) {
+      // Editing an existing text: the whole edit (even emptying it) is one undo step.
+      setHistory((h) => ({ past: [...h.past, base], present: text ? [...h.present, text] : h.present, future: [] }));
+    } else if (text) {
+      change((s) => [...s, text]);
     }
     setTextAt(null);
     setTextValue("");
-  }, [textAt, textValue, color, sizeIndex, scale, textBg]);
+  }, [pendingText, change]);
 
-  /** Index of the top-most text annotation under `p`, if any. */
-  const hitText = (p: Point): number => {
-    const pad = 4 * scale;
-    for (let i = shapes.length - 1; i >= 0; i--) {
-      const s = shapes[i];
-      if (s.kind !== "text") continue;
-      const b = textBox(s);
-      if (p.x >= b.x - pad && p.x <= b.x + b.w + pad && p.y >= b.y - pad && p.y <= b.y + b.h + pad) return i;
-    }
-    return -1;
+  const cancelText = () => {
+    const base = editBase.current;
+    editBase.current = null;
+    if (base) setHistory((h) => ({ ...h, present: base }));
+    setTextAt(null);
+    setTextValue("");
+  };
+
+  /** What a press at `p` would pick: any shape with no tool on, text with the text tool. */
+  const pickAt = (p: Point): number => {
+    // Only drawings that can be seen: inside the area.
+    if (!selection || !inside(p, selection) || (tool !== null && tool !== "text")) return -1;
+    return shapeAt(shapes, p, PICK_CSS * scale, textBox, tool === "text" ? "text" : undefined);
   };
 
   function onPointerDown(e: ReactPointerEvent<HTMLCanvasElement>) {
@@ -402,32 +498,41 @@ export default function SnipOverlay() {
     const p = toImage(e);
     e.currentTarget.setPointerCapture(e.pointerId);
     const handle = hitHandle(p);
-    const textIndex = (tool === null || tool === "text") && selection && !handle ? hitText(p) : -1;
-    if (textIndex >= 0) {
-      const s = shapes[textIndex] as TextShape;
-      setDrag({ kind: "moveText", index: textIndex, start: p, origin: s.at, moved: false });
+    const index = handle ? -1 : pickAt(p);
+    setPicked(index >= 0 && tool === null ? index : null);
+    if (index >= 0) {
+      setDrag({ kind: "moveShape", index, start: p, origin: shapes[index], before: shapes, moved: false });
     } else if (tool && selection && inside(p, selection) && !handle) {
-      const width = SIZES[sizeIndex].stroke * scale;
+      const size = SIZES[sizeIndex];
       if (tool === "text") {
         setTextAt(p);
         return;
       }
+      if (tool === "step") {
+        change((s) => [...s, { kind: "step", color, size: size.step * scale, at: p }]);
+        return;
+      }
       const shape: Shape =
         tool === "pen"
-          ? { kind: "pen", color, width, points: [p] }
-          : tool === "mosaic"
-            ? { kind: "mosaic", from: p, to: p }
-            : { kind: tool, color, width, from: p, to: p };
+          ? { kind: "pen", color, width: size.stroke * scale, points: [p] }
+          : tool === "highlight"
+            ? { kind: "highlight", color: markerColor, width: size.marker * scale, points: [p] }
+            : tool === "mosaic"
+              ? { kind: "mosaic", from: p, to: p }
+              : { kind: tool, color, width: size.stroke * scale, from: p, to: p };
       setDrag({ kind: "draw", shape });
     } else if (handle && selection) {
       setDrag({ kind: "resize", handle, origin: selection });
     } else if (!tool && selection && inside(p, selection)) {
       setDrag({ kind: "move", start: p, origin: selection });
     } else if (!tool || !selection) {
-      // A new selection starts over: earlier drawings belonged to the old area.
-      setShapes([]);
+      // A new selection starts over: earlier drawings belonged to the old area (undo brings them back).
+      if (shapes.length > 0) {
+        if (selection) clearedArea.current = { depth: history.past.length + 1, area: selection };
+        change(() => []);
+      }
       setSelection({ x: p.x, y: p.y, w: 0, h: 0 });
-      setDrag({ kind: "select", start: p });
+      setDrag({ kind: "select", start: p, snap: windowAt(p) });
     }
   }
 
@@ -450,116 +555,247 @@ export default function SnipOverlay() {
         y: Math.min(Math.max(o.y + p.y - drag.start.y, 0), image.naturalHeight - o.h),
       });
     }
-    if (drag.kind === "moveText") {
+    if (drag.kind === "moveShape") {
       const dx = p.x - drag.start.x;
       const dy = p.y - drag.start.y;
       const moved = drag.moved || Math.hypot(dx, dy) > 3 * scale;
       if (moved) {
-        const at = { x: drag.origin.x + dx, y: drag.origin.y + dy };
-        setShapes((list) => list.map((s, i) => (i === drag.index && s.kind === "text" ? { ...s, at } : s)));
+        const next = moveShape(drag.origin, dx, dy);
+        // Moving is one undo step, recorded when the drag ends.
+        setHistory((h) => ({ ...h, present: h.present.map((s, i) => (i === drag.index ? next : s)) }));
       }
       if (moved !== drag.moved) setDrag({ ...drag, moved });
     }
     if (drag.kind === "draw") {
       const s = drag.shape;
-      setDrag({ kind: "draw", shape: s.kind === "pen" ? { ...s, points: [...s.points, q] } : s.kind === "text" ? s : { ...s, to: q } });
+      let next: Shape = s;
+      if (s.kind === "pen" || s.kind === "highlight") {
+        // Shift keeps the stroke straight, which suits underlining a line of text.
+        next = { ...s, points: e.shiftKey ? [s.points[0], q] : [...s.points, q] };
+      } else if ("to" in s) {
+        next = { ...s, to: q };
+      }
+      setDrag({ kind: "draw", shape: next });
     }
   }
 
   function onPointerUp() {
     if (!drag || !image) return;
     if (drag.kind === "select" && selection && (selection.w < 4 || selection.h < 4)) {
-      // A click without dragging takes the whole screen.
-      setSelection({ x: 0, y: 0, w: image.naturalWidth, h: image.naturalHeight });
+      // A click without dragging takes the window under the pointer.
+      setSelection(drag.snap ? { ...drag.snap.rect } : null);
     }
-    if (drag.kind === "draw") setShapes((s) => [...s, drag.shape]);
-    if (drag.kind === "moveText" && !drag.moved && tool === "text") {
-      // A click (not a drag) on existing text with the text tool edits it.
-      const s = shapes[drag.index] as TextShape;
-      setShapes((list) => list.filter((_, i) => i !== drag.index));
-      setColor(s.color);
-      setTextAt(s.at);
-      setTextValue(s.text);
-      setTextBg(s.bg);
+    if (drag.kind === "draw") {
+      // A click with a shape tool draws nothing (a pen click still makes a dot).
+      const s = drag.shape;
+      const tiny = "to" in s && Math.hypot(s.to.x - s.from.x, s.to.y - s.from.y) < 3 * scale;
+      if (!tiny) change((list) => [...list, s]);
+    }
+    if (drag.kind === "moveShape") {
+      if (drag.moved) {
+        setHistory((h) => ({ past: [...h.past, drag.before], present: h.present, future: [] }));
+      } else if (tool === "text" && drag.origin.kind === "text") {
+        // A click (not a drag) on existing text with the text tool edits it.
+        const s = drag.origin;
+        editBase.current = shapes;
+        setHistory((h) => ({ ...h, present: h.present.filter((_, i) => i !== drag.index) }));
+        setColor(s.color);
+        setTextAt(s.at);
+        setTextValue(s.text);
+        setTextBg(s.bg);
+      }
     }
     setDrag(null);
   }
 
-  const finish = useCallback(
-    async (action: SnipAction) => {
-      if (!image || !selection || selection.w < 1 || selection.h < 1 || busy) return;
-      const pending: Shape[] =
-        textAt && textValue.trim()
-          ? [...shapes, { kind: "text", color, size: SIZES[sizeIndex].font * scale, at: textAt, text: textValue, bg: textBg }]
-          : shapes;
-      const sel = {
+  /** The selected area with its drawings (or without them, for reading text) as a PNG. */
+  const render = useCallback(
+    (withDrawings: boolean): { png: string; rect: Box } | null => {
+      if (!image || !selection || selection.w < 1 || selection.h < 1) return null;
+      const text = pendingText();
+      const all = text ? [...shapes, text] : shapes;
+      const rect = {
         x: Math.round(selection.x),
         y: Math.round(selection.y),
         w: Math.round(selection.w),
         h: Math.round(selection.h),
       };
       const out = document.createElement("canvas");
-      out.width = sel.w;
-      out.height = sel.h;
+      out.width = rect.w;
+      out.height = rect.h;
       const ctx = out.getContext("2d")!;
-      ctx.drawImage(image, sel.x, sel.y, sel.w, sel.h, 0, 0, sel.w, sel.h);
-      pending.forEach((s) => drawShape(ctx, s, image, block, sel.x, sel.y));
+      ctx.drawImage(image, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
+      if (withDrawings) {
+        const numbers = stepNumbers(all);
+        all.forEach((s, i) => drawShape(ctx, s, image, block, numbers[i], rect.x, rect.y));
+      }
+      return { png: out.toDataURL("image/png"), rect };
+    },
+    [image, selection, shapes, pendingText, block],
+  );
+
+  const finish = useCallback(
+    async (action: SnipAction) => {
+      if (busy) return;
+      const out = render(true);
+      if (!out) return;
       setBusy(true);
       try {
-        await snipFinish(action, out.toDataURL("image/png"));
+        await snipFinish(action, out.png);
       } catch (e) {
         setError(errorMessage(e));
         setBusy(false);
       }
     },
-    [image, selection, shapes, textAt, textValue, color, sizeIndex, scale, block, busy, textBg],
+    [render, busy],
   );
 
-  // Keyboard: Esc closes, Ctrl+Z undoes, Ctrl+C copies, Ctrl+S saves, Enter does both.
+  /** Keeps the picture on screen in its own small window; the overlay closes. */
+  const pin = useCallback(async () => {
+    if (busy) return;
+    const out = render(true);
+    if (!out) return;
+    setBusy(true);
+    try {
+      await snipPin(out.png, out.rect);
+    } catch (e) {
+      setError(errorMessage(e));
+      setBusy(false);
+    }
+  }, [render, busy]);
+
+  /** Reads the text in the area (from the screen itself, not the drawings). */
+  const readText = useCallback(async () => {
+    if (busy) return;
+    const out = render(false);
+    if (!out) return;
+    setError("");
+    setOcr({ busy: true });
+    const run = ++ocrRun.current;
+    try {
+      const result = await snipOcr(out.png);
+      if (run === ocrRun.current) setOcr({ busy: false, result, text: result.text, copied: false });
+    } catch (e) {
+      if (run !== ocrRun.current) return;
+      setOcr(null);
+      setError(errorMessage(e));
+    }
+  }, [render, busy]);
+
+  /** Long pages: the user scrolls the area while it is captured and joined. */
+  const scrollCapture = useCallback(async () => {
+    if (busy || !selection || !context) return;
+    setBusy(true);
+    try {
+      await snipScrollStart({
+        x: Math.round(selection.x),
+        y: Math.round(selection.y),
+        w: Math.round(selection.w),
+        h: Math.round(selection.h),
+      });
+    } catch (e) {
+      setError(errorMessage(e));
+      setBusy(false);
+    }
+  }, [busy, selection, context]);
+
+  const deletePicked = useCallback(() => {
+    if (picked === null) return;
+    change((s) => s.filter((_, i) => i !== picked));
+    setPicked(null);
+  }, [picked, change]);
+  const doUndo = useCallback(() => {
+    setPicked(null);
+    const cleared = clearedArea.current;
+    if (cleared && cleared.depth === history.past.length) {
+      // Undoing "new area cleared the drawings": the old area comes back with them.
+      setSelection(cleared.area);
+      clearedArea.current = null;
+    }
+    setHistory(undo);
+  }, [history]);
+  const doRedo = useCallback(() => {
+    setPicked(null);
+    setHistory(redo);
+  }, []);
+
+  // Keyboard: Esc closes, Ctrl+Z / Ctrl+Y undo and redo, Delete removes the picked drawing,
+  // Ctrl+A takes the whole screen, Ctrl+C copies, Ctrl+S saves, Enter does both, F3 pins.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (textAt) return; // the text box handles its own keys
+      if (ocr) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          ocrRun.current++;
+          setOcr(null);
+        }
+        return; // the text panel is open: its own fields take the keys
+      }
+      const key = e.key.toLowerCase();
       if (e.key === "Escape") {
         e.preventDefault();
-        if (tool) setTool(null);
+        if (picked !== null) setPicked(null);
+        else if (tool) setTool(null);
         else snipCancel();
         return;
       }
-      if (!selection) return;
-      if (e.ctrlKey && e.key.toLowerCase() === "z") {
+      if (e.ctrlKey && key === "a" && image) {
         e.preventDefault();
-        setShapes((s) => s.slice(0, -1));
-      } else if (e.ctrlKey && e.key.toLowerCase() === "c") {
+        setSelection({ x: 0, y: 0, w: image.naturalWidth, h: image.naturalHeight });
+        return;
+      }
+      if (!selection) return;
+      if (e.ctrlKey && (key === "y" || (key === "z" && e.shiftKey))) {
+        e.preventDefault();
+        doRedo();
+      } else if (e.ctrlKey && key === "z") {
+        e.preventDefault();
+        doUndo();
+      } else if ((e.key === "Delete" || e.key === "Backspace") && picked !== null) {
+        e.preventDefault();
+        deletePicked();
+      } else if (e.ctrlKey && key === "c") {
         e.preventDefault();
         finish("copy");
-      } else if (e.ctrlKey && e.key.toLowerCase() === "s") {
+      } else if (e.ctrlKey && key === "s") {
         e.preventDefault();
         finish("save");
       } else if (e.key === "Enter") {
         e.preventDefault();
         finish("both");
+      } else if (e.key === "F3") {
+        e.preventDefault();
+        pin();
       } else if (!e.ctrlKey && !e.altKey && !e.metaKey) {
-        const picked = TOOLS.find((t) => t.key === e.key.toUpperCase());
-        if (picked) setTool((current) => (current === picked.id ? null : picked.id));
+        const found = TOOLS.find((t) => t.key === e.key.toUpperCase());
+        if (found) {
+          setPicked(null);
+          setTool((current) => (current === found.id ? null : found.id));
+        }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [tool, selection, textAt, finish]);
+  }, [tool, selection, textAt, finish, pin, ocr, picked, deletePicked, image, doUndo, doRedo]);
+
+  const nextNumber = useMemo(() => nextStepNumber(shapes), [shapes]);
 
   if (!image) return <div className="snip" />;
 
   // Cursor follows what a press would do at the pointer.
   let cursor = "crosshair";
-  if (hover && selection && !drag) {
+  if (hover && selection && !drag && !choosing) {
     const handle = hitHandle(hover);
     if (handle) cursor = CURSORS[handle];
-    else if ((tool === null || tool === "text") && hitText(hover) >= 0) cursor = "move";
+    else if (pickAt(hover) >= 0) cursor = "move";
     else if (inside(hover, selection)) cursor = tool === "text" ? "text" : tool ? "crosshair" : "move";
   }
 
   const css = (v: number) => v / scale;
   const sel = selection && selection.w >= 4 && selection.h >= 4 && drag?.kind !== "select" ? selection : null;
+  const activeColor = tool === "highlight" ? markerColor : color;
+  const setActiveColor = tool === "highlight" ? setMarkerColor : setColor;
 
   // Place the two panels around the area, flipping sides near the screen edges.
   const GAP = 8;
@@ -590,6 +826,9 @@ export default function SnipOverlay() {
     actionsLeft = clampTo(right - panels.aw, GAP, vw - panels.aw - GAP);
   }
 
+  const toolLabel = (t: (typeof TOOLS)[number]) =>
+    t.id === "step" ? `${t.label} (${t.key}) · số tiếp theo: ${nextNumber}` : `${t.label} (${t.key})`;
+
   return (
     <div className="snip">
       <canvas
@@ -600,12 +839,23 @@ export default function SnipOverlay() {
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerLeave={() => setHover(null)}
-        onDoubleClick={() => !tool && finish("both")}
+        // Double-click on the area (not on a drawing) finishes, like the ✓ button.
+        onDoubleClick={(e) => !tool && pickAt(toImage(e)) < 0 && finish("both")}
       />
 
-      {!sel && <p className="snip-hint">Kéo chuột để chọn vùng chụp · Bấm một lần để chụp cả màn hình · Esc để hủy</p>}
+      {!sel && (
+        <p className="snip-hint">
+          Bấm vào một cửa sổ để chụp đúng khung · Kéo chuột để tự chọn vùng · Ctrl+A: cả màn hình · Esc để hủy
+        </p>
+      )}
 
-      {selection && selection.w > 0 && (
+      {snap && (
+        <span className="snip-size snip-snap-tag" style={{ left: css(snap.rect.x) + 4, top: css(snap.rect.y) + 4 }}>
+          {snap.title} · {snap.rect.w} × {snap.rect.h}
+        </span>
+      )}
+
+      {selection && selection.w > 0 && !choosing && (
         <span className="snip-size" style={{ left: css(selection.x), top: Math.max(4, css(selection.y) - 26) }}>
           {Math.round(selection.w)} × {Math.round(selection.h)}
         </span>
@@ -639,8 +889,7 @@ export default function SnipOverlay() {
               commitText();
             } else if (e.key === "Escape") {
               e.preventDefault();
-              setTextAt(null);
-              setTextValue("");
+              cancelText();
             }
           }}
         />
@@ -660,23 +909,38 @@ export default function SnipOverlay() {
                 <button
                   key={t.id}
                   className={"snip-btn" + (tool === t.id ? " on" : "")}
-                  title={`${t.label} (${t.key})`}
+                  title={toolLabel(t)}
                   aria-label={t.label}
                   aria-pressed={tool === t.id}
-                  onClick={() => setTool(tool === t.id ? null : t.id)}
+                  onClick={() => {
+                    setPicked(null);
+                    setTool(tool === t.id ? null : t.id);
+                  }}
                 >
                   {t.icon}
                 </button>
               ))}
               <span className="snip-hsep" />
+              <button className="snip-btn" title="Hoàn tác (Ctrl+Z)" aria-label="Hoàn tác" disabled={history.past.length === 0} onClick={doUndo}>
+                ↶
+              </button>
               <button
                 className="snip-btn"
-                title="Hoàn tác (Ctrl+Z)"
-                aria-label="Hoàn tác"
-                disabled={shapes.length === 0}
-                onClick={() => setShapes((s) => s.slice(0, -1))}
+                title="Làm lại (Ctrl+Y)"
+                aria-label="Làm lại"
+                disabled={history.future.length === 0}
+                onClick={doRedo}
               >
-                ↶
+                ↷
+              </button>
+              <button
+                className="snip-btn"
+                title={picked === null ? "Xóa nét đang chọn (Delete) · tắt công cụ rồi bấm vào một nét để chọn" : "Xóa nét đang chọn (Delete)"}
+                aria-label="Xóa nét đang chọn"
+                disabled={picked === null}
+                onClick={deletePicked}
+              >
+                ⌫
               </button>
             </div>
             {tool && tool !== "mosaic" && (
@@ -686,30 +950,33 @@ export default function SnipOverlay() {
                     <button
                       key={c}
                       role="radio"
-                      className={"snip-swatch" + (color === c ? " on" : "")}
+                      className={"snip-swatch" + (activeColor === c ? " on" : "")}
                       style={{ background: c }}
                       title={COLOR_NAMES[i]}
                       aria-label={`Màu ${COLOR_NAMES[i]}`}
-                      aria-checked={color === c}
-                      onClick={() => setColor(c)}
+                      aria-checked={activeColor === c}
+                      onClick={() => setActiveColor(c)}
                     />
                   ))}
                 </div>
                 <span className="snip-hsep" />
                 <div className="snip-col" role="radiogroup" aria-label={tool === "text" ? "Cỡ chữ" : "Cỡ nét"}>
-                  {SIZES.map((s, i) => (
-                    <button
-                      key={s.label}
-                      role="radio"
-                      className={"snip-btn snip-size-btn" + (sizeIndex === i ? " on" : "")}
-                      title={tool === "text" ? `Chữ ${s.label.toLowerCase()}` : `Nét ${s.label.toLowerCase()}`}
-                      aria-label={tool === "text" ? `Chữ ${s.label.toLowerCase()}` : `Nét ${s.label.toLowerCase()}`}
-                      aria-checked={sizeIndex === i}
-                      onClick={() => setSizeIndex(i)}
-                    >
-                      <span className="snip-dot" style={{ width: 4 + s.stroke * 1.5, height: 4 + s.stroke * 1.5, background: color }} />
-                    </button>
-                  ))}
+                  {SIZES.map((s, i) => {
+                    const name = `${tool === "text" ? "Chữ" : tool === "step" ? "Số" : "Nét"} ${s.label.toLowerCase()}`;
+                    return (
+                      <button
+                        key={s.label}
+                        role="radio"
+                        className={"snip-btn snip-size-btn" + (sizeIndex === i ? " on" : "")}
+                        title={name}
+                        aria-label={name}
+                        aria-checked={sizeIndex === i}
+                        onClick={() => setSizeIndex(i)}
+                      >
+                        <span className="snip-dot" style={{ width: 4 + s.stroke * 1.5, height: 4 + s.stroke * 1.5, background: activeColor }} />
+                      </button>
+                    );
+                  })}
                 </div>
                 {tool === "text" && (
                   <>
@@ -751,6 +1018,21 @@ export default function SnipOverlay() {
               <button className="snip-btn" title="Hủy (Esc)" aria-label="Hủy" onClick={() => snipCancel()}>
                 ✕
               </button>
+              <button
+                className="snip-btn snip-wide"
+                title="Chụp trang dài: cuộn trang trong vùng này, HP Screen ghép lại thành một ảnh"
+                disabled={busy}
+                onClick={scrollCapture}
+              >
+                ⇕ Chụp cuộn
+              </button>
+              <button className="snip-btn snip-wide" title="Nhận chữ trong vùng chọn (OCR)" disabled={busy || ocr?.busy} onClick={readText}>
+                {ocr?.busy ? "Đang đọc…" : "Nhận chữ"}
+              </button>
+              <button className="snip-btn snip-wide" title="Ghim ảnh nổi trên màn hình (F3)" disabled={busy} onClick={pin}>
+                📌 Ghim
+              </button>
+              <span className="snip-sep" />
               <button className="snip-btn snip-wide" title="Lưu vào máy (Ctrl+S)" disabled={busy} onClick={() => finish("save")}>
                 Lưu
               </button>
@@ -764,6 +1046,41 @@ export default function SnipOverlay() {
             {error && <p className="snip-error" role="alert">{error}</p>}
           </div>
         </>
+      )}
+
+      {ocr && !ocr.busy && (
+        <div className="snip-ocr" role="dialog" aria-label="Chữ nhận được" onPointerDown={(e) => e.stopPropagation()}>
+          <div className="snip-ocr-head">
+            <strong>Chữ nhận được</strong>
+            <span className="snip-label">Đọc bằng {ocr.result.language}</span>
+          </div>
+          {ocr.result.note && <p className="snip-ocr-note">{ocr.result.note}</p>}
+          <textarea
+            className="snip-ocr-text"
+            autoFocus
+            spellCheck={false}
+            aria-label="Chữ nhận được, có thể sửa"
+            placeholder="Không tìm thấy chữ nào trong vùng này."
+            value={ocr.text}
+            onChange={(e) => setOcr({ ...ocr, text: e.target.value, copied: false })}
+          />
+          <div className="snip-row snip-ocr-actions">
+            <button className="snip-btn snip-wide" onClick={() => setOcr(null)}>
+              Đóng
+            </button>
+            <button
+              className="snip-btn snip-wide snip-done"
+              disabled={!ocr.text.trim()}
+              onClick={() =>
+                copyText(ocr.text)
+                  .then(() => setOcr({ ...ocr, copied: true }))
+                  .catch((e) => setError(errorMessage(e)))
+              }
+            >
+              {ocr.copied ? "✓ Đã sao chép" : "Sao chép chữ"}
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

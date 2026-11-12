@@ -28,6 +28,9 @@ mod ui_probe;
 mod cursor_shape;
 #[cfg(test)]
 mod test_media;
+mod pin;
+mod ocr;
+mod scroll;
 
 use commands::AppState;
 use hotkeys::HotkeyRegistry;
@@ -118,6 +121,16 @@ pub fn run() {
             live_cmds::cam_list,
             live_cmds::cam_set,
             live_cmds::cam_on,
+            commands::snip_pin,
+            commands::snip_ocr,
+            commands::copy_text,
+            commands::pin_image,
+            commands::pin_copy,
+            commands::pin_close,
+            commands::pin_ready,
+            commands::snip_scroll_start,
+            commands::snip_scroll_stop,
+            commands::scroll_close,
         ])
         .run(tauri::generate_context!())
         .expect("error while running HP Screen");

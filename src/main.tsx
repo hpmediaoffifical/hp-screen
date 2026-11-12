@@ -8,12 +8,17 @@ import SnipOverlay from "./windows/SnipOverlay";
 import DrawOverlay from "./windows/DrawOverlay";
 import CamBubble from "./windows/CamBubble";
 import RegionBorder from "./windows/RegionBorder";
+import PinWindow from "./windows/PinWindow";
+import { ScrollBar, ScrollFrame } from "./windows/ScrollCapture";
 import "./theme.css";
 
 // Every window loads the same page; the window label decides what it shows.
 const label = getCurrentWindow().label;
 document.documentElement.dataset.window = label;
+const snipExtra =
+  label.startsWith("pin-") ? <PinWindow /> : label === "scroll-bar" ? <ScrollBar /> : label === "scroll-frame" ? <ScrollFrame /> : null;
 const root =
-  label === "draw" ? <DrawOverlay /> : label === "cam" ? <CamBubble /> : label === "region-border" ? <RegionBorder /> : label === "control-bar" ? <ControlBar /> : label === "picker" ? <PickerOverlay /> : label === "snip" ? <SnipOverlay /> : <App />;
+  snipExtra ??
+  (label === "draw" ? <DrawOverlay /> : label === "cam" ? <CamBubble /> : label === "region-border" ? <RegionBorder /> : label === "control-bar" ? <ControlBar /> : label === "picker" ? <PickerOverlay /> : label === "snip" ? <SnipOverlay /> : <App />);
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(<React.StrictMode>{root}</React.StrictMode>);

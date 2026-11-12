@@ -20,3 +20,4 @@ pub mod zoom;
 pub mod layout;
 pub mod subtitle;
 pub mod cursor;
+pub mod snip;

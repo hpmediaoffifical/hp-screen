@@ -1,5 +1,8 @@
 {
   "name": "hp-screen",
+  "author": "Nguyễn Hoàng Phụng (HP Media)",
+  "license": "MIT",
+  "repository": "https://github.com/hpmediaoffifical/hp-screen",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -7,7 +10,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "node --test --test-reporter=spec src/**/*.test.ts",
+    "test": "node --test --test-reporter=spec src/**/*.test.ts tests/*.test.ts",
     "tauri": "tauri"
   },
   "dependencies": {

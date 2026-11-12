@@ -281,3 +281,61 @@ pub fn snip_frozen(app: AppHandle) -> Result<tauri::ipc::Response, String> {
     let bytes = std::fs::read(&ctx.frozen).map_err(|e| format!("Không đọc được ảnh màn hình: {e}"))?;
     Ok(tauri::ipc::Response::new(bytes))
 }
+
+/// Pins the annotated picture on screen where its area was, then closes the overlay.
+#[tauri::command]
+pub async fn snip_pin(app: AppHandle, png: String, rect: hp_core::geometry::Rect) -> Result<(), String> {
+    crate::pin::open(&app, &png, rect)
+}
+
+/// Reads the text in a picture (Windows OCR, offline).
+#[tauri::command]
+pub async fn snip_ocr(png: String) -> Result<crate::ocr::OcrOutcome, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::ocr::recognize(&crate::snip::decode_png(&png)?))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn copy_text(text: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::ocr::copy_text(&text)).await.map_err(|e| e.to_string())?
+}
+
+/// The calling pin window's picture (PNG bytes).
+#[tauri::command]
+pub fn pin_image(window: tauri::WebviewWindow) -> Result<tauri::ipc::Response, String> {
+    Ok(tauri::ipc::Response::new(crate::pin::image(&window)?))
+}
+
+#[tauri::command]
+pub async fn pin_copy(window: tauri::WebviewWindow) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::pin::copy(&window)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn pin_close(window: tauri::WebviewWindow) {
+    crate::pin::close(&window);
+}
+
+#[tauri::command]
+pub fn pin_ready(window: tauri::WebviewWindow) {
+    crate::pin::ready(&window);
+}
+
+/// Starts a scrolling capture of `rect` (the overlay's selection, physical pixels).
+#[tauri::command]
+pub async fn snip_scroll_start(app: AppHandle, rect: hp_core::geometry::Rect) -> Result<(), String> {
+    crate::scroll::start(&app, rect)
+}
+
+/// Ends the scrolling capture; with `keep`, saves and copies it and returns (path, width, height).
+#[tauri::command]
+pub async fn snip_scroll_stop(app: AppHandle, keep: bool) -> Result<Option<(String, u32, u32)>, String> {
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::scroll::stop(&handle, keep)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn scroll_close(app: AppHandle) {
+    crate::scroll::close_bar(&app);
+}
