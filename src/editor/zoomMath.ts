@@ -142,10 +142,48 @@ export function addSegmentAt(segments: ZoomSegment[], ms: number, durationMs: nu
   return { segments: out, index: out.indexOf(seg) };
 }
 
-/** The frame shown for editing at `ms`: the active keyframe or start frame; `camera` places a cursor-following one. */
+/**
+ * Where the camera aims in `seg` at `ms`, like hp-core zoom::target_at: the start frame and the
+ * keyframes, eased between them (smoothstep, zoom in log space), held after the last. Null when
+ * the segment follows the cursor.
+ */
+export function targetAt(seg: ZoomSegment, ms: number): Camera | null {
+  const first = seg.center ?? (seg.keys[0] ? [seg.keys[0].cx, seg.keys[0].cy] : null);
+  if (!first) return null;
+  let prev = { t: seg.start_ms, cam: { cx: first[0], cy: first[1], scale: seg.scale } };
+  for (const k of seg.keys) {
+    const next = { t: k.t_ms, cam: { cx: k.cx, cy: k.cy, scale: k.scale } };
+    if (ms < k.t_ms) {
+      if (seg.speed === "instant") return prev.cam;
+      const x = Math.min(1, Math.max(0, (ms - prev.t) / Math.max(1, next.t - prev.t)));
+      const u = x * x * (3 - 2 * x);
+      const ln = (v: number) => Math.log(Math.max(MIN_SCALE, v));
+      const a = prev.cam;
+      const b = next.cam;
+      return { cx: a.cx + (b.cx - a.cx) * u, cy: a.cy + (b.cy - a.cy) * u, scale: Math.exp(ln(a.scale) + (ln(b.scale) - ln(a.scale)) * u) };
+    }
+    prev = next;
+  }
+  return prev.cam;
+}
+
+/** A frame change this close (ms) to the start or to a keyframe edits that one instead of adding a keyframe. */
+export const KEY_SNAP_MS = 150;
+
+/**
+ * `seg` with the frame at `ms` set to `cam`, the way keyframes work in CapCut: near the start it
+ * is the start frame, near a keyframe it is that keyframe, anywhere else a new keyframe is made.
+ */
+export function editFrameAt(seg: ZoomSegment, ms: number, cam: Camera): ZoomSegment {
+  if (ms - seg.start_ms <= KEY_SNAP_MS) return { ...seg, center: [cam.cx, cam.cy], scale: cam.scale, manual: true };
+  const i = seg.keys.findIndex((k) => Math.abs(k.t_ms - ms) <= KEY_SNAP_MS);
+  if (i >= 0) return { ...seg, keys: seg.keys.map((k, j) => (j === i ? keyOf(k.t_ms, cam) : k)), manual: true };
+  return addKey(seg, ms, cam) ?? setActiveFrame(seg, ms, cam);
+}
+
+/** The frame shown for editing at `ms`: where the export aims then; `camera` places a cursor-following one. */
 export function frameAt(seg: ZoomSegment, ms: number, camera: Camera): Camera {
-  const i = activeKey(seg, ms);
-  const raw = i >= 0 ? seg.keys[i] : seg.center ? { cx: seg.center[0], cy: seg.center[1], scale: seg.scale } : { cx: camera.cx, cy: camera.cy, scale: seg.scale };
+  const raw = targetAt(seg, ms) ?? { cx: camera.cx, cy: camera.cy, scale: seg.scale };
   // Kept inside the picture exactly as the core keeps the camera (zoom::camera_track).
   const s = Math.min(MAX_SCALE, Math.max(MIN_SCALE, raw.scale));
   const half = 0.5 / s;
@@ -155,8 +193,8 @@ export function frameAt(seg: ZoomSegment, ms: number, camera: Camera): Camera {
 
 /** The scale slider: changes only the zoom of the active frame (a cursor-following start frame keeps following). */
 export function setActiveScale(seg: ZoomSegment, ms: number, scale: number, camera: Camera): ZoomSegment {
-  if (activeKey(seg, ms) < 0 && !seg.center) return { ...seg, scale, manual: true };
-  return setActiveFrame(seg, ms, { ...frameAt(seg, ms, camera), scale });
+  if (!seg.center && seg.keys.length === 0) return { ...seg, scale, manual: true };
+  return editFrameAt(seg, ms, { ...frameAt(seg, ms, camera), scale });
 }
 
 /**

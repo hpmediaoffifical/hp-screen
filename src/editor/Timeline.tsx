@@ -15,7 +15,10 @@ interface Props {
   onRestoreCut: (index: number) => void;
 }
 
-type Drag = { kind: "start" | "end"; moved: boolean } | { kind: "select"; from: number; moved: boolean };
+type Drag = { kind: "start" | "end"; moved: boolean } | { kind: "select"; from: number; moved: boolean } | { kind: "scrub" };
+
+/** A press this close to the playhead drags the playhead instead of selecting. */
+const HEAD_GRAB_PX = 8;
 
 /** Shortest selection made by dragging; anything less is a click that seeks. */
 const MIN_DRAG_MS = 100;
@@ -42,6 +45,14 @@ export default function Timeline(props: Props) {
     e.stopPropagation();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     setOpenCut(null);
+    if (kind === "track") {
+      const r = track.current?.getBoundingClientRect();
+      const headX = r ? r.left + (Math.min(Math.max(props.playhead, 0), d) / d) * r.width : -1e9;
+      if (Math.abs(e.clientX - headX) <= HEAD_GRAB_PX) {
+        drag.current = { kind: "scrub" };
+        return;
+      }
+    }
     drag.current = kind === "track" ? { kind: "select", from: msAt(e.clientX), moved: false } : { kind, moved: false };
   };
 
@@ -49,6 +60,10 @@ export default function Timeline(props: Props) {
     const g = drag.current;
     if (!g) return;
     const ms = msAt(e.clientX);
+    if (g.kind === "scrub") {
+      props.onSeek(ms);
+      return;
+    }
     if (g.kind === "start" || g.kind === "end") {
       const first = !g.moved;
       g.moved = true;
@@ -138,7 +153,19 @@ export default function Timeline(props: Props) {
           onPointerMove={onMove}
           onPointerUp={onUp}
         />
-        <div className="track-head" style={{ left: pct(props.playhead) }} />
+        <div className="track-head" style={{ left: pct(props.playhead) }}>
+          <span
+            className="track-knob"
+            title="Kéo để tua"
+            onPointerDown={(e) => {
+              if (e.button !== 0) return;
+              e.stopPropagation();
+              track.current?.setPointerCapture(e.pointerId);
+              setOpenCut(null);
+              drag.current = { kind: "scrub" };
+            }}
+          />
+        </div>
       </div>
     </div>
   );

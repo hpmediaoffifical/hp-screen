@@ -26,7 +26,7 @@ import Preview, { type PreviewHandle } from "../editor/Preview";
 import Timeline from "../editor/Timeline";
 import { cursorAt, drawEffects } from "../editor/drawEffects";
 import ZoomTrack from "../editor/ZoomTrack";
-import { addKey, addSegmentAt, cameraAt, frameAt, setActiveFrame, setActiveScale, WHOLE } from "../editor/zoomMath";
+import { addKey, addSegmentAt, cameraAt, editFrameAt, frameAt, setActiveScale, WHOLE } from "../editor/zoomMath";
 
 type Tab = "cut" | "effects" | "zoom" | "frame" | "subs" | "export";
 const TABS: { id: Tab; label: string }[] = [
@@ -410,7 +410,7 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
           camera={doc.zoom.enabled && track.length > 0 && !frameEditing ? (ms) => cameraAt(track, ms) : undefined}
           frameEdit={
             frameEditing && selSeg && zoomSel !== null
-              ? { camera: frameAt(selSeg, playhead, cameraNow()), onChange: (cam, first) => updateSeg(zoomSel, (s) => setActiveFrame(s, playhead, cam), !first) }
+              ? { camera: frameAt(selSeg, playhead, cameraNow()), onChange: (cam, first) => updateSeg(zoomSel, (s) => editFrameAt(s, playhead, cam), !first) }
               : undefined
           }
         />
@@ -658,7 +658,11 @@ function ZoomControls(props: {
   const following = !seg.center && seg.keys.length === 0;
   return (
     <div className="zoom-controls">
-      <p className="hint">{props.playing ? "Dừng video để kéo khung zoom." : "Kéo khung trên video để dời, kéo góc để phóng to hay nhỏ."}</p>
+      <p className="hint">
+        {props.playing
+          ? "Dừng video để kéo khung zoom."
+          : "Kéo khung trên video để dời, kéo góc để phóng to hay nhỏ. Tua tới lúc khác trong đoạn rồi chỉnh khung: một điểm ◆ được ghi ở đó và camera lia theo."}
+      </p>
       <label className="zoom-scale">
         Mức phóng: <strong>{frame.scale.toFixed(1)}×</strong>
         <input type="range" min={1} max={4} step={0.1} value={frame.scale} onChange={(e) => props.onScale(Number(e.target.value))} />

@@ -116,10 +116,12 @@ test("zAtTheEndAddsNothing", () => {
 
 import { frameAt } from "./zoomMath.ts";
 
-test("the frame shown for editing is the active frame itself", () => {
+test("the frame shown for editing is where the export aims at that moment", () => {
   const s = seg({ center: [0.3, 0.3], scale: 2, keys: [{ t_ms: 3000, cx: 0.8, cy: 0.7, scale: 3 }] });
-  assert.deepEqual(frameAt(s, 2000, c(0.5, 0.5, 1)), c(0.3, 0.3, 2), "main frame, not the eased camera");
+  const mid = frameAt(s, 2000, c(0.5, 0.5, 1));
+  assert.ok(near(mid.cx, 0.55) && near(mid.cy, 0.5) && near(mid.scale, Math.sqrt(6)), `eased like hp-core target_at: ${JSON.stringify(mid)}`);
   assert.deepEqual(frameAt(s, 3500, c(0.5, 0.5, 1)), c(0.8, 0.7, 3));
+  assert.deepEqual(frameAt({ ...s, speed: "instant" }, 2000, c(0.5, 0.5, 1)), c(0.3, 0.3, 2), "instant: no easing");
   assert.deepEqual(frameAt(seg({ center: null, scale: 2.5 }), 2000, c(0.6, 0.4, 2.2)), c(0.6, 0.4, 2.5), "cursor-following: where the camera is, at the segment's zoom");
 });
 
@@ -133,7 +135,7 @@ test("the editing frame is kept inside the picture like the export camera", () =
 test("the scale slider keeps a cursor-following segment following", () => {
   const follow = setActiveScale(seg({ center: null, scale: 1.5 }), 2000, 2.5, c(0.7, 0.3, 1.5));
   assert.deepEqual([follow.center, follow.scale], [null, 2.5]);
-  const fixed = setActiveScale(seg({ center: [0.4, 0.4], keys: [{ t_ms: 3000, cx: 0.6, cy: 0.6, scale: 2 }] }), 3500, 3, c(0.5, 0.5, 1));
+  const fixed = setActiveScale(seg({ center: [0.4, 0.4], keys: [{ t_ms: 3000, cx: 0.6, cy: 0.6, scale: 2 }] }), 3050, 3, c(0.5, 0.5, 1));
   assert.deepEqual(fixed.keys[0], { t_ms: 3000, cx: 0.6, cy: 0.6, scale: 3 }, "a keyframe keeps its centre");
 });
 
@@ -162,4 +164,21 @@ test("a narrow segment on the zoom track is moved, not resized", () => {
   assert.equal(grabKind(3, 200), "start");
   assert.equal(grabKind(100, 200), "move");
   assert.equal(grabKind(196, 200), "end");
+});
+
+import { editFrameAt } from "./zoomMath.ts";
+
+test("dragging the frame records a point where the playhead is", () => {
+  const s = seg({ center: [0.3, 0.3], scale: 2 });
+  const atStart = editFrameAt(s, 1050, c(0.4, 0.4, 2));
+  assert.deepEqual([atStart.center, atStart.keys.length], [[0.4, 0.4], 0], "near the start: the start frame");
+  const later = editFrameAt(s, 3000, c(0.7, 0.6, 2.5));
+  assert.deepEqual(later.keys, [{ t_ms: 3000, cx: 0.7, cy: 0.6, scale: 2.5 }], "a new point at 3 s");
+  assert.deepEqual(later.center, [0.3, 0.3], "the start frame stays");
+  const again = editFrameAt(later, 3080, c(0.75, 0.6, 2.5));
+  assert.deepEqual(again.keys, [{ t_ms: 3000, cx: 0.75, cy: 0.6, scale: 2.5 }], "close to a point: that point moves");
+  assert.ok(again.manual);
+  const follow = editFrameAt(seg({ center: null }), 3000, c(0.6, 0.6, 2));
+  assert.equal(follow.keys.length, 1);
+  assert.ok(follow.center !== null, "a cursor-following segment gets a fixed start");
 });
