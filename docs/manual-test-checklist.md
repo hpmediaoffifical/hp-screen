@@ -162,13 +162,13 @@ Cột "Máy" ghi những gì kiểm thử tự động đã phủ (video mẫu d
 | Z14 | Bấm Z tại một chỗ: thêm đoạn 3 giây ở vị trí con trỏ chuột lúc đó và được chọn ngay; gần cuối video thì báo không đủ chỗ | Đạt (`zAtTheEndAddsNothing`) | |
 | Z15 | Tự động Ít / Vừa / Nhiều: số đoạn ít dần ở mức Ít; không còn zoom vào thanh tác vụ khi quay toàn màn hình; "Xóa các đoạn tự động" giữ đoạn vàng | Đạt (`low_level_needs_more_than_a_lone_click`, `edge_clicks_are_ignored_when_guarded`) | |
 | Z16 | Quay mới: click vào ô rồi gõ chữ một lúc: zoom giữ trong lúc gõ và trở ra khoảng 1 giây sau; rê chuột đi xa thì trở ra sớm | Đạt (`typing_keeps_the_zoom`, `leaving_the_view_ends_early`, `plain_keys_leave_a_type_mark_without_the_key`) | |
-| Z17 | Bật zoom: rãnh Zoom trống, không tự phủ cả video. Kéo nút "+ Zoom tay" xuống rãnh ở giây bất kỳ: có đoạn vàng 3 giây ở đó với khung để chỉnh | Đạt trên trang thử | |
-| Z18 | Kéo nút "+ Tự zoom theo click" xuống rãnh: có vùng nét đứt "Tự động" 10 giây, bên trong tự có các đoạn xanh theo click; ngoài vùng giữ toàn màn hình | Đạt (`auto_zoom_only_inside_regions`, `automatic_segments_stay_inside_their_region`) | |
-| Z19 | Kéo dời / kéo mép vùng tự động: đoạn xanh tính lại; chọn vùng rồi Delete: vùng và đoạn xanh biến mất, đoạn vàng giữ nguyên | Đạt trên trang thử | |
-| Z20 | Quay mới: bấm vài nút nhỏ (ví dụ nút Lưu, mục menu). Trong vùng "Tự zoom theo click", khung zoom ôm vừa nút được bấm (nút nhỏ phóng tới 2,5×), không còn luôn 2× quanh chuột | Đạt (`the_zoom_fits_the_clicked_element`) | |
-| Z21 | Bấm vào một hộp thoại lớn: zoom vừa cả hộp thoại, không phóng sát vào một góc | Đạt (`the_zoom_fits_the_clicked_element`) | |
-| Z22 | Quay mới: rê chuột ra chỗ khác rồi gõ chữ vào một ô: zoom tới đúng ô đang gõ | Đạt (`typing_zooms_on_the_field_being_typed_in`) | |
-| Z23 | Quay mới: chuyển sang cửa sổ khác (Alt+Tab hoặc bấm thanh tác vụ) giữa hai lần thao tác: camera lùi ra toàn cảnh rồi mới zoom vào chỗ mới | Đạt (`a_window_switch_zooms_out_between_groups`, `window_switches_are_logged_relative_to_the_capture_with_no_title`) | |
+| Z17 | Bật zoom: rãnh Zoom trống, không tự phủ cả video. Kéo nút "+ Zoom tay" xuống rãnh ở giây bất kỳ: có đoạn vàng 3 giây ở đó với khung để chỉnh | Đạt trên trang thử || Đạt (người dùng xác nhận 2026-11-12) |
+| Z18 | Kéo nút "+ Tự zoom theo click" xuống rãnh: có vùng nét đứt "Tự động" 10 giây, bên trong tự có các đoạn xanh theo click; ngoài vùng giữ toàn màn hình | Đạt (`auto_zoom_only_inside_regions`, `automatic_segments_stay_inside_their_region`) || Đạt (người dùng xác nhận 2026-11-12) |
+| Z19 | Kéo dời / kéo mép vùng tự động: đoạn xanh tính lại; chọn vùng rồi Delete: vùng và đoạn xanh biến mất, đoạn vàng giữ nguyên | Đạt trên trang thử || Đạt (người dùng xác nhận 2026-11-12) |
+| Z20 | Quay mới: bấm vài nút nhỏ (ví dụ nút Lưu, mục menu). Trong vùng "Tự zoom theo click", khung zoom ôm vừa nút được bấm (nút nhỏ phóng tới 2,5×), không còn luôn 2× quanh chuột | Đạt (`the_zoom_fits_the_clicked_element`) || Đạt (người dùng xác nhận 2026-11-12) |
+| Z21 | Bấm vào một hộp thoại lớn: zoom vừa cả hộp thoại, không phóng sát vào một góc | Đạt (`the_zoom_fits_the_clicked_element`) || Đạt (người dùng xác nhận 2026-11-12) |
+| Z22 | Quay mới: rê chuột ra chỗ khác rồi gõ chữ vào một ô: zoom tới đúng ô đang gõ | Đạt (`typing_zooms_on_the_field_being_typed_in`) || Đạt (người dùng xác nhận 2026-11-12) |
+| Z23 | Quay mới: chuyển sang cửa sổ khác (Alt+Tab hoặc bấm thanh tác vụ) giữa hai lần thao tác: camera lùi ra toàn cảnh rồi mới zoom vào chỗ mới | Đạt (`a_window_switch_zooms_out_between_groups`, `window_switches_are_logged_relative_to_the_capture_with_no_title`) || Đạt (người dùng xác nhận 2026-11-12) |
 
 ## Khung hình và GIF (giai đoạn 2, bước 6)
 
