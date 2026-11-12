@@ -1,0 +1,70 @@
+# Builds the Windows installer, signs it for the in-app updater and publishes a GitHub Release
+# with latest.json whenever a version tag (v0.2.0, v1.0.0, ...) is pushed.
+#
+# Needs the repository secrets TAURI_SIGNING_PRIVATE_KEY (contents of the private key file
+# made by `pnpm tauri signer generate`) and TAURI_SIGNING_PRIVATE_KEY_PASSWORD.
+# Every action is pinned to a commit because this job holds the signing key.
+name: Phát hành
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Tag phải khớp phiên bản trong tauri.conf.json
+        shell: pwsh
+        run: |
+          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            Write-Error "Tag ${{ github.ref_name }} khác phiên bản v$version trong src-tauri/tauri.conf.json"
+            exit 1
+          }
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 10
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Kiểm thử
+        run: |
+          cargo test -p hp-core
+          pnpm tsc --noEmit
+
+      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: HP Screen ${{ github.ref_name }}
+          releaseBody: Tải file kết thúc bằng _x64-setup.exe bên dưới để cài. Ai đã cài HP Screen sẽ được ứng dụng tự báo có bản mới.
+          releaseDraft: false
+          prerelease: false
+          # latest.json is what the app reads from releases/latest/download/latest.json.
+          includeUpdaterJson: true
+          args: --config src-tauri/tauri.release.conf.json

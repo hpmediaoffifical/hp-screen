@@ -45,6 +45,8 @@ pub struct Settings {
     pub webcam: crate::webcam::WebcamSettings,
     /// Record without the Windows cursor and draw a smooth one when editing (needs the input log).
     pub smooth_cursor: bool,
+    /// Look for a new release on start and every few hours, and offer to install it.
+    pub auto_update: bool,
 }
 
 impl Default for Settings {
@@ -69,6 +71,7 @@ impl Default for Settings {
             draw_fade_secs: 3,
             webcam: crate::webcam::WebcamSettings::default(),
             smooth_cursor: false,
+            auto_update: true,
         }
     }
 }
@@ -259,5 +262,32 @@ mod quickshot_tests {
             }
         }
         assert_eq!(load_settings(r#"{"hotkey_quickshot":"bad"}"#).hotkey_quickshot, "Ctrl+Alt+A");
+    }
+}
+
+#[cfg(test)]
+mod auto_update_tests {
+    use super::*;
+
+    #[test]
+    fn auto_update_is_on_by_default_and_for_files_written_before_it_existed() {
+        assert!(Settings::default().auto_update);
+        assert!(load_settings(r#"{"fps":60,"mic":false}"#).auto_update);
+        assert!(load_settings("{{ hỏng").auto_update);
+    }
+
+    #[test]
+    fn turning_auto_update_off_is_kept() {
+        let s = load_settings(r#"{"auto_update":false}"#);
+        assert!(!s.auto_update);
+        assert!(!normalize(s.clone()).auto_update);
+        assert_eq!(load_settings(&serde_json::to_string(&s).unwrap()), s);
+    }
+
+    #[test]
+    fn a_wrongly_typed_auto_update_falls_back_to_on_without_losing_other_fields() {
+        let s = load_settings(r#"{"auto_update":"có","countdown_secs":5}"#);
+        assert!(s.auto_update);
+        assert_eq!(s.countdown_secs, 5);
     }
 }
