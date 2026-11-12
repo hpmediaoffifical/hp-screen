@@ -156,6 +156,10 @@ pub const BOX_MAX_SCALE: f32 = 2.5;
 pub const BURST_GAP_MS: i64 = 1500;
 /// After a window switch the camera stays out this long.
 pub const SWITCH_GAP_MS: i64 = 700;
+/// A window switch this soon after a click is that click bringing the window forward.
+pub const ACTIVATION_MS: i64 = 300;
+/// A burst needs this many typing marks: a single key (Enter, Esc, Tab) is not typing.
+pub const BURST_MIN_MARKS: usize = 2;
 
 fn usable_box(b: &[f32; 4]) -> bool {
     b[2] > 0.0 && b[3] > 0.0 && b[2] <= BOX_MAX && b[3] <= BOX_MAX && !(b[2] < BOX_MIN && b[3] < BOX_MIN)
@@ -265,9 +269,18 @@ pub fn auto_segments(input: &AutoInput, level: Level, duration_ms: i64) -> Vec<Z
     let at_edge = |x: f32, y: f32| x <= EDGE_GUARD || y <= EDGE_GUARD || x >= 1.0 - EDGE_GUARD || y >= 1.0 - EDGE_GUARD;
     let mut typing = input.typing.to_vec();
     typing.sort_unstable();
-    let mut switches = input.switches.to_vec();
+    // Window switches as (time, camera stays out after it). A switch right after a click is the
+    // click bringing a window forward: it counts as before that click, so the click keeps its zoom.
+    let mut switches: Vec<(i64, bool)> = input
+        .switches
+        .iter()
+        .map(|&s| match input.clicks.iter().filter(|c| c.0 <= s && s - c.0 <= ACTIVATION_MS).max_by_key(|c| c.0) {
+            Some(c) => (c.0 - LEAD_MS, false),
+            None => (s, true),
+        })
+        .collect();
     switches.sort_unstable();
-    let switch_between = |a: i64, b: i64| switches.iter().any(|&s| a < s && s <= b);
+    let switch_between = |a: i64, b: i64| switches.iter().any(|&(s, _)| a < s && s <= b);
     // Each click with the box of the element it hit, when one was logged right after it.
     let box_for = |c: &(i64, f32, f32)| {
         input
@@ -285,20 +298,20 @@ pub fn auto_segments(input: &AutoInput, level: Level, duration_ms: i64) -> Vec<Z
         .map(|c| (c, box_for(&c)))
         .collect();
     // Each burst of typing into a known field counts as a click on that field.
-    let mut burst: Option<(i64, i64)> = None;
-    let mut bursts: Vec<(i64, i64)> = Vec::new();
+    let mut burst: Option<(i64, i64, usize)> = None;
+    let mut bursts: Vec<(i64, i64, usize)> = Vec::new();
     for &t in &typing {
         burst = match burst {
-            Some((a, b)) if t - b < BURST_GAP_MS => Some((a, t)),
+            Some((a, b, n)) if t - b < BURST_GAP_MS => Some((a, t, n + 1)),
             Some(done) => {
                 bursts.push(done);
-                Some((t, t))
+                Some((t, t, 1))
             }
-            None => Some((t, t)),
+            None => Some((t, t, 1)),
         };
     }
     bursts.extend(burst);
-    for (a, b) in bursts {
+    for (a, b, _) in bursts.into_iter().filter(|b| b.2 >= BURST_MIN_MARKS) {
         let field = input.focus.iter().filter(|(t, f)| *t >= a - BOX_WINDOW_MS && *t <= b + BOX_WINDOW_MS && usable_box(f)).min_by_key(|(t, _)| *t);
         if let Some((_, f)) = field {
             clicks.push(((a, f[0] + f[2] / 2.0, f[1] + f[3] / 2.0), Some(*f)));
@@ -391,11 +404,11 @@ pub fn auto_segments(input: &AutoInput, level: Level, duration_ms: i64) -> Vec<Z
             // Around a window switch the camera is out: ends at the switch, starts a moment after.
             let (first, last) = (span[0].first(), span[span.len() - 1].last());
             let mut start = span[0].start;
-            if let Some(&s) = switches.iter().rev().find(|&&s| s <= first) {
-                start = start.max(s + SWITCH_GAP_MS);
+            if let Some(&(s, gap)) = switches.iter().rev().find(|&&(s, _)| s <= first) {
+                start = start.max(if gap { s + SWITCH_GAP_MS } else { s });
             }
             let mut end = span.iter().map(|g| g.end).max().unwrap_or(start).min(duration_ms);
-            if let Some(&s) = switches.iter().find(|&&s| s > last) {
+            if let Some(&(s, _)) = switches.iter().find(|&&(s, _)| s > last) {
                 end = end.min(s);
             }
             if end - start < MIN_SEGMENT_MS {
@@ -1130,5 +1143,25 @@ mod tests {
         assert!(s[0].end_ms <= 1500, "ends at the switch: {:?}", s[0]);
         assert!(s[1].start_ms >= 2200, "starts 700 ms after it: {:?}", s[1]);
         assert_eq!(ui(&[(500, 0.3, 0.3), (2000, 0.32, 0.3)], &[], &[], &[], &[]).len(), 1, "without the switch: one zoom");
+    }
+
+    #[test]
+    fn a_click_that_brings_a_window_forward_still_zooms() {
+        // Windows reports the switch a few ms after the click that caused it.
+        let s = ui(&[(5000, 0.5, 0.5)], &[], &[], &[], &[5015]);
+        assert_eq!(s.len(), 1, "{s:?}");
+        assert!(s[0].start_ms <= 4600 && s[0].end_ms >= 6000, "{:?}", s[0]);
+        // The zoom before it still ends at the switch.
+        let s = ui(&[(1000, 0.5, 0.5), (2500, 0.52, 0.5)], &[], &[], &[], &[2510]);
+        assert_eq!(s.len(), 2, "{s:?}");
+        assert!(s[0].end_ms <= 2100, "{:?}", s[0]);
+    }
+
+    #[test]
+    fn a_single_key_press_is_not_typing() {
+        let s = ui(&[], &[5000], &[], &[(5000, [0.4, 0.4, 0.1, 0.05])], &[]);
+        assert!(s.is_empty(), "Enter on a dialog makes no zoom: {s:?}");
+        let s = ui(&[], &[5000, 5300], &[], &[(5000, [0.4, 0.4, 0.1, 0.05])], &[]);
+        assert_eq!(s.len(), 1);
     }
 }

@@ -9,10 +9,15 @@ use std::time::{Duration, Instant};
 /// What to look up, stamped with video time.
 pub enum Ask {
     /// The element under this screen point (a left click).
-    Point { t: i64, x: i32, y: i32 },
+    Point { t: i64, x: i32, y: i32, asked: Instant },
     /// The element receiving keys (typing).
-    Focus { t: i64 },
+    Focus { t: i64, asked: Instant },
 }
+
+/// A question older than this when its turn comes is dropped: the screen may have changed.
+const STALE: Duration = Duration::from_millis(300);
+/// UI Automation gives up on an application that does not answer within this time.
+const UIA_TIMEOUT_MS: u32 = 500;
 
 /// A box found: video time, "click" or "focus", screen rectangle (left, top, right, bottom).
 #[derive(Clone, Debug, PartialEq)]
@@ -33,6 +38,25 @@ pub struct UiProbe {
 const MIN_W: i32 = 16;
 const MIN_H: i32 = 12;
 const MAX_PARENT_STEPS: usize = 4;
+
+/// Whether the top-level window at screen point (x, y) is HP Screen's own (the control bar):
+/// clicks there are never zoom targets. Checked by window, since the bar's content runs in
+/// WebView2's own process.
+pub fn own_window_at(x: i32, y: i32) -> bool {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::UI::WindowsAndMessaging::{GA_ROOT, GetAncestor, GetWindowThreadProcessId, WindowFromPoint};
+    // SAFETY: plain window queries with valid arguments; a missing window gives a null handle.
+    unsafe {
+        let hwnd = WindowFromPoint(POINT { x, y });
+        if hwnd.is_invalid() {
+            return false;
+        }
+        let root = GetAncestor(hwnd, GA_ROOT);
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(if root.is_invalid() { hwnd } else { root }, Some(&mut pid));
+        pid == std::process::id()
+    }
+}
 
 /// `ltrb` relative to the captured `region`, clipped to it, as `[x, y, w, h]`; `None` outside it.
 pub fn rel_rect(ltrb: [i32; 4], region: Rect) -> Option<[i32; 4]> {
@@ -93,13 +117,24 @@ fn run(asks: Receiver<Ask>, found: Sender<Found>) {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         let Ok(uia) = CoCreateInstance::<_, IUIAutomation>(&CUIAutomation, None, CLSCTX_INPROC_SERVER) else { return };
+        // A hung application must not hold the questions behind it for long.
+        if let Ok(uia2) = windows::core::Interface::cast::<windows::Win32::UI::Accessibility::IUIAutomation2>(&uia) {
+            let _ = uia2.SetConnectionTimeout(UIA_TIMEOUT_MS);
+            let _ = uia2.SetTransactionTimeout(UIA_TIMEOUT_MS);
+        }
         let walker = uia.ControlViewWalker().ok();
         let own = std::process::id() as i32;
         let rect_of = |e: &IUIAutomationElement| e.CurrentBoundingRectangle().ok().map(|r| [r.left, r.top, r.right, r.bottom]);
         for ask in asks {
+            let asked = match ask {
+                Ask::Point { asked, .. } | Ask::Focus { asked, .. } => asked,
+            };
+            if asked.elapsed() > STALE {
+                continue;
+            }
             let (t, kind, element) = match ask {
-                Ask::Point { t, x, y } => (t, "click", uia.ElementFromPoint(POINT { x, y }).ok()),
-                Ask::Focus { t } => (t, "focus", uia.GetFocusedElement().ok()),
+                Ask::Point { t, x, y, .. } => (t, "click", uia.ElementFromPoint(POINT { x, y }).ok()),
+                Ask::Focus { t, .. } => (t, "focus", uia.GetFocusedElement().ok()),
             };
             let Some(mut el) = element else { continue };
             // HP Screen's own windows (the control bar) are never zoom targets.
@@ -108,7 +143,7 @@ fn run(asks: Receiver<Ask>, found: Sender<Found>) {
             }
             let Some(mut r) = rect_of(&el) else { continue };
             for _ in 0..MAX_PARENT_STEPS {
-                if r[2] - r[0] >= MIN_W && r[3] - r[1] >= MIN_H {
+                if r[2].saturating_sub(r[0]) >= MIN_W && r[3].saturating_sub(r[1]) >= MIN_H {
                     break;
                 }
                 let Some(parent) = walker.as_ref().and_then(|w| w.GetParentElement(&el).ok()) else { break };
@@ -142,13 +177,23 @@ mod tests {
         assert!(t.elapsed() < Duration::from_secs(2));
     }
 
+    #[test]
+    fn questions_that_waited_too_long_are_dropped() {
+        // A stalled application must not get later clicks matched against a changed screen.
+        let p = UiProbe::start();
+        let old = Instant::now() - Duration::from_secs(1);
+        p.ask(Ask::Point { t: 1, x: 5, y: 5, asked: old });
+        p.ask(Ask::Focus { t: 2, asked: old });
+        assert!(p.finish(Duration::from_secs(2)).is_empty());
+    }
+
     /// Needs a desktop session: `cargo test -p hp-screen --lib ui_probe -- --ignored --nocapture`
     #[test]
     #[ignore = "needs a desktop session"]
     fn the_focused_element_has_a_box() {
         let p = UiProbe::start();
-        p.ask(Ask::Focus { t: 1 });
-        p.ask(Ask::Point { t: 2, x: 5, y: 5 });
+        p.ask(Ask::Focus { t: 1, asked: Instant::now() });
+        p.ask(Ask::Point { t: 2, x: 5, y: 5, asked: Instant::now() });
         let found = p.finish(Duration::from_secs(3));
         println!("{found:?}");
         assert!(!found.is_empty());

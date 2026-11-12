@@ -4,7 +4,7 @@
 //! The hook callbacks do nothing but forward raw events; filtering (privacy, move rate) and
 //! file writing happen on a separate thread so input is never delayed.
 use crate::clock;
-use crate::ui_probe::{Ask, UiProbe, rel_rect};
+use crate::ui_probe::{Ask, UiProbe, own_window_at, rel_rect};
 use hp_core::geometry::Rect;
 use hp_core::input_log::{Button, Event, Header, KeyStroke, MoveSampler, loggable_combo, to_line};
 use hp_core::timeline::Timeline;
@@ -218,6 +218,7 @@ fn write_log(
     ignored: Vec<String>,
     skip_clicks: Arc<AtomicBool>,
 ) {
+    let window_mode = header.mode == "window";
     let _ = writeln!(out, "{}", to_line(&header));
     let mut sampler = MoveSampler::new();
     let mut held_key: Option<u32> = None; // suppresses auto-repeat while a key stays down
@@ -233,13 +234,18 @@ fn write_log(
             Err(RecvTimeoutError::Timeout) => None,
             Err(RecvTimeoutError::Disconnected) => break,
         };
+        // The element under a left click inside the capture (not on HP Screen's own bar).
         if let Some(Raw::Mouse { time, message: WM_LBUTTONDOWN, x, y, .. }) = &raw
             && !skip_clicks.load(Ordering::Relaxed)
+            && rel_rect([*x, *y, *x + 1, *y + 1], origin).is_some()
+            && !own_window_at(*x, *y)
             && let Some(t) = video_ms(*time)
         {
-            probe.ask(Ask::Point { t, x: *x, y: *y });
+            probe.ask(Ask::Point { t, x: *x, y: *y, asked: Instant::now() });
         }
         let event = match raw {
+            // A window recording only shows its window: other windows coming forward change nothing.
+            Some(Raw::Window { .. }) if window_mode => None,
             Some(Raw::Window { time, ltrb }) => video_ms(time).zip(rel_rect(ltrb, origin)).map(|(t, r)| Event::Win { t, r }),
             Some(Raw::Mouse { time, message, x, y, wheel }) => video_ms(time).and_then(|t| {
                 let (x, y) = (x - origin.x, y - origin.y);
@@ -282,7 +288,7 @@ fn write_log(
                 && last_focus_ask.is_none_or(|l| t - l >= FOCUS_ASK_MS)
             {
                 last_focus_ask = Some(t);
-                probe.ask(Ask::Focus { t });
+                probe.ask(Ask::Focus { t, asked: Instant::now() });
             }
             let _ = writeln!(out, "{}", to_line(&event));
         }
@@ -394,6 +400,20 @@ mod filter_tests {
         let text = std::fs::read_to_string(&path).unwrap();
         let log = hp_core::input_log::parse_log(&text);
         assert_eq!(log.events, vec![Event::Win { t: 2000, r: [50, 10, 300, 300] }], "{text}");
+    }
+
+    #[test]
+    fn window_recordings_log_no_window_switches() {
+        // Window capture only shows the recorded window: other windows coming forward change nothing.
+        let path = crate::test_media::temp_path("hook-win-mode", "a.input.jsonl");
+        let region = Rect { x: 100, y: 50, w: 800, h: 600 };
+        let header = Header { v: 1, mode: "window".into(), region, width: 800, height: 600, fps: 30 };
+        let (tx, rx) = mpsc::channel::<Raw>();
+        tx.send(Raw::Window { time: 2000, ltrb: [150, 60, 450, 360] }).unwrap();
+        drop(tx);
+        let file = std::fs::File::create(&path).unwrap();
+        write_log(BufWriter::new(file), header, region, rx, Arc::new(Mutex::new(Timeline::new(0, 1000))), vec![], Arc::new(AtomicBool::new(false)));
+        assert!(hp_core::input_log::parse_log(&std::fs::read_to_string(&path).unwrap()).events.is_empty());
     }
 
     #[test]
