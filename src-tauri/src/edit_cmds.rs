@@ -125,7 +125,11 @@ fn auto_zoom(effects: Option<&Effects>, doc: &EditDoc, w: u32, h: u32, duration_
     let clicks: Vec<(i64, f32, f32)> = fx.ripples.iter().map(|r| (r.t_ms, r.x / w, r.y / h)).collect();
     let wheels: Vec<(i64, f32, f32)> = fx.scrolls.iter().map(|s| (s.0, s.1 / w, s.2 / h)).collect();
     let cursor = |t: i64| fx.cursor_at(t).map(|(x, y)| (x / w, y / h));
-    let input = AutoInput { clicks: &clicks, wheels: &wheels, typing: &fx.typing, cursor: &cursor, edge_guard: fx.edge_guard };
+    let norm = |r: &[f32; 4]| [r[0] / w, r[1] / h, r[2] / w, r[3] / h];
+    let boxes: Vec<(i64, [f32; 4])> = fx.elements.iter().filter(|e| e.kind == "click").map(|e| (e.t_ms, norm(&e.rect))).collect();
+    let focus: Vec<(i64, [f32; 4])> = fx.elements.iter().filter(|e| e.kind == "focus").map(|e| (e.t_ms, norm(&e.rect))).collect();
+    let switches: Vec<i64> = fx.windows.iter().map(|w| w.0).collect();
+    let input = AutoInput { clicks: &clicks, wheels: &wheels, typing: &fx.typing, cursor: &cursor, edge_guard: fx.edge_guard, boxes: &boxes, focus: &focus, switches: &switches };
     regenerate(&doc.zoom.segments, auto_in_regions(&input, doc.zoom.level, &doc.zoom.regions, duration_ms))
 }
 

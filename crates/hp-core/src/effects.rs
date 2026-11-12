@@ -69,6 +69,18 @@ pub struct Effects {
     pub scrolls: Vec<(i64, f32, f32)>,
     /// A full-screen recording: clicks at the very edge are taskbar or window buttons.
     pub edge_guard: bool,
+    /// UI element boxes logged at clicks and while typing, for automatic zoom.
+    pub elements: Vec<UiBox>,
+    /// When another window came to the front, and its box.
+    pub windows: Vec<(i64, [f32; 4])>,
+}
+
+/// The box of a UI element (video pixels): under a click (`kind` "click") or receiving keys ("focus").
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UiBox {
+    pub t_ms: i64,
+    pub kind: String,
+    pub rect: [f32; 4],
 }
 
 /// One thing to draw over a frame.
@@ -130,6 +142,14 @@ pub fn build_effects(log: &ParsedLog, video_w: u32, video_h: u32) -> Effects {
                 }
             }
             Event::Type { t } => fx.typing.push(*t),
+            Event::El { t, k, r } => {
+                let (x, y) = at(r[0], r[1]);
+                fx.elements.push(UiBox { t_ms: *t, kind: k.clone(), rect: [x, y, r[2] as f32 * sx, r[3] as f32 * sy] });
+            }
+            Event::Win { t, r } => {
+                let (x, y) = at(r[0], r[1]);
+                fx.windows.push((*t, [x, y, r[2] as f32 * sx, r[3] as f32 * sy]));
+            }
             Event::Key { t, k } => {
                 let showing = fx.chips.last().is_some_and(|c| c.end_ms > *t);
                 match (&mut chip_key, fx.chips.last_mut()) {
@@ -229,6 +249,17 @@ mod tests {
 
     fn log(events: Vec<Event>) -> ParsedLog {
         ParsedLog { header: None, events }
+    }
+
+    #[test]
+    fn element_boxes_and_window_switches_are_in_video_pixels() {
+        use crate::geometry::Rect;
+        use crate::input_log::Header;
+        let header = Header { v: 1, mode: "monitor".into(), region: Rect { x: 0, y: 0, w: 200, h: 100 }, width: 200, height: 100, fps: 30 };
+        let events = vec![Event::El { t: 10, k: "click".into(), r: [10, 20, 30, 40] }, Event::El { t: 20, k: "focus".into(), r: [0, 0, 50, 10] }, Event::Win { t: 30, r: [0, 0, 100, 50] }];
+        let fx = build_effects(&ParsedLog { header: Some(header), events }, 400, 200);
+        assert_eq!(fx.elements, vec![UiBox { t_ms: 10, kind: "click".into(), rect: [20.0, 40.0, 60.0, 80.0] }, UiBox { t_ms: 20, kind: "focus".into(), rect: [0.0, 0.0, 100.0, 20.0] }]);
+        assert_eq!(fx.windows, vec![(30, [0.0, 0.0, 200.0, 100.0])]);
     }
 
     #[test]

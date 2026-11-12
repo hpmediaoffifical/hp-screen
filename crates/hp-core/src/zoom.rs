@@ -132,6 +132,51 @@ pub struct AutoInput<'a> {
     pub cursor: &'a dyn Fn(i64) -> Option<(f32, f32)>,
     /// Full-screen recording: clicks at the edge are ignored (taskbar, window buttons).
     pub edge_guard: bool,
+    /// Boxes `[x, y, w, h]` of the UI elements under clicks (ms, box).
+    pub boxes: &'a [(i64, [f32; 4])],
+    /// Boxes of the element receiving keys while typing (ms, box).
+    pub focus: &'a [(i64, [f32; 4])],
+    /// When another window came to the front (ms).
+    pub switches: &'a [i64],
+}
+
+/// An element box belongs to a click when logged this soon after it...
+pub const BOX_WINDOW_MS: i64 = 300;
+/// ...and the click is on it (with this tolerance).
+pub const BOX_TOLERANCE: f32 = 0.02;
+/// A box larger than this on either side (a whole window) is not a target.
+pub const BOX_MAX: f32 = 0.6;
+/// A box smaller than this on both sides is noise.
+pub const BOX_MIN: f32 = 0.005;
+/// Margin around an element box, each side.
+pub const BOX_MARGIN: f32 = 0.06;
+/// Fitting an element may zoom this close.
+pub const BOX_MAX_SCALE: f32 = 2.5;
+/// Typing marks closer than this belong to one burst.
+pub const BURST_GAP_MS: i64 = 1500;
+/// After a window switch the camera stays out this long.
+pub const SWITCH_GAP_MS: i64 = 700;
+
+fn usable_box(b: &[f32; 4]) -> bool {
+    b[2] > 0.0 && b[3] > 0.0 && b[2] <= BOX_MAX && b[3] <= BOX_MAX && !(b[2] < BOX_MIN && b[3] < BOX_MIN)
+}
+
+fn box_contains(b: &[f32; 4], x: f32, y: f32) -> bool {
+    x >= b[0] - BOX_TOLERANCE && x <= b[0] + b[2] + BOX_TOLERANCE && y >= b[1] - BOX_TOLERANCE && y <= b[1] + b[3] + BOX_TOLERANCE
+}
+
+/// Zoom and centre that frame `boxes` and `points` with a margin.
+fn fit_boxes(boxes: &[[f32; 4]], points: &[(i64, f32, f32)]) -> (f32, (f32, f32)) {
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for b in boxes {
+        (x0, y0, x1, y1) = (x0.min(b[0]), y0.min(b[1]), x1.max(b[0] + b[2]), y1.max(b[1] + b[3]));
+    }
+    for p in points {
+        (x0, y0, x1, y1) = (x0.min(p.1), y0.min(p.2), x1.max(p.1), y1.max(p.2));
+    }
+    let m = (x1 - x0).max(y1 - y0).max(0.0);
+    let scale = (1.0 / (m + 2.0 * BOX_MARGIN)).clamp(AUTO_MIN_SCALE, BOX_MAX_SCALE);
+    (scale, ((x0 + x1) / 2.0, (y0 + y1) / 2.0))
 }
 
 /// Clicks within this distance of an edge (fraction of the frame) are ignored when guarded.
@@ -190,6 +235,7 @@ pub fn auto_scale(clicks: &[(i64, f32, f32)]) -> f32 {
 /// One group of clicks close in time and place, with the zoom it gets.
 struct Group {
     clicks: Vec<(i64, f32, f32)>,
+    boxes: Vec<[f32; 4]>,
     center: (f32, f32),
     scale: f32,
     start: i64,
@@ -217,36 +263,78 @@ impl Group {
 pub fn auto_segments(input: &AutoInput, level: Level, duration_ms: i64) -> Vec<ZoomSegment> {
     let p = level_params(level);
     let at_edge = |x: f32, y: f32| x <= EDGE_GUARD || y <= EDGE_GUARD || x >= 1.0 - EDGE_GUARD || y >= 1.0 - EDGE_GUARD;
-    let mut clicks: Vec<(i64, f32, f32)> = input.clicks.iter().copied().filter(|c| !(input.edge_guard && p.guard_edges && at_edge(c.1, c.2))).collect();
-    clicks.sort_by_key(|c| c.0);
     let mut typing = input.typing.to_vec();
     typing.sort_unstable();
+    let mut switches = input.switches.to_vec();
+    switches.sort_unstable();
+    let switch_between = |a: i64, b: i64| switches.iter().any(|&s| a < s && s <= b);
+    // Each click with the box of the element it hit, when one was logged right after it.
+    let box_for = |c: &(i64, f32, f32)| {
+        input
+            .boxes
+            .iter()
+            .filter(|(t, b)| *t >= c.0 && *t <= c.0 + BOX_WINDOW_MS && usable_box(b) && box_contains(b, c.1, c.2))
+            .min_by_key(|(t, _)| *t)
+            .map(|(_, b)| *b)
+    };
+    let mut clicks: Vec<((i64, f32, f32), Option<[f32; 4]>)> = input
+        .clicks
+        .iter()
+        .copied()
+        .filter(|c| !(input.edge_guard && p.guard_edges && at_edge(c.1, c.2)))
+        .map(|c| (c, box_for(&c)))
+        .collect();
+    // Each burst of typing into a known field counts as a click on that field.
+    let mut burst: Option<(i64, i64)> = None;
+    let mut bursts: Vec<(i64, i64)> = Vec::new();
+    for &t in &typing {
+        burst = match burst {
+            Some((a, b)) if t - b < BURST_GAP_MS => Some((a, t)),
+            Some(done) => {
+                bursts.push(done);
+                Some((t, t))
+            }
+            None => Some((t, t)),
+        };
+    }
+    bursts.extend(burst);
+    for (a, b) in bursts {
+        let field = input.focus.iter().filter(|(t, f)| *t >= a - BOX_WINDOW_MS && *t <= b + BOX_WINDOW_MS && usable_box(f)).min_by_key(|(t, _)| *t);
+        if let Some((_, f)) = field {
+            clicks.push(((a, f[0] + f[2] / 2.0, f[1] + f[3] / 2.0), Some(*f)));
+        }
+    }
+    clicks.sort_by_key(|c| c.0.0);
     let mut wheels = input.wheels.to_vec();
     wheels.sort_by_key(|w| w.0);
 
-    // Groups of clicks close in time and place.
-    let mut raw: Vec<Vec<(i64, f32, f32)>> = Vec::new();
-    for c in clicks {
-        let joins = raw.last().and_then(|g| g.last()).is_some_and(|last| {
+    // Groups of clicks close in time and place, never across a window switch.
+    let mut raw: Vec<(Vec<(i64, f32, f32)>, Vec<[f32; 4]>)> = Vec::new();
+    for (c, b) in clicks {
+        let joins = raw.last().and_then(|g| g.0.last()).is_some_and(|last| {
             let d = ((c.1 - last.1).powi(2) + (c.2 - last.2).powi(2)).sqrt();
-            c.0 - last.0 < GROUP_GAP_MS && d < GROUP_DISTANCE
+            c.0 - last.0 < GROUP_GAP_MS && d < GROUP_DISTANCE && !switch_between(last.0, c.0)
         });
         match raw.last_mut() {
-            Some(g) if joins => g.push(c),
-            _ => raw.push(vec![c]),
+            Some(g) if joins => {
+                g.0.push(c);
+                g.1.extend(b);
+            }
+            _ => raw.push((vec![c], b.into_iter().collect())),
         }
     }
     let active_after = |from: i64, within: i64| {
         typing.iter().any(|&t| t > from && t <= from + within) || wheels.iter().any(|w| w.0 > from && w.0 <= from + within)
     };
     let mut groups: Vec<Group> = Vec::new();
-    for g in raw {
+    for (g, boxes) in raw {
         let last = g[g.len() - 1].0;
         if g.len() < p.min_clicks && !active_after(last, LOW_ACTIVITY_MS) {
             continue;
         }
-        let center = box_center(&g);
-        let mut group = Group { scale: auto_scale(&g), center, start: (g[0].0 - LEAD_MS).max(0), end: last + p.hold_ms, clicks: g };
+        // Framed on the elements hit when they are known; else on the clicks themselves.
+        let (scale, center) = if boxes.is_empty() { (auto_scale(&g), box_center(&g)) } else { fit_boxes(&boxes, &g) };
+        let mut group = Group { scale, center, start: (g[0].0 - LEAD_MS).max(0), end: last + p.hold_ms, clicks: g, boxes };
         // Typing, or scrolling in view, keeps the zoom a moment longer; never past the cap.
         let cap = last + MAX_ACTIVITY_MS;
         let mut activity: Vec<i64> = typing.iter().copied().filter(|&t| t > last).collect();
@@ -283,19 +371,33 @@ pub fn auto_segments(input: &AutoInput, level: Level, duration_ms: i64) -> Vec<Z
         groups.push(group);
     }
 
-    // Groups that nearly touch make one segment; groups far apart in it are keyframes.
+    // Groups that nearly touch make one segment (never across a window switch); groups far
+    // apart in it are keyframes.
     let mut spans: Vec<Vec<Group>> = Vec::new();
     for g in groups {
         match spans.last_mut() {
-            Some(span) if g.start - span.iter().map(|s| s.end).max().unwrap_or(0) < MERGE_GAP_MS => span.push(g),
+            Some(span)
+                if g.start - span.iter().map(|s| s.end).max().unwrap_or(0) < MERGE_GAP_MS
+                    && !switch_between(span[span.len() - 1].last(), g.first()) =>
+            {
+                span.push(g)
+            }
             _ => spans.push(vec![g]),
         }
     }
     spans
         .into_iter()
         .filter_map(|span| {
-            let start = span[0].start;
-            let end = span.iter().map(|g| g.end).max().unwrap_or(start).min(duration_ms);
+            // Around a window switch the camera is out: ends at the switch, starts a moment after.
+            let (first, last) = (span[0].first(), span[span.len() - 1].last());
+            let mut start = span[0].start;
+            if let Some(&s) = switches.iter().rev().find(|&&s| s <= first) {
+                start = start.max(s + SWITCH_GAP_MS);
+            }
+            let mut end = span.iter().map(|g| g.end).max().unwrap_or(start).min(duration_ms);
+            if let Some(&s) = switches.iter().find(|&&s| s > last) {
+                end = end.min(s);
+            }
             if end - start < MIN_SEGMENT_MS {
                 return None;
             }
@@ -314,11 +416,13 @@ pub fn auto_segments(input: &AutoInput, level: Level, duration_ms: i64) -> Vec<Z
                     }
                     keys.push(ZoomKey { t_ms: pan_at, cx: g.center.0, cy: g.center.1, scale: g.scale });
                 }
+                keys.retain(|k| k.t_ms > start + KEY_MIN_GAP_MS && k.t_ms < end);
                 ZoomSegment { start_ms: start, end_ms: end, scale: span[0].scale, center: Some(span[0].center), keys, ..ZoomSegment::default() }
             } else {
                 let all: Vec<(i64, f32, f32)> = span.iter().flat_map(|g| g.clicks.iter().copied()).collect();
-                let center = box_center(&all);
-                ZoomSegment { start_ms: start, end_ms: end, scale: auto_scale(&all), center: Some(center), ..ZoomSegment::default() }
+                let boxes: Vec<[f32; 4]> = span.iter().flat_map(|g| g.boxes.iter().copied()).collect();
+                let (scale, center) = if boxes.is_empty() { (auto_scale(&all), box_center(&all)) } else { fit_boxes(&boxes, &all) };
+                ZoomSegment { start_ms: start, end_ms: end, scale, center: Some(center), ..ZoomSegment::default() }
             };
             Some(seg)
         })
@@ -334,12 +438,14 @@ pub fn auto_in_regions(input: &AutoInput, level: Level, regions: &[crate::cut::S
     for (a, b) in regions {
         let inside = |t: i64| t >= a && t < b;
         let clicks: Vec<(i64, f32, f32)> = input.clicks.iter().copied().filter(|c| inside(c.0)).collect();
-        if clicks.is_empty() {
+        if clicks.is_empty() && !input.focus.iter().any(|f| inside(f.0)) {
             continue;
         }
         let wheels: Vec<(i64, f32, f32)> = input.wheels.iter().copied().filter(|w| inside(w.0)).collect();
         let typing: Vec<i64> = input.typing.iter().copied().filter(|&t| inside(t)).collect();
-        let part = AutoInput { clicks: &clicks, wheels: &wheels, typing: &typing, cursor: input.cursor, edge_guard: input.edge_guard };
+        let boxes: Vec<(i64, [f32; 4])> = input.boxes.iter().copied().filter(|b| inside(b.0)).collect();
+        let focus: Vec<(i64, [f32; 4])> = input.focus.iter().copied().filter(|b| inside(b.0)).collect();
+        let part = AutoInput { clicks: &clicks, wheels: &wheels, typing: &typing, cursor: input.cursor, edge_guard: input.edge_guard, boxes: &boxes, focus: &focus, switches: input.switches };
         for mut seg in auto_segments(&part, level, b) {
             seg.start_ms = seg.start_ms.max(a);
             seg.end_ms = seg.end_ms.min(b);
@@ -576,11 +682,11 @@ mod tests {
     }
 
     fn auto(clicks: &[(i64, f32, f32)], duration_ms: i64) -> Vec<ZoomSegment> {
-        auto_segments(&AutoInput { clicks, wheels: &[], typing: &[], cursor: NO_CURSOR, edge_guard: false }, Level::Normal, duration_ms)
+        auto_segments(&AutoInput { clicks, wheels: &[], typing: &[], cursor: NO_CURSOR, edge_guard: false, boxes: &[], focus: &[], switches: &[] }, Level::Normal, duration_ms)
     }
 
     fn input<'a>(clicks: &'a [(i64, f32, f32)], wheels: &'a [(i64, f32, f32)], typing: &'a [i64], cursor: &'a dyn Fn(i64) -> Option<(f32, f32)>, edge_guard: bool) -> AutoInput<'a> {
-        AutoInput { clicks, wheels, typing, cursor, edge_guard }
+        AutoInput { clicks, wheels, typing, cursor, edge_guard, boxes: &[], focus: &[], switches: &[] }
     }
 
     fn close(a: f32, b: f32, tol: f32) -> bool {
@@ -983,5 +1089,46 @@ mod tests {
     fn old_zoom_docs_have_no_regions() {
         let doc = crate::edit::load_edit(r#"{"v":1,"zoom":{"enabled":true,"segments":[]}}"#).unwrap();
         assert!(doc.zoom.regions.is_empty());
+    }
+
+    fn ui<'a>(clicks: &'a [(i64, f32, f32)], typing: &'a [i64], boxes: &'a [(i64, [f32; 4])], focus: &'a [(i64, [f32; 4])], switches: &'a [i64]) -> Vec<ZoomSegment> {
+        auto_segments(&AutoInput { clicks, wheels: &[], typing, cursor: NO_CURSOR, edge_guard: false, boxes, focus, switches }, Level::Normal, 60_000)
+    }
+
+    #[test]
+    fn the_zoom_fits_the_clicked_element() {
+        let s = ui(&[(1000, 0.5, 0.5)], &[], &[(1050, [0.48, 0.49, 0.04, 0.02])], &[], &[]);
+        assert_eq!(s[0].scale, 2.5, "a small button: as close as allowed");
+        let (cx, cy) = s[0].center.unwrap();
+        assert!(close(cx, 0.5, 1e-4) && close(cy, 0.5, 1e-4));
+        let s = ui(&[(1000, 0.5, 0.4)], &[], &[(1000, [0.3, 0.3, 0.4, 0.2])], &[], &[]);
+        assert!(close(s[0].scale, 1.0 / 0.52, 1e-4), "a dialog: framed with a margin, {}", s[0].scale);
+        assert_eq!(s[0].center, Some((0.5, 0.4)));
+    }
+
+    #[test]
+    fn unusable_element_boxes_are_ignored() {
+        let plain = ui(&[(1000, 0.5, 0.5)], &[], &[], &[], &[]);
+        assert_eq!(ui(&[(1000, 0.5, 0.5)], &[], &[(1000, [0.0, 0.0, 0.9, 0.9])], &[], &[]), plain, "a whole window is not a target");
+        assert_eq!(ui(&[(1000, 0.5, 0.5)], &[], &[(1000, [0.1, 0.1, 0.05, 0.05])], &[], &[]), plain, "the click is not on it");
+        assert_eq!(ui(&[(1000, 0.5, 0.5)], &[], &[(1400, [0.48, 0.49, 0.04, 0.02])], &[], &[]), plain, "too late to belong to the click");
+    }
+
+    #[test]
+    fn typing_zooms_on_the_field_being_typed_in() {
+        let typing: Vec<i64> = (0..8).map(|i| 5000 + i * 300).collect();
+        let s = ui(&[(1000, 0.2, 0.2)], &typing, &[], &[(5100, [0.7, 0.8, 0.2, 0.05])], &[]);
+        let seg = s.iter().find(|g| g.start_ms <= 5000 && 5000 < g.end_ms).expect("a zoom while typing");
+        let c = target_at(seg, 5500).unwrap();
+        assert!(close(c.cx, 0.8, 1e-3) && close(c.cy, 0.825, 1e-3), "on the field, not on the mouse: {c:?}");
+    }
+
+    #[test]
+    fn a_window_switch_zooms_out_between_groups() {
+        let s = ui(&[(500, 0.3, 0.3), (2000, 0.32, 0.3)], &[], &[], &[], &[1500]);
+        assert_eq!(s.len(), 2, "{s:?}");
+        assert!(s[0].end_ms <= 1500, "ends at the switch: {:?}", s[0]);
+        assert!(s[1].start_ms >= 2200, "starts 700 ms after it: {:?}", s[1]);
+        assert_eq!(ui(&[(500, 0.3, 0.3), (2000, 0.32, 0.3)], &[], &[], &[], &[]).len(), 1, "without the switch: one zoom");
     }
 }

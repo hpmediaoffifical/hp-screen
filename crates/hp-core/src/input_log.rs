@@ -37,13 +37,18 @@ pub enum Event {
     Key { t: i64, k: String },
     /// A moment of typing: never which key.
     Type { t: i64 },
+    /// The box `[x, y, w, h]` of the UI element under a click (`k` = "click") or receiving keys
+    /// (`k` = "focus"). Only the box: never its name or text.
+    El { t: i64, k: String, r: [i32; 4] },
+    /// Another window came to the front; its box.
+    Win { t: i64, r: [i32; 4] },
 }
 
 impl Event {
     /// Video time of the event in milliseconds.
     pub fn t(&self) -> i64 {
         match self {
-            Event::Move { t, .. } | Event::Down { t, .. } | Event::Up { t, .. } | Event::Wheel { t, .. } | Event::Key { t, .. } | Event::Type { t } => *t,
+            Event::Move { t, .. } | Event::Down { t, .. } | Event::Up { t, .. } | Event::Wheel { t, .. } | Event::Key { t, .. } | Event::Type { t } | Event::El { t, .. } | Event::Win { t, .. } => *t,
         }
     }
 }
@@ -179,6 +184,14 @@ mod tests {
 
     fn key(ctrl: bool, alt: bool, shift: bool, win: bool, vk: u32) -> KeyStroke {
         KeyStroke { ctrl, alt, shift, win, vk }
+    }
+
+    #[test]
+    fn element_and_window_lines_are_read() {
+        let log = parse_log("{\"e\":\"el\",\"t\":5,\"k\":\"click\",\"r\":[1,2,30,40]}\n{\"e\":\"win\",\"t\":9,\"r\":[0,0,800,600]}");
+        assert_eq!(log.events, vec![Event::El { t: 5, k: "click".into(), r: [1, 2, 30, 40] }, Event::Win { t: 9, r: [0, 0, 800, 600] }]);
+        assert_eq!(to_line(&Event::El { t: 1, k: "focus".into(), r: [0, 0, 2, 2] }), "{\"e\":\"el\",\"t\":1,\"k\":\"focus\",\"r\":[0,0,2,2]}");
+        assert_eq!(to_line(&Event::Win { t: 3, r: [4, 5, 6, 7] }), "{\"e\":\"win\",\"t\":3,\"r\":[4,5,6,7]}");
     }
 
     #[test]
