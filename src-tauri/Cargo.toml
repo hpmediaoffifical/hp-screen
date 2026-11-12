@@ -1,6 +1,6 @@
 [package]
 name = "hp-screen"
-version = "0.2.0"
+version = "0.2.1"
 description = "HP Screen - quay màn hình cho Windows 11"
 authors = ["Nguyễn Hoàng Phụng (HP Media)"]
 license = "MIT"
@@ -35,6 +35,8 @@ windows-numerics = "0.3"
 gif = "0.13"
 sha2 = "0.10"
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+# Self-update from GitHub Releases (the Windows installer restarts the app itself).
+tauri-plugin-updater = "2"
 
 
 # Capture-and-annotate: window frames for snapping the selection, and Windows' own offline

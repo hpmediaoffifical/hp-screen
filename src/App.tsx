@@ -4,6 +4,7 @@ import RecordPage from "./pages/RecordPage";
 import LibraryPage from "./pages/LibraryPage";
 import SettingsPage from "./pages/SettingsPage";
 import EditPage from "./pages/EditPage";
+import UpdateNotice from "./components/UpdateNotice";
 
 type PageId = "record" | "library" | "settings";
 
@@ -46,6 +47,7 @@ export default function App() {
         {!editing && page === "library" && <LibraryPage onEdit={setEditing} />}
         {!editing && page === "settings" && <SettingsPage />}
       </main>
+      <UpdateNotice />
     </div>
   );
 }
