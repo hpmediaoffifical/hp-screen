@@ -113,3 +113,12 @@ test("zAtTheEndAddsNothing", () => {
   assert.deepEqual([free.segments[0].end_ms, free.segments[0].center], [4000, [0.5, 0.5]]);
   assert.equal(addSegmentAt([seg({ start_ms: 2300, end_ms: 6000 })], 2000, 10_000, null), null, "under 0.5 s before the next segment");
 });
+
+import { frameAt } from "./zoomMath.ts";
+
+test("the frame shown for editing is the active frame itself", () => {
+  const s = seg({ center: [0.3, 0.3], scale: 2, keys: [{ t_ms: 3000, cx: 0.8, cy: 0.7, scale: 3 }] });
+  assert.deepEqual(frameAt(s, 2000, c(0.5, 0.5, 1)), c(0.3, 0.3, 2), "main frame, not the eased camera");
+  assert.deepEqual(frameAt(s, 3500, c(0.5, 0.5, 1)), c(0.8, 0.7, 3));
+  assert.deepEqual(frameAt(seg({ center: null, scale: 2.5 }), 2000, c(0.6, 0.4, 2.2)), c(0.6, 0.4, 2.5), "cursor-following: where the camera is, at the segment's zoom");
+});

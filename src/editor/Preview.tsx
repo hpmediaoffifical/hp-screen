@@ -3,6 +3,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import { keptTime, playFrom, type Camera, type Layout, type Span } from "../editApi";
 import { gradientAngle, pickInView, sourceView, type View } from "./layoutMath";
 import { WHOLE } from "./zoomMath";
+import ZoomFrame from "./ZoomFrame";
 
 export interface PreviewHandle {
   play(): void;
@@ -31,6 +32,8 @@ interface Props {
   camera?: (ms: number) => Camera;
   /** When set, a click on the picture picks that point of the source frame (0–1). */
   onPick?: (x: number, y: number) => void;
+  /** When set, the picture is shown unzoomed with this zoom frame to drag over it. */
+  frameEdit?: { camera: Camera; onChange: (cam: Camera, first: boolean) => void };
 }
 
 const css = (c: [number, number, number]) => `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
@@ -225,6 +228,9 @@ const Preview = forwardRef<PreviewHandle, Props>(function Preview(props, ref) {
             />
             <canvas ref={canvas} className="preview-overlay" aria-hidden="true" />
           </div>
+          {props.frameEdit && (
+            <ZoomFrame camera={props.frameEdit.camera} srcW={props.srcW} srcH={props.srcH} fill={l?.fill_aspect ?? null} onChange={props.frameEdit.onChange} />
+          )}
         </div>
         <canvas ref={fixed} className="preview-overlay" aria-hidden="true" />
       </div>

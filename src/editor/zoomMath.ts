@@ -139,3 +139,14 @@ export function addSegmentAt(segments: ZoomSegment[], ms: number, durationMs: nu
   const out = [...segments, seg].sort((a, b) => a.start_ms - b.start_ms);
   return { segments: out, index: out.indexOf(seg) };
 }
+
+/** The frame shown for editing at `ms`: the active keyframe or start frame; `camera` places a cursor-following one. */
+export function frameAt(seg: ZoomSegment, ms: number, camera: Camera): Camera {
+  const i = activeKey(seg, ms);
+  if (i >= 0) {
+    const k = seg.keys[i];
+    return { cx: k.cx, cy: k.cy, scale: k.scale };
+  }
+  if (seg.center) return { cx: seg.center[0], cy: seg.center[1], scale: seg.scale };
+  return { cx: camera.cx, cy: camera.cy, scale: seg.scale };
+}

@@ -14,7 +14,9 @@ import {
   type FrameDoc,
   type KeepInfo,
   type Layout,
+  type Level,
   type Span,
+  type Speed,
   type ZoomSegment,
 } from "../editApi";
 import ExportPanel from "../editor/ExportPanel";
@@ -22,9 +24,9 @@ import SubtitlesPanel from "../editor/SubtitlesPanel";
 import { chipAbove, cueAt, layoutSubtitle, paintSubtitle } from "../editor/subsMath";
 import Preview, { type PreviewHandle } from "../editor/Preview";
 import Timeline from "../editor/Timeline";
-import { drawEffects } from "../editor/drawEffects";
+import { cursorAt, drawEffects } from "../editor/drawEffects";
 import ZoomTrack from "../editor/ZoomTrack";
-import { cameraAt } from "../editor/zoomMath";
+import { addKey, addSegmentAt, cameraAt, frameAt, setActiveFrame, WHOLE } from "../editor/zoomMath";
 
 type Tab = "cut" | "effects" | "zoom" | "frame" | "subs" | "export";
 const TABS: { id: Tab; label: string }[] = [
@@ -54,7 +56,7 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
   const [track, setTrack] = useState<[number, Camera][]>([]);
   const [layout, setLayout] = useState<Layout | null>(null);
   const [zoomSel, setZoomSel] = useState<number | null>(null);
-  const [picking, setPicking] = useState(false);
+  const [keySel, setKeySel] = useState<number | null>(null);
   const preview = useRef<PreviewHandle>(null);
   const past = useRef<EditDoc[]>([]);
   const future = useRef<EditDoc[]>([]);
@@ -204,31 +206,112 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
         setSelection((s) => ({ start_ms: playhead, end_ms: Math.max(s?.end_ms ?? trimEnd, playhead + frameMs) }));
       } else if (e.key.toLowerCase() === "o" && !ctrl) {
         setSelection((s) => ({ start_ms: Math.min(s?.start_ms ?? doc?.trim.start_ms ?? 0, playhead - frameMs), end_ms: playhead }));
+      } else if (e.key.toLowerCase() === "z" && !ctrl && !e.altKey) {
+        e.preventDefault();
+        addZoomHere();
+      } else if (e.key.toLowerCase() === "k" && !ctrl && !e.altKey) {
+        e.preventDefault();
+        addKeyHere();
       } else if (e.key === "Delete") {
         e.preventDefault();
-        // A cut selection wins; a zoom segment is deleted only while it is shown and exists.
+        // A cut selection wins; then the selected keyframe; then the selected zoom segment.
         if (selection) removeSelection();
         else if (zoomSel !== null && doc?.zoom.enabled && doc.zoom.segments[zoomSel]) {
-          change({ ...doc, zoom: { ...doc.zoom, segments: doc.zoom.segments.filter((_, i) => i !== zoomSel) } });
-          setZoomSel(null);
+          if (keySel !== null && doc.zoom.segments[zoomSel].keys[keySel]) deleteKey();
+          else {
+            change({ ...doc, zoom: { ...doc.zoom, segments: doc.zoom.segments.filter((_, i) => i !== zoomSel) } });
+            setZoomSel(null);
+            setKeySel(null);
+          }
         }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undoRedo, removeSelection, playhead, duration, frameMs, trimEnd, doc, zoomSel, change, selection]);
+  });
 
-  // Moving the scale slider is one undo step, not one per tick.
-  const scaleRun = useRef<{ index: number; at: number } | null>(null);
-  const setZoomSegment = (index: number, patch: Partial<ZoomSegment>) => {
+  /** Changes segment `index` (made manual). `merge` continues the last undo step. */
+  const updateSeg = (index: number, f: (s: ZoomSegment) => ZoomSegment, merge = false) => {
     const d = latest.current;
     if (!d || !d.zoom.segments[index]) return;
-    const now = performance.now();
-    const sliding = patch.scale !== undefined;
-    const merge = sliding && scaleRun.current?.index === index && now - scaleRun.current.at < 1000;
-    scaleRun.current = sliding ? { index, at: now } : null;
-    const segments = d.zoom.segments.map((s, i) => (i === index ? { ...s, ...patch, manual: true } : s));
+    const segments = d.zoom.segments.map((s, i) => (i === index ? { ...f(s), manual: true } : s));
     change({ ...d, zoom: { ...d.zoom, segments } }, merge);
+  };
+  // Moving the scale slider is one undo step, not one per tick.
+  const scaleRun = useRef<{ index: number; at: number } | null>(null);
+  const slideScale = (index: number, scale: number) => {
+    const now = performance.now();
+    const merge = scaleRun.current?.index === index && now - scaleRun.current.at < 1000;
+    scaleRun.current = { index, at: now };
+    updateSeg(index, (s) => setActiveFrame(s, playhead, { ...frameAt(s, playhead, cameraNow()), scale }), merge);
+  };
+
+  /** Where the zoom camera is at the playhead. */
+  const cameraNow = () => (track.length > 0 ? cameraAt(track, playhead) : WHOLE);
+
+  /** Z: a new zoom segment at the playhead, centred on the mouse there (when logged). */
+  const addZoomHere = () => {
+    const d = latest.current;
+    if (!d || !session) return;
+    const p = session.effects ? cursorAt(session.effects, playhead) : null;
+    const center: [number, number] | null = p ? [p[0] / session.info.width, p[1] / session.info.height] : null;
+    const r = addSegmentAt(d.zoom.segments, playhead, duration, center);
+    if (!r) {
+      setMessage("Không đủ chỗ để thêm đoạn zoom ở đây: cần ít nhất 0,5 giây trước đoạn sau hoặc cuối video.");
+      return;
+    }
+    preview.current?.pause();
+    change({ ...d, zoom: { ...d.zoom, enabled: true, segments: r.segments } });
+    setZoomSel(r.index);
+    setKeySel(null);
+    setTab("zoom");
+  };
+
+  /** K: a keyframe at the playhead in the selected segment, starting where the camera is. */
+  const addKeyHere = () => {
+    const d = latest.current;
+    const seg = d && zoomSel !== null ? d.zoom.segments[zoomSel] : null;
+    if (!d || !seg || !d.zoom.enabled || zoomSel === null) {
+      setMessage("Chọn một đoạn zoom trước, rồi đặt điểm lia trong đoạn đó.");
+      return;
+    }
+    const out = addKey(seg, playhead, cameraNow());
+    if (!out) {
+      setMessage("Điểm lia phải nằm trong đoạn zoom đang chọn và cách các điểm khác hơn 0,05 giây.");
+      return;
+    }
+    preview.current?.pause();
+    updateSeg(zoomSel, () => out);
+    setKeySel(out.keys.findIndex((k) => k.t_ms === Math.round(playhead)));
+  };
+
+  const deleteKey = () => {
+    if (zoomSel === null || keySel === null) return;
+    const k = keySel;
+    updateSeg(zoomSel, (s) => ({ ...s, keys: s.keys.filter((_, j) => j !== k) }));
+    setKeySel(null);
+  };
+
+  const setLevel = async (level: Level) => {
+    const d = latest.current;
+    if (!d || !session) return;
+    const next = { ...d, zoom: { ...d.zoom, level } };
+    try {
+      const segments = session.effects ? await zoomAuto(props.path, next, frameOf(session)) : next.zoom.segments;
+      change({ ...next, zoom: { ...next.zoom, segments } });
+      setZoomSel(null);
+      setKeySel(null);
+    } catch (e) {
+      setMessage(errorMessage(e));
+    }
+  };
+
+  const clearAuto = () => {
+    const d = latest.current;
+    if (!d) return;
+    change({ ...d, zoom: { ...d.zoom, segments: d.zoom.segments.filter((s) => s.manual) } });
+    setZoomSel(null);
+    setKeySel(null);
   };
 
   const regenerateZoom = async () => {
@@ -238,6 +321,7 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
       const segments = await zoomAuto(props.path, d, frameOf(session));
       change({ ...d, zoom: { ...d.zoom, segments } });
       setZoomSel(null);
+      setKeySel(null);
     } catch (e) {
       setMessage(errorMessage(e));
     }
@@ -257,7 +341,7 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
     }
     if (!enabled) {
       setZoomSel(null);
-      setPicking(false);
+      setKeySel(null);
     }
     change({ ...d, zoom: { ...d.zoom, enabled, segments } });
   };
@@ -282,6 +366,10 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
       </section>
     );
   }
+
+  // Frame editing: the Zoom tab is open on a selected segment and the video is paused.
+  const selSeg = doc.zoom.enabled && zoomSel !== null ? doc.zoom.segments[zoomSel] ?? null : null;
+  const frameEditing = tab === "zoom" && !!selSeg && !playing && zoomSel !== null;
 
   return (
     <section className="editor">
@@ -319,13 +407,10 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
             } else ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
             if (sub) paintSubtitle(ctx, sub);
           }}
-          camera={doc.zoom.enabled && track.length > 0 ? (ms) => cameraAt(track, ms) : undefined}
-          onPick={
-            picking && zoomSel !== null
-              ? (x, y) => {
-                  setPicking(false);
-                  setZoomSegment(zoomSel, { center: [x, y] });
-                }
+          camera={doc.zoom.enabled && track.length > 0 && !frameEditing ? (ms) => cameraAt(track, ms) : undefined}
+          frameEdit={
+            frameEditing && selSeg && zoomSel !== null
+              ? { camera: frameAt(selSeg, playhead, cameraNow()), onChange: (cam, first) => updateSeg(zoomSel, (s) => setActiveFrame(s, playhead, cam), !first) }
               : undefined
           }
         />
@@ -388,30 +473,62 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
                 <input type="checkbox" checked={doc.zoom.enabled} onChange={(e) => void setZoomEnabled(e.target.checked)} />
                 <span>
                   Bật zoom
-                  <span className="hint check-hint">Phóng to những chỗ bạn muốn người xem chú ý. Kéo trên rãnh Zoom (dưới dòng thời gian) để thêm một đoạn.</span>
+                  <span className="hint check-hint">Phóng to những chỗ bạn muốn người xem chú ý. Bấm Z để thêm một đoạn tại chỗ đang phát, hoặc kéo trên rãnh Zoom dưới dòng thời gian.</span>
                 </span>
               </label>
               {doc.zoom.enabled && (
                 <>
-                  <button className="btn btn-small" disabled={!session.effects} onClick={() => void regenerateZoom()}>
-                    Tự tạo lại theo click
-                  </button>
-                  {!session.effects && <p className="hint">Video này không có nhật ký thao tác: chỉ thêm zoom bằng tay được.</p>}
-                  {zoomSel !== null && doc.zoom.segments[zoomSel] ? (
+                  {session.effects ? (
+                    <>
+                      <span className="label">Tự động</span>
+                      <div className="row" role="radiogroup" aria-label="Mức zoom tự động">
+                        {(
+                          [
+                            ["low", "Ít"],
+                            ["normal", "Vừa"],
+                            ["high", "Nhiều"],
+                          ] as const
+                        ).map(([v, label]) => (
+                          <button key={v} className={"chip chip-toggle" + (doc.zoom.level === v ? " on" : "")} aria-pressed={doc.zoom.level === v} onClick={() => void setLevel(v)}>
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="row">
+                        <button className="btn btn-small" onClick={() => void regenerateZoom()}>Tự tạo lại</button>
+                        <button className="btn btn-small" disabled={!doc.zoom.segments.some((s) => !s.manual)} onClick={clearAuto}>
+                          Xóa các đoạn tự động
+                        </button>
+                      </div>
+                      <p className="hint">Đoạn xanh là tự động, đoạn vàng là bạn làm. "Tự tạo lại" luôn giữ đoạn của bạn.</p>
+                    </>
+                  ) : (
+                    <p className="hint">Video này không có nhật ký thao tác: chỉ thêm zoom bằng tay được.</p>
+                  )}
+                  <button className="btn btn-small" onClick={addZoomHere} title="Phím Z">+ Zoom tại đây</button>
+                  {selSeg && zoomSel !== null ? (
                     <ZoomControls
-                      seg={doc.zoom.segments[zoomSel]}
-                      picking={picking}
+                      seg={selSeg}
+                      frame={frameAt(selSeg, playhead, cameraNow())}
+                      keySel={keySel}
+                      playing={playing}
                       hasCursor={!!session.effects}
-                      onScale={(scale) => setZoomSegment(zoomSel, { scale })}
-                      onPick={() => setPicking(!picking)}
-                      onFollow={() => setZoomSegment(zoomSel, { center: null })}
+                      onScale={(scale) => slideScale(zoomSel, scale)}
+                      onSpeed={(speed: Speed) => updateSeg(zoomSel, (s) => ({ ...s, speed }))}
+                      onAddKey={addKeyHere}
+                      onDeleteKey={deleteKey}
+                      onFollow={() => {
+                        updateSeg(zoomSel, (s) => ({ ...s, center: null, keys: [] }));
+                        setKeySel(null);
+                      }}
                       onDelete={() => {
                         change({ ...doc, zoom: { ...doc.zoom, segments: doc.zoom.segments.filter((_, i) => i !== zoomSel) } });
                         setZoomSel(null);
+                        setKeySel(null);
                       }}
                     />
                   ) : (
-                    <p className="hint">Bấm vào một đoạn trên rãnh Zoom để chỉnh mức phóng và tâm.</p>
+                    <p className="hint">Bấm vào một đoạn trên rãnh Zoom: video dừng và hiện khung zoom để bạn kéo tới chỗ muốn phóng.</p>
                   )}
                 </>
               )}
@@ -480,11 +597,27 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
             durationMs={duration}
             segments={doc.zoom.segments}
             selected={zoomSel}
+            selectedKey={keySel}
             playhead={playhead}
             onSelect={(i) => {
               setZoomSel(i);
-              setPicking(false);
-              if (i !== null) setTab("zoom");
+              setKeySel(null);
+              if (i === null) return;
+              setTab("zoom");
+              const s = doc.zoom.segments[i];
+              if (s && (playhead < s.start_ms || playhead >= s.end_ms)) {
+                preview.current?.pause();
+                preview.current?.seek(s.start_ms);
+              }
+            }}
+            onSelectKey={(i, k) => {
+              setZoomSel(i);
+              setKeySel(k);
+              setTab("zoom");
+            }}
+            onSeek={(ms) => {
+              preview.current?.pause();
+              preview.current?.seek(ms);
             }}
             onChange={(segments, first) => change({ ...doc, zoom: { ...doc.zoom, segments } }, !first)}
           />
@@ -499,36 +632,68 @@ function frameOf(s: EditSession) {
   return { width: s.info.width, height: s.info.height, duration_ms: s.info.duration_ms };
 }
 
+const SPEEDS: [Speed, string][] = [
+  ["slow", "Chậm"],
+  ["normal", "Vừa"],
+  ["fast", "Nhanh"],
+  ["instant", "Tức thì"],
+];
+
 /** Controls for the selected zoom segment. */
 function ZoomControls(props: {
   seg: ZoomSegment;
-  picking: boolean;
+  /** The frame being edited at the playhead. */
+  frame: Camera;
+  keySel: number | null;
+  playing: boolean;
   hasCursor: boolean;
   onScale: (scale: number) => void;
-  onPick: () => void;
+  onSpeed: (speed: Speed) => void;
+  onAddKey: () => void;
+  onDeleteKey: () => void;
   onFollow: () => void;
   onDelete: () => void;
 }) {
-  const { seg } = props;
+  const { seg, frame } = props;
+  const following = !seg.center && seg.keys.length === 0;
   return (
     <div className="zoom-controls">
+      <p className="hint">{props.playing ? "Dừng video để kéo khung zoom." : "Kéo khung trên video để dời, kéo góc để phóng to hay nhỏ."}</p>
       <label className="zoom-scale">
-        Mức phóng: <strong>{seg.scale.toFixed(1)}×</strong>
-        <input type="range" min={1} max={4} step={0.1} value={seg.scale} onChange={(e) => props.onScale(Number(e.target.value))} />
+        Mức phóng: <strong>{frame.scale.toFixed(1)}×</strong>
+        <input type="range" min={1} max={4} step={0.1} value={frame.scale} onChange={(e) => props.onScale(Number(e.target.value))} />
       </label>
-      {seg.scale > 2 && <p className="hint bar-warn">Phóng hơn 2× thì video có thể bị mờ.</p>}
+      {frame.scale > 2 && <p className="hint bar-warn">Phóng hơn 2× thì video có thể bị mờ.</p>}
       <p className="hint">
-        Tâm: {seg.center ? "cố định" : props.hasCursor ? "đi theo con trỏ chuột" : "giữa khung hình"}
+        Tâm:{" "}
+        {seg.keys.length > 0
+          ? `lia qua ${seg.keys.length + 1} khung (${seg.keys.length} điểm ◆)`
+          : seg.center
+            ? "cố định"
+            : props.hasCursor
+              ? "đi theo con trỏ chuột"
+              : "giữa khung hình"}
       </p>
       <div className="row">
-        <button className={"btn btn-small" + (props.picking ? " btn-rec" : "")} onClick={props.onPick}>
-          {props.picking ? "Bấm lên video…" : "Chọn tâm trên video"}
+        <button className="btn btn-small" onClick={props.onAddKey} title="Phím K: thêm một điểm tại chỗ đang phát, rồi kéo khung tới chỗ mới">
+          ◆ Thêm điểm
         </button>
-        {seg.center && (
+        {props.keySel !== null && seg.keys[props.keySel] && (
+          <button className="btn btn-small" onClick={props.onDeleteKey}>Xóa điểm này</button>
+        )}
+        {!following && (
           <button className="btn btn-small" onClick={props.onFollow}>
             {props.hasCursor ? "Theo con trỏ" : "Về giữa"}
           </button>
         )}
+      </div>
+      <span className="label">Tốc độ</span>
+      <div className="row" role="radiogroup" aria-label="Tốc độ zoom">
+        {SPEEDS.map(([v, label]) => (
+          <button key={v} className={"chip chip-toggle" + (seg.speed === v ? " on" : "")} aria-pressed={seg.speed === v} onClick={() => props.onSpeed(v)}>
+            {label}
+          </button>
+        ))}
       </div>
       <button className="btn btn-small btn-danger" onClick={props.onDelete}>Xóa đoạn zoom</button>
     </div>

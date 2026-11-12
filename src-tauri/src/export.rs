@@ -366,6 +366,44 @@ mod tests {
         assert!(near([f[i + 2], f[i + 1], f[i]], [255, 0, 0]), "bottom-right corner is still red: {:?}", [f[i + 2], f[i + 1], f[i]]);
     }
 
+    fn panning(cuts: Vec<Span>) -> EditDoc {
+        use hp_core::zoom::{Speed, ZoomDoc, ZoomKey, ZoomSegment};
+        let seg = ZoomSegment {
+            start_ms: 0,
+            end_ms: 4000,
+            scale: 2.0,
+            center: Some((0.25, 0.25)),
+            manual: true,
+            keys: vec![ZoomKey { t_ms: 2000, cx: 0.75, cy: 0.75, scale: 2.0 }],
+            speed: Speed::Instant,
+        };
+        EditDoc { cuts, zoom: ZoomDoc { enabled: true, segments: vec![seg], ..ZoomDoc::default() }, ..EditDoc::default() }
+    }
+
+    #[test]
+    fn keyframes_pan_the_export() {
+        let source = temp_path("exp-keys", "a.mp4");
+        make_quadrants(&source, 4, 320, 240);
+        let out = export(&source, &plan_doc(&source, &panning(vec![]))).unwrap();
+        let (mut dec, _) = VideoDecoder::open(&out).unwrap();
+        let early = centre_rgb(dec.frame_at(1000).unwrap(), 320, 240);
+        assert!(near(early, [255, 0, 0]), "top-left before the keyframe: {early:?}");
+        let late = centre_rgb(dec.frame_at(3000).unwrap(), 320, 240);
+        assert!(near(late, [255, 255, 255]), "bottom-right after it: {late:?}");
+    }
+
+    #[test]
+    fn keyframes_inside_a_cut_export() {
+        let source = temp_path("exp-keys-cut", "a.mp4");
+        make_quadrants(&source, 4, 320, 240);
+        let out = export(&source, &plan_doc(&source, &panning(vec![Span { start_ms: 1500, end_ms: 2500 }]))).unwrap();
+        let (frames, _, _) = probe(&out).unwrap();
+        assert!((89..=91).contains(&frames), "3 s kept: {frames}");
+        let (mut dec, _) = VideoDecoder::open(&out).unwrap();
+        let late = centre_rgb(dec.frame_at(2000).unwrap(), 320, 240);
+        assert!(near(late, [255, 255, 255]), "source 3000 ms (output 2000 ms) is past the keyframe: {late:?}");
+    }
+
     #[test]
     fn zoom_inside_a_cut_exports() {
         let source = temp_path("exp-zoom-cut", "a.mp4");

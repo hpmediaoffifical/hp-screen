@@ -355,3 +355,15 @@ html[data-window="region-border"], html[data-window="region-border"] body { back
 .cue-text { width: 100%; resize: vertical; font: inherit; background: var(--bg); color: inherit; border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; box-sizing: border-box; }
 .btn-tiny { padding: 2px 8px; font-size: 12px; }
 .consent-list { margin: 8px 0; padding-left: 18px; }
+
+/* Zoom frame on the preview and keyframes on the zoom track */
+.zframe-layer { position: absolute; inset: 0; z-index: 2; touch-action: none; }
+.zframe { position: absolute; box-sizing: border-box; border: 2px solid #fff; box-shadow: 0 0 0 9999px rgba(0, 0, 0, .45); cursor: move; }
+.zframe-label { position: absolute; left: 4px; top: 4px; font-size: 12px; font-weight: 600; color: #fff; background: rgba(0, 0, 0, .6); padding: 1px 6px; border-radius: 4px; pointer-events: none; }
+.zframe-handle { position: absolute; width: 12px; height: 12px; background: #fff; border: 1px solid rgba(0, 0, 0, .6); border-radius: 2px; }
+.zframe-nw { left: -7px; top: -7px; cursor: nwse-resize; }
+.zframe-se { right: -7px; bottom: -7px; cursor: nwse-resize; }
+.zframe-ne { right: -7px; top: -7px; cursor: nesw-resize; }
+.zframe-sw { left: -7px; bottom: -7px; cursor: nesw-resize; }
+.zkey { position: absolute; top: 50%; width: 9px; height: 9px; margin: -5px 0 0 -5px; background: #fff; border: 1px solid #1b2232; transform: rotate(45deg); cursor: ew-resize; z-index: 2; }
+.zkey.on { background: var(--warn); }

@@ -15,7 +15,7 @@ const CHIP_BOTTOM = 0.08;
 const CHIP_FONT = 0.032;
 const COLOURS: Record<MouseButton, string> = { left: "#FF5A36", right: "#3B82F6", middle: "#22C55E" };
 
-function cursorAt(fx: Effects, t: number): [number, number] | null {
+export function cursorAt(fx: Effects, t: number): [number, number] | null {
   const c = fx.cursor;
   if (c.length === 0) return null;
   if (t <= c[0][0]) return [c[0][1], c[0][2]];

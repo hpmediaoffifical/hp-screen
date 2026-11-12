@@ -8,17 +8,24 @@ interface Props {
   selected: number | null;
   playhead: number;
   onSelect: (index: number | null) => void;
+  /** The selected keyframe of the selected segment. */
+  selectedKey: number | null;
+  onSelectKey: (segment: number, key: number) => void;
+  onSeek: (ms: number) => void;
   /** `first` is true for the first change of a drag, so one drag is one undo step. */
   onChange: (segments: ZoomSegment[], first: boolean) => void;
 }
 
 type Drag =
   | { kind: "start" | "end" | "move"; index: number; grabMs: number; orig: ZoomSegment; moved: boolean }
-  | { kind: "create"; fromMs: number; index: number | null };
+  | { kind: "create"; fromMs: number; index: number | null }
+  | { kind: "key"; index: number; key: number; orig: ZoomSegment; moved: boolean };
 
 /** Grabbing a segment this close to its edge resizes it. */
 const EDGE_PX = 7;
 const MIN_LEN_MS = 200;
+/** Keyframes stay this far from each other and from the segment's ends. */
+const KEY_GAP = 51;
 
 /**
  * The Zoom track under the video track: one block per zoom segment. Drag an edge to change
@@ -52,6 +59,15 @@ export default function ZoomTrack(props: Props) {
     props.onSelect(index);
   };
 
+  const downOnKey = (e: React.PointerEvent, index: number, key: number) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    track.current?.setPointerCapture(e.pointerId);
+    drag.current = { kind: "key", index, key, orig: props.segments[index], moved: false };
+    props.onSelectKey(index, key);
+    props.onSeek(props.segments[index].keys[key].t_ms);
+  };
+
   const downOnTrack = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
     track.current?.setPointerCapture(e.pointerId);
@@ -77,6 +93,16 @@ export default function ZoomTrack(props: Props) {
     const first = !g.moved;
     g.moved = true;
     const o = g.orig;
+    if (g.kind === "key") {
+      // A keyframe moves between its neighbours, inside its segment.
+      const lo = (g.key > 0 ? o.keys[g.key - 1].t_ms : o.start_ms) + KEY_GAP;
+      const hi = (g.key < o.keys.length - 1 ? o.keys[g.key + 1].t_ms : o.end_ms) - KEY_GAP;
+      if (hi < lo) return;
+      const t = Math.min(Math.max(ms, lo), hi);
+      replace(g.index, { ...o, keys: o.keys.map((k, j) => (j === g.key ? { ...k, t_ms: t } : k)), manual: true }, first);
+      props.onSeek(t);
+      return;
+    }
     const len = o.end_ms - o.start_ms;
     let seg: ZoomSegment;
     // Dragging an edge drops the keyframes it passes; moving the segment carries them along.
@@ -110,6 +136,17 @@ export default function ZoomTrack(props: Props) {
             <span className="zseg-text">{s.scale.toFixed(1)}×</span>
           </div>
         ))}
+        {props.segments.flatMap((s, i) =>
+          s.keys.map((k, j) => (
+            <div
+              key={`k${i}-${j}`}
+              className={"zkey" + (i === props.selected && j === props.selectedKey ? " on" : "")}
+              style={{ left: pct(k.t_ms) }}
+              onPointerDown={(e) => downOnKey(e, i, j)}
+              title={`Điểm lia ${k.scale.toFixed(1)}× — kéo để đổi giờ, Delete để xóa`}
+            />
+          )),
+        )}
         <div className="track-head" style={{ left: pct(props.playhead) }} />
       </div>
     </div>

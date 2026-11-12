@@ -154,6 +154,14 @@ Cột "Máy" ghi những gì kiểm thử tự động đã phủ (video mẫu d
 | Z6 | Xuất MP4: chỗ zoom giống hệt xem trước; vòng click phóng theo, chip phím thì không | Đạt cho khung hình (`zoomed_export_shows_the_zoomed_area`) | |
 | Z7 | Zoom sát mép hoặc góc màn hình: không lộ phần ngoài video | Đạt (`corner_center_is_kept_inside_the_video`) | |
 | Z8 | Video không có nhật ký thao tác: vẫn thêm zoom bằng tay được | — | |
+| Z9 | Bấm một đoạn trên rãnh Zoom: video dừng, hiện toàn bộ hình với khung zoom; kéo giữa khung để dời, bấm Phát thì thấy zoom đúng vùng đó | Đạt cho phép tính khung (`zoomMath.test.ts`) | |
+| Z10 | Kéo góc khung: phóng to/nhỏ trong 1–4×, góc đối diện đứng yên, khung không ra ngoài hình; ở 9:16 "Lấp đầy" khung vẫn đúng | Đạt (`resize keeps the opposite corner`, `frameRoundTripsInFillMode`) | |
+| Z11 | Trong một đoạn, tua tới giữa đoạn, bấm "◆ Thêm điểm" (hoặc K), kéo khung sang chỗ khác: camera lia từ khung đầu sang khung mới; thêm điểm thứ ba lia tiếp | Đạt cho bản xuất (`keyframes_pan_the_export`) | |
+| Z12 | Hình thoi trên rãnh Zoom: kéo đổi giờ, bấm để tua tới, Delete xóa điểm (Delete lần nữa mới xóa cả đoạn) | — | |
+| Z13 | Tốc độ Chậm / Vừa / Nhanh / Tức thì: thấy khác rõ; Tức thì là cắt thẳng | Đạt (`slow_is_slower_and_fast_is_faster`, `instant_jumps_to_the_target`) | |
+| Z14 | Bấm Z tại một chỗ: thêm đoạn 3 giây ở vị trí con trỏ chuột lúc đó và được chọn ngay; gần cuối video thì báo không đủ chỗ | Đạt (`zAtTheEndAddsNothing`) | |
+| Z15 | Tự động Ít / Vừa / Nhiều: số đoạn ít dần ở mức Ít; không còn zoom vào thanh tác vụ khi quay toàn màn hình; "Xóa các đoạn tự động" giữ đoạn vàng | Đạt (`low_level_needs_more_than_a_lone_click`, `edge_clicks_are_ignored_when_guarded`) | |
+| Z16 | Quay mới: click vào ô rồi gõ chữ một lúc: zoom giữ trong lúc gõ và trở ra khoảng 1 giây sau; rê chuột đi xa thì trở ra sớm | Đạt (`typing_keeps_the_zoom`, `leaving_the_view_ends_early`, `plain_keys_leave_a_type_mark_without_the_key`) | |
 
 ## Khung hình và GIF (giai đoạn 2, bước 6)
 
