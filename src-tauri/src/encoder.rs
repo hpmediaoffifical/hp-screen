@@ -31,7 +31,14 @@ pub struct Mp4Encoder {
     width: u32,
     height: u32,
     frame_duration: i64,
+    /// The video encoder's settings, to ask for key frames.
+    codec: Option<ICodecAPI>,
+    /// The next key frame is forced at or after this time (100 ns).
+    next_key: i64,
 }
+
+/// A key frame at least this often (100 ns), so the edit page seeks (scrubs) quickly.
+const KEY_FRAME_EVERY: i64 = 10_000_000;
 
 // SAFETY: IMFSinkWriter is free-threaded (it lives in the MTA and serializes its own calls);
 // every thread that touches it calls `init_thread` first.
@@ -82,11 +89,18 @@ impl Mp4Encoder {
             let video_out = video_type(&MFVideoFormat_H264, cfg)?;
             video_out.SetUINT32(&MF_MT_AVG_BITRATE, cfg.video_bitrate)?;
             video_out.SetUINT32(&MF_MT_MPEG2_PROFILE, H264_PROFILE_HIGH)?;
+            // A key frame every second, so the edit page can seek (scrub) quickly.
+            video_out.SetUINT32(&MF_MT_MAX_KEYFRAME_SPACING, cfg.fps.max(1))?;
             let video_stream = writer.AddStream(&video_out)?;
             let video_in = video_type(&MFVideoFormat_RGB32, cfg)?;
             // Positive stride: rows are stored top-down, as Windows Graphics Capture delivers them.
             video_in.SetUINT32(&MF_MT_DEFAULT_STRIDE, cfg.width * 4)?;
             writer.SetInputMediaType(video_stream, &video_in, None)?;
+            // Encoders (hardware ones especially) ignore MF_MT_MAX_KEYFRAME_SPACING: ask the encoder too.
+            let codec = codec_api(&writer, video_stream);
+            if let Some(c) = &codec {
+                let _ = c.SetValue(&CODECAPI_AVEncMPVGOPSize, &variant_u4(cfg.fps.max(1)));
+            }
 
             let audio_stream = if cfg.audio {
                 let audio_out = audio_type(&MFAudioFormat_AAC, 16)?;
@@ -109,6 +123,8 @@ impl Mp4Encoder {
                 width: cfg.width,
                 height: cfg.height,
                 frame_duration: 10_000_000 / cfg.fps.max(1) as i64,
+                codec,
+                next_key: 0,
             })
         }
     }
@@ -131,6 +147,13 @@ impl Mp4Encoder {
                 dst.copy_from_slice(&src[..row]);
             }
             let _ = buffer.Unlock();
+            // Many encoders keep their own long GOP whatever they are told: force a key frame every second.
+            if time_100ns >= self.next_key {
+                if let Some(c) = &self.codec {
+                    let _ = c.SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &variant_u4(1));
+                }
+                self.next_key = time_100ns + KEY_FRAME_EVERY;
+            }
             self.write_sample(self.video_stream, &buffer, (row * rows) as u32, time_100ns, self.frame_duration)
         }
     }
@@ -203,6 +226,27 @@ unsafe fn audio_type(subtype: &GUID, bits: u32) -> windows::core::Result<IMFMedi
 
 /// Reads a video back and reports (decodable video frames, time of the last one in 100 ns,
 /// decodable audio samples). Used by the desktop tests to check what was actually written.
+/// The encoder behind a sink writer stream, when it exposes its settings.
+unsafe fn codec_api(writer: &IMFSinkWriter, stream: u32) -> Option<ICodecAPI> {
+    use windows::core::Interface;
+    // SAFETY: the out pointer receives an AddRef'd ICodecAPI or stays null.
+    unsafe {
+        let mut raw: *mut core::ffi::c_void = std::ptr::null_mut();
+        writer.GetServiceForStream(stream, &GUID::zeroed(), &ICodecAPI::IID, &mut raw).ok()?;
+        (!raw.is_null()).then(|| ICodecAPI::from_raw(raw))
+    }
+}
+
+/// A VT_UI4 VARIANT.
+fn variant_u4(v: u32) -> windows::Win32::System::Variant::VARIANT {
+    use windows::Win32::System::Variant::{VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_UI4};
+    VARIANT {
+        Anonymous: VARIANT_0 {
+            Anonymous: core::mem::ManuallyDrop::new(VARIANT_0_0 { vt: VT_UI4, wReserved1: 0, wReserved2: 0, wReserved3: 0, Anonymous: VARIANT_0_0_0 { ulVal: v } }),
+        },
+    }
+}
+
 #[cfg(test)]
 pub fn probe(path: &std::path::Path) -> Result<(u32, i64, u32), String> {
     init_thread();
@@ -229,5 +273,50 @@ pub fn probe(path: &std::path::Path) -> Result<(u32, i64, u32), String> {
         let (video, last) = count(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32);
         let (audio, _) = count(MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32);
         Ok((video, last, audio))
+    }
+}
+
+#[cfg(test)]
+mod keyframe_tests {
+    use super::*;
+    use crate::test_media::{make_sample, temp_path};
+
+    /// Times (100 ns) of the key frames of the first video stream, read without decoding.
+    fn keyframe_times(path: &std::path::Path) -> Vec<i64> {
+        init_thread();
+        // SAFETY: Media Foundation is started; out pointers are valid.
+        unsafe {
+            let reader = MFCreateSourceReaderFromURL(&HSTRING::from(path.as_os_str()), None).unwrap();
+            let stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
+            let mut out = Vec::new();
+            loop {
+                let (mut flags, mut time, mut sample) = (0u32, 0i64, None);
+                if reader.ReadSample(stream, 0, None, Some(&mut flags), Some(&mut time), Some(&mut sample)).is_err() {
+                    break;
+                }
+                let Some(s) = sample else { break };
+                // Annex B: NAL units after 00 00 01 start codes; an IDR slice (type 5) makes a key frame.
+                let buf = s.ConvertToContiguousBuffer().unwrap();
+                let (mut ptr, mut len) = (std::ptr::null_mut(), 0u32);
+                buf.Lock(&mut ptr, None, Some(&mut len)).unwrap();
+                let bytes = std::slice::from_raw_parts(ptr, len as usize);
+                let idr = bytes.windows(4).any(|w| w[0] == 0 && w[1] == 0 && w[2] == 1 && w[3] & 0x1f == 5);
+                buf.Unlock().unwrap();
+                if idr {
+                    out.push(time);
+                }
+            }
+            out
+        }
+    }
+
+    #[test]
+    fn videos_have_a_key_frame_every_second_for_smooth_seeking() {
+        let path = temp_path("enc-gop", "a.mp4");
+        make_sample(&path, 5, 320, 240, false);
+        let keys = keyframe_times(&path);
+        assert!(keys.len() >= 5, "{keys:?}");
+        let widest = keys.windows(2).map(|w| w[1] - w[0]).max().unwrap_or(0);
+        assert!(widest <= 10_500_000, "longest gap between key frames {} ms", widest / 10_000);
     }
 }

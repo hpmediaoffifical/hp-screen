@@ -55,6 +55,9 @@ const Preview = forwardRef<PreviewHandle, Props>(function Preview(props, ref) {
   const live = useRef(props);
   live.current = props;
   const view = useRef<View>([0, 0, props.srcW, props.srcH]);
+  // Where the latest seek is going. While the video is still seeking, further seeks wait here
+  // (only the newest is kept), so dragging the playhead never cancels a seek half way.
+  const target = useRef<number | null>(null);
   const repaint = useRef<() => void>(() => {});
   useEffect(() => repaint.current(), [props.draw, props.drawFixed, props.camera, props.layout, props.frameEdit, frame]);
 
@@ -88,16 +91,16 @@ const Preview = forwardRef<PreviewHandle, Props>(function Preview(props, ref) {
       const p = live.current;
       const ms = v.currentTime * 1000;
       if (!v.paused) {
-        const target = keptTime(p.keep, ms);
-        if (target === null) {
+        const kept = keptTime(p.keep, ms);
+        if (kept === null) {
           v.pause();
           const last = p.keep[p.keep.length - 1];
           if (last) v.currentTime = Math.max(0, last.end_ms - 1) / 1000;
-        } else if (target - ms > 1) {
-          v.currentTime = target / 1000;
+        } else if (kept - ms > 1) {
+          v.currentTime = kept / 1000;
         }
       }
-      p.onTime(v.currentTime * 1000);
+      p.onTime(target.current ?? v.currentTime * 1000);
       paint();
     };
     const fit = (c: HTMLCanvasElement | null, w: number, h: number) => {
@@ -158,8 +161,14 @@ const Preview = forwardRef<PreviewHandle, Props>(function Preview(props, ref) {
     };
     loop();
     const onSeeked = () => {
-      live.current.onTime(v.currentTime * 1000);
       paint();
+      const want = target.current;
+      if (want !== null && Math.abs(v.currentTime * 1000 - want) > 1) {
+        v.currentTime = want / 1000;
+        return;
+      }
+      target.current = null;
+      live.current.onTime(v.currentTime * 1000);
     };
     v.addEventListener("seeked", onSeeked);
     v.addEventListener("loadeddata", paint);
@@ -177,8 +186,9 @@ const Preview = forwardRef<PreviewHandle, Props>(function Preview(props, ref) {
       const v = video.current;
       if (!v) return;
       const ms = v.currentTime * 1000;
-      const target = playFrom(live.current.keep, ms);
-      if (Math.abs(target - ms) > 1) v.currentTime = target / 1000;
+      target.current = null;
+      const from = playFrom(live.current.keep, ms);
+      if (Math.abs(from - ms) > 1) v.currentTime = from / 1000;
       void v.play().catch(() => {});
     },
     pause() {
@@ -189,7 +199,13 @@ const Preview = forwardRef<PreviewHandle, Props>(function Preview(props, ref) {
       else this.pause();
     },
     seek(ms: number) {
-      if (video.current) video.current.currentTime = Math.max(0, ms) / 1000;
+      const v = video.current;
+      if (!v) return;
+      const t = Math.max(0, ms);
+      target.current = t;
+      // The playhead follows the hand at once; the picture follows as fast as the video seeks.
+      live.current.onTime(t);
+      if (!v.seeking) v.currentTime = t / 1000;
     },
     isPlaying() {
       return !!video.current && !video.current.paused;
