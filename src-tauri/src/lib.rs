@@ -24,6 +24,7 @@ mod live_cmds;
 mod camera;
 mod asr;
 mod subs_cmds;
+mod ui_probe;
 #[cfg(test)]
 mod test_media;
 

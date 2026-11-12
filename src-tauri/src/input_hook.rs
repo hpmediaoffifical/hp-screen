@@ -4,6 +4,7 @@
 //! The hook callbacks do nothing but forward raw events; filtering (privacy, move rate) and
 //! file writing happen on a separate thread so input is never delayed.
 use crate::clock;
+use crate::ui_probe::{Ask, UiProbe, rel_rect};
 use hp_core::geometry::Rect;
 use hp_core::input_log::{Button, Event, Header, KeyStroke, MoveSampler, loggable_combo, to_line};
 use hp_core::timeline::Timeline;
@@ -32,6 +33,8 @@ enum Raw {
     Mouse { time: i64, message: u32, x: i32, y: i32, wheel: i32 },
     KeyDown { time: i64, key: KeyStroke },
     KeyUp { vk: u32 },
+    /// Another window came to the front: its visible box (left, top, right, bottom).
+    Window { time: i64, ltrb: [i32; 4] },
 }
 
 thread_local! {
@@ -100,6 +103,16 @@ fn run_hooks(tx: Sender<Raw>, ready: Sender<Result<u32, String>>) {
     unsafe {
         let mouse = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), None, 0);
         let keyboard = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), None, 0);
+        // Foreground window changes (other applications only), delivered through this thread's loop.
+        let foreground = windows::Win32::UI::Accessibility::SetWinEventHook(
+            windows::Win32::UI::WindowsAndMessaging::EVENT_SYSTEM_FOREGROUND,
+            windows::Win32::UI::WindowsAndMessaging::EVENT_SYSTEM_FOREGROUND,
+            None,
+            Some(foreground_proc),
+            0,
+            0,
+            windows::Win32::UI::WindowsAndMessaging::WINEVENT_OUTOFCONTEXT | windows::Win32::UI::WindowsAndMessaging::WINEVENT_SKIPOWNPROCESS,
+        );
         match (&mouse, &keyboard) {
             (Ok(_), Ok(_)) => {
                 let _ = ready.send(Ok(GetCurrentThreadId()));
@@ -113,6 +126,9 @@ fn run_hooks(tx: Sender<Raw>, ready: Sender<Result<u32, String>>) {
         }
         for hook in [mouse, keyboard].into_iter().flatten() {
             let _ = UnhookWindowsHookEx(hook);
+        }
+        if !foreground.is_invalid() {
+            let _ = windows::Win32::UI::Accessibility::UnhookWinEvent(foreground);
         }
     }
     SENDER.with(|s| s.borrow_mut().take());
@@ -166,6 +182,33 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
 
+unsafe extern "system" fn foreground_proc(
+    _hook: windows::Win32::UI::Accessibility::HWINEVENTHOOK,
+    _event: u32,
+    hwnd: windows::Win32::Foundation::HWND,
+    id_object: i32,
+    _id_child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
+    if id_object != 0 || hwnd.is_invalid() {
+        return; // OBJID_WINDOW only
+    }
+    let mut r = RECT::default();
+    // SAFETY: `r` is a RECT of the size passed; any window handle value is accepted.
+    let ok = unsafe { DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &mut r as *mut RECT as *mut _, std::mem::size_of::<RECT>() as u32) }.is_ok();
+    if ok && r.right > r.left && r.bottom > r.top {
+        send(Raw::Window { time: clock::now_100ns(), ltrb: [r.left, r.top, r.right, r.bottom] });
+    }
+}
+
+/// Typing asks UI Automation for the field at most this often (ms).
+const FOCUS_ASK_MS: i64 = 1000;
+/// When the recording stops, UI Automation answers are awaited this long at most.
+const PROBE_WAIT: Duration = Duration::from_secs(1);
+
 fn write_log(
     mut out: BufWriter<std::fs::File>,
     header: Header,
@@ -179,6 +222,8 @@ fn write_log(
     let mut sampler = MoveSampler::new();
     let mut held_key: Option<u32> = None; // suppresses auto-repeat while a key stays down
     let mut last_type: Option<i64> = None;
+    let mut last_focus_ask: Option<i64> = None;
+    let probe = UiProbe::start();
     let mut last_flush = Instant::now();
     let video_ms = |time: i64| timeline.lock().unwrap_or_else(|e| e.into_inner()).video_ms(time);
 
@@ -188,7 +233,14 @@ fn write_log(
             Err(RecvTimeoutError::Timeout) => None,
             Err(RecvTimeoutError::Disconnected) => break,
         };
+        if let Some(Raw::Mouse { time, message: WM_LBUTTONDOWN, x, y, .. }) = &raw
+            && !skip_clicks.load(Ordering::Relaxed)
+            && let Some(t) = video_ms(*time)
+        {
+            probe.ask(Ask::Point { t, x: *x, y: *y });
+        }
         let event = match raw {
+            Some(Raw::Window { time, ltrb }) => video_ms(time).zip(rel_rect(ltrb, origin)).map(|(t, r)| Event::Win { t, r }),
             Some(Raw::Mouse { time, message, x, y, wheel }) => video_ms(time).and_then(|t| {
                 let (x, y) = (x - origin.x, y - origin.y);
                 match message {
@@ -223,15 +275,36 @@ fn write_log(
             }
             None => None,
         };
-        if let Some(event) = event.filter(|e| keep_event(e, skip_clicks.load(Ordering::Relaxed))) {
+        let drawing = skip_clicks.load(Ordering::Relaxed);
+        if let Some(event) = event.filter(|e| keep_event(e, drawing)) {
+            // Typing: where the keys go (the field), at most once a second.
+            if let Event::Type { t } = event
+                && last_focus_ask.is_none_or(|l| t - l >= FOCUS_ASK_MS)
+            {
+                last_focus_ask = Some(t);
+                probe.ask(Ask::Focus { t });
+            }
             let _ = writeln!(out, "{}", to_line(&event));
+        }
+        for f in probe.take() {
+            write_found(&mut out, &f, origin);
         }
         if last_flush.elapsed() >= FLUSH_INTERVAL {
             let _ = out.flush();
             last_flush = Instant::now();
         }
     }
+    for f in probe.finish(PROBE_WAIT) {
+        write_found(&mut out, &f, origin);
+    }
     let _ = out.flush();
+}
+
+/// Writes a UI Automation box as an `el` event (only the box), when it is inside the capture.
+fn write_found(out: &mut BufWriter<std::fs::File>, f: &crate::ui_probe::Found, origin: Rect) {
+    if let Some(r) = rel_rect(f.ltrb, origin) {
+        let _ = writeln!(out, "{}", to_line(&Event::El { t: f.t, k: f.kind.to_string(), r }));
+    }
 }
 
 /// Whether an event goes into the log: button presses and keys (Esc leaves drawing) are left
@@ -303,6 +376,24 @@ mod filter_tests {
         for vk in [0x10, 0x11, 0x12, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x5B, 0x5C, 0x14] {
             assert_eq!(typing_tick(&plain(vk), false, &mut None, 0), None, "modifier {vk:#x}");
         }
+    }
+
+    #[test]
+    fn window_switches_are_logged_relative_to_the_capture_with_no_title() {
+        let path = crate::test_media::temp_path("hook-win", "a.input.jsonl");
+        let region = Rect { x: 100, y: 50, w: 800, h: 600 };
+        let header = Header { v: 1, mode: "monitor".into(), region, width: 800, height: 600, fps: 30 };
+        let (tx, rx) = mpsc::channel::<Raw>();
+        // 1000 ticks a second, started at tick 0: tick 2000 is video 2000 ms.
+        let timeline = Arc::new(Mutex::new(Timeline::new(0, 1000)));
+        tx.send(Raw::Window { time: 2000, ltrb: [150, 60, 450, 360] }).unwrap();
+        tx.send(Raw::Window { time: 2500, ltrb: [2000, 0, 2400, 300] }).unwrap(); // another monitor
+        drop(tx);
+        let file = std::fs::File::create(&path).unwrap();
+        write_log(BufWriter::new(file), header, region, rx, timeline, vec![], Arc::new(AtomicBool::new(false)));
+        let text = std::fs::read_to_string(&path).unwrap();
+        let log = hp_core::input_log::parse_log(&text);
+        assert_eq!(log.events, vec![Event::Win { t: 2000, r: [50, 10, 300, 300] }], "{text}");
     }
 
     #[test]
