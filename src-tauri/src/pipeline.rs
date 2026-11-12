@@ -32,6 +32,8 @@ pub struct PipelineConfig {
     pub audio: Option<AudioConfig>,
     /// Strokes (and the webcam) drawn into every frame.
     pub live: Option<Arc<LiveLayer>>,
+    /// Capture the Windows cursor (false when a smooth cursor is drawn when editing).
+    pub cursor: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -116,7 +118,7 @@ impl Pipeline {
         let latest = Arc::new(Mutex::new(Latest::default()));
 
         let sink = LatestSink { latest: latest.clone(), events: events.clone() };
-        let capture = capture::start_capture(&cfg.target, Box::new(sink))?;
+        let capture = capture::start_capture(&cfg.target, Box::new(sink), cfg.cursor)?;
 
         let audio = match cfg.audio {
             Some(audio_cfg) => {
@@ -368,7 +370,7 @@ mod desktop_tests {
             let seen = seen.clone();
             Arc::new(move |e| seen.lock().unwrap().push(e))
         };
-        let cfg = PipelineConfig { target, path: path.clone(), thumb: None, fps: 30, quality: Quality::Standard, audio, live: None };
+        let cfg = PipelineConfig { target, path: path.clone(), thumb: None, fps: 30, quality: Quality::Standard, audio, live: None, cursor: true };
         let pipeline = Pipeline::start(cfg, events).expect("pipeline starts");
         script(&pipeline);
         let stats = pipeline.finish().expect("pipeline finishes");
@@ -394,7 +396,7 @@ mod desktop_tests {
         let (cx, cy) = ((area.w / 2) as f32, (area.h / 2) as f32);
         live.upsert_stroke(Stroke { id: 1, tool: Tool::Pen, color: COLORS[0], width: 14.0, points: vec![(cx - 100.0, cy), (cx + 100.0, cy)], finished_ms: None });
         let events: EventFn = Arc::new(|_| {});
-        let cfg = PipelineConfig { target, path: path.clone(), thumb: None, fps: 30, quality: Quality::Standard, audio: None, live: Some(live) };
+        let cfg = PipelineConfig { target, path: path.clone(), thumb: None, fps: 30, quality: Quality::Standard, audio: None, live: Some(live), cursor: true };
         let pipeline = Pipeline::start(cfg, events).expect("pipeline starts");
         std::thread::sleep(Duration::from_secs(2));
         let stats = pipeline.finish().expect("pipeline finishes");
@@ -497,6 +499,7 @@ mod size_tests {
                 quality: Quality::Standard,
                 audio: Some(AudioConfig { system: true, mic: true }),
                 live: None,
+                cursor: true,
             };
             let pipeline = Pipeline::start(cfg, events).expect("pipeline starts");
             std::thread::sleep(Duration::from_secs(2));

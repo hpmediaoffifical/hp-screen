@@ -25,6 +25,7 @@ mod camera;
 mod asr;
 mod subs_cmds;
 mod ui_probe;
+mod cursor_shape;
 #[cfg(test)]
 mod test_media;
 

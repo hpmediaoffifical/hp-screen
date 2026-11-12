@@ -60,6 +60,7 @@ pub fn run_export_gif(source: &Path, out: &Path, plan: &Plan, progress: &mut dyn
         let (w, h) = plan.out_size();
         let mut gif = crate::gif_out::GifWriter::new(&part, w, h, plan.fps())?;
         let mut compositor = Compositor::new(w, h, Device::Hardware)?;
+        compositor.set_cursor_shapes(plan.cursor_shapes());
         let total = plan.frames();
         for n in 0..total {
             if cancel.load(Ordering::Relaxed) {
@@ -164,7 +165,9 @@ fn write_all(
             (src, info.width * 4)
         } else {
             if compositor.is_none() {
-                compositor = Some(Compositor::new(out_w, out_h, Device::Hardware)?);
+                let mut c = Compositor::new(out_w, out_h, Device::Hardware)?;
+                c.set_cursor_shapes(plan.cursor_shapes());
+                compositor = Some(c);
             }
             let c = compositor.as_mut().expect("just created");
             let views: &[(f32, f32, f32, f32)] = if fp.blur_views.is_empty() { std::slice::from_ref(&fp.view) } else { &fp.blur_views };
@@ -404,6 +407,32 @@ mod tests {
         let still = changed(&sharp_frames.1, &decoded(&blurred, 400));
         assert!(moving > 200, "zooming in at 1.2 s: the colour edges are smeared ({moving} values changed)");
         assert!(still < 50, "a still frame is the same ({still} values changed)");
+    }
+
+    #[test]
+    fn a_recording_without_the_windows_cursor_exports_with_the_drawn_one() {
+        use hp_core::geometry::Rect;
+        use hp_core::input_log::{Event, Header, ParsedLog};
+        let source = temp_path("exp-cursor", "a.mp4");
+        make_sample(&source, 2, 320, 240, false); // red for the first second
+        let img = image::RgbaImage::from_pixel(6, 6, image::Rgba([0, 255, 0, 255]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let header = Header { v: 1, mode: "monitor".into(), region: Rect { x: 0, y: 0, w: 320, h: 240 }, width: 320, height: 240, fps: 30, cursor: true };
+        let events = vec![
+            Event::Shape { id: 1, hx: 0, hy: 0, png: hp_core::cursor::base64_encode(png.get_ref()) },
+            Event::Cur { t: 0, id: 1 },
+            Event::Move { t: 0, x: 100, y: 100 },
+        ];
+        let fx = hp_core::effects::build_effects(&ParsedLog { header: Some(header), events }, 320, 240);
+        let (_, info) = VideoDecoder::open(&source).unwrap();
+        let src = Source { width: info.width, height: info.height, duration_ms: info.duration_ms, fps: info.fps };
+        let out = export(&source, &Plan::new(src, &EditDoc::default(), Some(fx))).unwrap();
+        let (mut dec, _) = VideoDecoder::open(&out).unwrap();
+        let f = dec.frame_at(500).unwrap();
+        let i = ((104 * 320 + 104) * 4) as usize;
+        let px = [f[i + 2], f[i + 1], f[i]];
+        assert!(px[1] > 200 && px[0] < 80, "the green cursor (6 px at 1.5x from its tip at 100,100): {px:?}");
     }
 
     #[test]

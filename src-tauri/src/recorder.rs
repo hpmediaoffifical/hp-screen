@@ -226,6 +226,8 @@ impl Inner {
                 width: region.w & !1,
                 height: region.h & !1,
                 fps: settings.fps,
+                // A smooth cursor needs the log: it is only drawn when the log is kept.
+                cursor: settings.smooth_cursor,
             })
         } else {
             None
@@ -239,6 +241,7 @@ impl Inner {
             audio: (settings.system_audio || settings.mic)
                 .then_some(crate::audio::AudioConfig { system: settings.system_audio, mic: settings.mic }),
             live: Some(self.live.clone()),
+            cursor: !(settings.smooth_cursor && log_header.is_some()),
         };
         self.reset_live();
         self.live.set_hold_ms(settings.draw_fade_secs as i64 * 1000);

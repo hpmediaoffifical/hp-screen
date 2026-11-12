@@ -208,9 +208,10 @@ pub fn visible_rect(target: &Target) -> Result<Rect, String> {
     Ok(Rect { x: r.left, y: r.top, w: (r.right - r.left) as u32, h: (r.bottom - r.top) as u32 })
 }
 
-/// Starts capturing video frames: even dimensions, cursor included, no yellow border.
-pub fn start_capture(target: &Target, sink: Box<dyn FrameSink>) -> Result<CaptureSession, String> {
-    start(target, sink, true)
+/// Starts capturing video frames: even dimensions, no yellow border, the Windows cursor
+/// included unless `cursor` is false (HP Screen then draws a smooth one when editing).
+pub fn start_capture(target: &Target, sink: Box<dyn FrameSink>, cursor: bool) -> Result<CaptureSession, String> {
+    start(target, sink, true, cursor)
 }
 
 /// Captures a single frame at full physical resolution as RGBA, without the cursor.
@@ -234,28 +235,28 @@ pub fn grab_frame(target: &Target) -> Result<image::RgbaImage, String> {
     }
 
     let (tx, rx) = mpsc::channel();
-    let session = start(target, Box::new(OneShot(Some(tx))), false)?;
+    let session = start(target, Box::new(OneShot(Some(tx))), false, false)?;
     let image = rx.recv_timeout(Duration::from_secs(3)).map_err(|_| "Không nhận được khung hình nào để chụp".to_string());
     drop(session);
     image
 }
 
-fn start(target: &Target, sink: Box<dyn FrameSink>, video: bool) -> Result<CaptureSession, String> {
+fn start(target: &Target, sink: Box<dyn FrameSink>, video: bool, cursor: bool) -> Result<CaptureSession, String> {
     let whole = if video { Crop::Even } else { Crop::Exact };
     match target {
-        Target::Monitor { index } => start_item(monitor_at(*index)?.0, sink, whole, video, false),
+        Target::Monitor { index } => start_item(monitor_at(*index)?.0, sink, whole, cursor, false),
         Target::Region { monitor, rect } => {
             let (item, monitor_rect) = monitor_at(*monitor)?;
             let crop = if video { crop_in_monitor(*rect, monitor_rect) } else { clamp_in_monitor(*rect, monitor_rect) }
                 .ok_or("Vùng chọn quá nhỏ hoặc nằm ngoài màn hình")?;
-            start_item(item, sink, Crop::Fixed(crop), video, false)
+            start_item(item, sink, Crop::Fixed(crop), cursor, false)
         }
         Target::Window { hwnd } => {
             let window = Window::from_raw_hwnd(*hwnd as *mut _);
             if !window.is_valid() {
                 return Err("Cửa sổ đã chọn không còn tồn tại hoặc không quay được".to_string());
             }
-            start_item(window, sink, whole, video, true)
+            start_item(window, sink, whole, cursor, true)
         }
     }
 }

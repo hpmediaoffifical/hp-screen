@@ -12,6 +12,27 @@ export interface Span {
 export interface EffectToggles {
   clicks: boolean;
   keys: boolean;
+  /** Draw the smooth cursor (recordings made without the Windows cursor). */
+  cursor: boolean;
+  /** Its size, 1–3 times. */
+  cursor_size: number;
+}
+
+/** One sample of the drawn cursor (hp-core::cursor::CursorSample), video pixels. */
+export interface CursorSample {
+  t_ms: number;
+  x: number;
+  y: number;
+  alpha: number;
+  press: number;
+}
+
+/** A cursor shape: hot spot and base64 PNG. */
+export interface CursorShape {
+  id: number;
+  hx: number;
+  hy: number;
+  png: string;
 }
 
 /** A keyframe inside a zoom segment (hp-core::zoom::ZoomKey): from here the camera aims at this frame. */
@@ -141,6 +162,12 @@ export interface Effects {
   chips: { start_ms: number; end_ms: number; text: string }[];
   /** [ms, x, y] */
   cursor: [number, number, number][];
+  /** The video has no Windows cursor: HP Screen draws a smooth one. */
+  drawn_cursor: boolean;
+  shapes: CursorShape[];
+  /** [ms, shape id]; 0 is hidden. */
+  cursor_ids: [number, number][];
+  smooth: CursorSample[];
 }
 
 export interface VideoInfo {

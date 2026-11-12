@@ -219,6 +219,17 @@ export default function SettingsPage() {
           checked={settings.input_log}
           onChange={(input_log) => save({ input_log })}
         />
+        <Check
+          label="Con trỏ mượt"
+          hint={
+            settings.input_log
+              ? "Quay không có con trỏ Windows, rồi vẽ lại con trỏ mượt, to hơn và tự ẩn khi đứng yên trong trang Chỉnh sửa. File quay gốc sẽ không có chuột: hãy xuất qua trang Chỉnh sửa."
+              : "Cần bật nhật ký thao tác ở trên."
+          }
+          checked={settings.smooth_cursor && settings.input_log}
+          disabled={!settings.input_log}
+          onChange={(smooth_cursor) => save({ smooth_cursor })}
+        />
         <Check label="Khởi động HP Screen cùng Windows" checked={settings.autostart} onChange={(autostart) => save({ autostart })} />
       </Group>
     </section>
@@ -260,10 +271,10 @@ function Choice(props: { name: string; value: string; options: { value: string; 
   );
 }
 
-function Check(props: { label: string; hint?: string; checked: boolean; onChange: (checked: boolean) => void }) {
+function Check(props: { label: string; hint?: string; checked: boolean; disabled?: boolean; onChange: (checked: boolean) => void }) {
   return (
     <label className="check">
-      <input type="checkbox" checked={props.checked} onChange={(e) => props.onChange(e.target.checked)} />
+      <input type="checkbox" checked={props.checked} disabled={props.disabled} onChange={(e) => props.onChange(e.target.checked)} />
       <span>
         {props.label}
         {props.hint && <span className="hint check-hint">{props.hint}</span>}

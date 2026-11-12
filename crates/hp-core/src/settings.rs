@@ -43,6 +43,8 @@ pub struct Settings {
     /// One of `DRAW_FADE_CHOICES`.
     pub draw_fade_secs: u32,
     pub webcam: crate::webcam::WebcamSettings,
+    /// Record without the Windows cursor and draw a smooth one when editing (needs the input log).
+    pub smooth_cursor: bool,
 }
 
 impl Default for Settings {
@@ -66,6 +68,7 @@ impl Default for Settings {
             hotkey_draw: DEFAULT_HOTKEY_DRAW.to_string(),
             draw_fade_secs: 3,
             webcam: crate::webcam::WebcamSettings::default(),
+            smooth_cursor: false,
         }
     }
 }

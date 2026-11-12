@@ -36,6 +36,8 @@ pub struct Compositor {
     /// The averaged frame of a motion-blurred render, and its running sum (kept between frames).
     blended: Vec<u8>,
     blend_sum: Vec<u32>,
+    /// Drawn cursor shapes by id: bitmap, size and hot spot (pixels).
+    cursors: std::collections::HashMap<u32, (ID2D1Bitmap1, f32, f32, f32, f32)>,
     text: IDWriteFactory,
     chip_format: IDWriteTextFormat,
     /// Chip font size in pixels.
@@ -161,6 +163,7 @@ impl Compositor {
                 out: vec![0; (out_w * out_h * 4) as usize],
                 blended: Vec::new(),
                 blend_sum: Vec::new(),
+                cursors: std::collections::HashMap::new(),
                 text,
                 chip_format,
                 chip_size,
@@ -248,6 +251,58 @@ impl Compositor {
             let _ = self.readback.Unmap();
         }
         Ok(&self.out)
+    }
+
+    /// The shapes of a drawn cursor (from the input log). A shape that cannot be read is
+    /// skipped; the cursor then shows as a plain arrow.
+    pub fn set_cursor_shapes(&mut self, shapes: &[hp_core::cursor::CursorShape]) {
+        for sh in shapes {
+            let Some(img) = hp_core::cursor::base64_decode(&sh.png).and_then(|png| image::load_from_memory(&png).ok()).map(|i| i.to_rgba8()) else { continue };
+            let (w, h) = img.dimensions();
+            // Premultiplied BGRA, as Direct2D draws it.
+            let bgra: Vec<u8> = img
+                .pixels()
+                .flat_map(|p| {
+                    let a = p[3] as u32;
+                    let m = |c: u8| ((c as u32 * a + 127) / 255) as u8;
+                    [m(p[2]), m(p[1]), m(p[0]), p[3]]
+                })
+                .collect();
+            // SAFETY: `bgra` holds `h` rows of `w * 4` bytes.
+            let bmp = unsafe {
+                self.ctx.CreateBitmap(D2D_SIZE_U { width: w, height: h }, Some(bgra.as_ptr() as *const _), w * 4, &bitmap_props(D2D1_BITMAP_OPTIONS_NONE, D2D1_ALPHA_MODE_PREMULTIPLIED))
+            };
+            if let Ok(bmp) = bmp {
+                self.cursors.insert(sh.id, (bmp, w as f32, h as f32, sh.hx as f32, sh.hy as f32));
+            }
+        }
+    }
+
+    /// The drawn cursor: its tip at `tip` (output pixels), `k` output pixels per image pixel.
+    unsafe fn draw_cursor(&self, shape: u32, tip: (f32, f32), k: f32, alpha: f32) -> Result<(), String> {
+        // SAFETY: drawing calls with valid objects, between BeginDraw and EndDraw.
+        unsafe {
+            if let Some((bmp, w, h, hx, hy)) = self.cursors.get(&shape) {
+                let (l, t) = (tip.0 - hx * k, tip.1 - hy * k);
+                let dest = D2D_RECT_F { left: l, top: t, right: l + w * k, bottom: t + h * k };
+                self.ctx.DrawBitmap(bmp, Some(&dest), alpha, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, None, None);
+                return Ok(());
+            }
+            // No image: a plain arrow (white, black outline), 12 x 19 pixels at 1x.
+            let factory = self.ctx.GetFactory().map_err(err("Không vẽ được con trỏ"))?;
+            let path = factory.CreatePathGeometry().map_err(err("Không vẽ được con trỏ"))?;
+            let sink = path.Open().map_err(err("Không vẽ được con trỏ"))?;
+            let p = |x: f32, y: f32| point(tip.0 + x * k, tip.1 + y * k);
+            sink.BeginFigure(p(0.0, 0.0), D2D1_FIGURE_BEGIN_FILLED);
+            for (x, y) in [(0.0, 17.0), (4.0, 13.0), (7.0, 19.0), (10.0, 18.0), (7.0, 12.0), (12.0, 12.0)] {
+                sink.AddLine(p(x, y));
+            }
+            sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+            sink.Close().map_err(err("Không vẽ được con trỏ"))?;
+            self.ctx.FillGeometry(&path, &self.brush((1.0, 1.0, 1.0), alpha)?, None);
+            self.ctx.DrawGeometry(&path, &self.brush((0.0, 0.0, 0.0), alpha)?, (1.2 * k).max(1.0), None::<&ID2D1StrokeStyle>);
+        }
+        Ok(())
     }
 
     unsafe fn source_bitmap(&mut self, w: u32, h: u32) -> Result<ID2D1Bitmap1, String> {
@@ -342,7 +397,13 @@ impl Compositor {
                 Some(&Draw::Spot { x, y, w, h, alpha }) if alpha > 0.0 => self.draw_spot(clip, corner, at(x, y), at(x + w, y + h), alpha, video.2.min(video.3)),
                 _ => Ok(()),
             };
-            let on_video = spot.and_then(|_| self.draw_marks(draws, &at, sx, full_ring, stroke));
+            let on_video = spot.and_then(|_| self.draw_marks(draws, &at, sx, full_ring, stroke)).and_then(|_| {
+                // The drawn cursor, on top of the marks; it zooms with the picture.
+                match draws.iter().find(|d| matches!(d, Draw::Cursor { .. })) {
+                    Some(&Draw::Cursor { x, y, scale, alpha, shape }) if alpha > 0.0 => self.draw_cursor(shape, at(x, y), scale * sx, alpha),
+                    _ => Ok(()),
+                }
+            });
             self.ctx.PopAxisAlignedClip();
             on_video?;
             // The subtitle box as laid out; chips sit at least 2% of the frame above it.
@@ -720,6 +781,37 @@ mềm ghi màn hình thật nhanh và đơn giản nhé";
         assert!(runs[1].0 && runs[1].1 <= h / 10, "a two-line box, not re-wrapped into many lines: {runs:?}");
         assert!(!runs[2].0 && runs[2].1 >= 5, "a gap between subtitle and chip: {runs:?}");
         assert!(runs[3].0, "the chip: {runs:?}");
+    }
+
+    fn shape(id: u32, w: u32, h: u32, hx: i32, hy: i32) -> hp_core::cursor::CursorShape {
+        let img = image::RgbaImage::from_pixel(w, h, image::Rgba([255, 0, 0, 255]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        hp_core::cursor::CursorShape { id, hx, hy, png: hp_core::cursor::base64_encode(png.get_ref()) }
+    }
+
+    #[test]
+    fn the_drawn_cursor_sits_on_its_hot_spot_at_its_size() {
+        let src = solid(200, 200, |_, _| [255, 255, 255]);
+        let mut c = Compositor::new(200, 200, Device::Warp).unwrap();
+        c.set_cursor_shapes(&[shape(1, 4, 4, 1, 1)]);
+        let cur = Draw::Cursor { x: 100.0, y: 100.0, scale: 2.0, alpha: 1.0, shape: 1 };
+        let out = c.render(&src, 200, 200, None, None, &[cur]).unwrap();
+        // 4x4 at 2x with its hot spot (1, 1) on (100, 100): covers 98..106.
+        assert!(close(rgb_at(out, 200, 99, 99), [255, 0, 0]) && close(rgb_at(out, 200, 105, 105), [255, 0, 0]));
+        assert!(close(rgb_at(out, 200, 96, 96), [255, 255, 255]) && close(rgb_at(out, 200, 108, 108), [255, 255, 255]));
+        let faded = Draw::Cursor { x: 100.0, y: 100.0, scale: 2.0, alpha: 0.0, shape: 1 };
+        assert!(close(rgb_at(c.render(&src, 200, 200, None, None, &[faded]).unwrap(), 200, 101, 101), [255, 255, 255]), "hidden");
+    }
+
+    #[test]
+    fn an_unknown_shape_still_draws_an_arrow() {
+        let src = solid(200, 200, |_, _| [255, 255, 255]);
+        let mut c = Compositor::new(200, 200, Device::Warp).unwrap();
+        let cur = Draw::Cursor { x: 100.0, y: 100.0, scale: 1.5, alpha: 1.0, shape: 9 };
+        let out = c.render(&src, 200, 200, None, None, &[cur]).unwrap();
+        let dark = (100..120).any(|y| (100..115).any(|x| rgb_at(out, 200, x, y)[0] < 80));
+        assert!(dark, "an arrow outline near the tip");
     }
 
     #[test]

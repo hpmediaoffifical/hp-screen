@@ -74,6 +74,11 @@ impl Plan {
         p
     }
 
+    /// Shapes of the drawn cursor (empty for recordings with the Windows cursor).
+    pub fn cursor_shapes(&self) -> &[crate::cursor::CursorShape] {
+        self.effects.as_ref().map_or(&[], |e| e.shapes.as_slice())
+    }
+
     pub fn layout(&self) -> &Layout {
         &self.layout
     }

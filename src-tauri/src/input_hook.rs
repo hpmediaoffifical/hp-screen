@@ -219,6 +219,8 @@ fn write_log(
     skip_clicks: Arc<AtomicBool>,
 ) {
     let window_mode = header.mode == "window";
+    // Recordings without the Windows cursor log its shapes, to draw it when editing.
+    let mut shapes = header.cursor.then(crate::cursor_shape::ShapeTracker::default);
     let _ = writeln!(out, "{}", to_line(&header));
     let mut sampler = MoveSampler::new();
     let mut held_key: Option<u32> = None; // suppresses auto-repeat while a key stays down
@@ -294,6 +296,18 @@ fn write_log(
         }
         for f in probe.take() {
             write_found(&mut out, &f, origin);
+        }
+        // The shape can change on any mouse event, or on its own (busy, resize arrows).
+        if let Some(tracker) = shapes.as_mut()
+            && let Some(t) = video_ms(clock::now_100ns())
+            && let Some(seen) = tracker.poll()
+        {
+            if let Some((id, img)) = seen.new_shape
+                && let Some(png) = crate::cursor_shape::png_base64(&img)
+            {
+                let _ = writeln!(out, "{}", to_line(&Event::Shape { id, hx: img.hx, hy: img.hy, png }));
+            }
+            let _ = writeln!(out, "{}", to_line(&Event::Cur { t, id: seen.id }));
         }
         if last_flush.elapsed() >= FLUSH_INTERVAL {
             let _ = out.flush();
@@ -414,6 +428,31 @@ mod filter_tests {
         let file = std::fs::File::create(&path).unwrap();
         write_log(BufWriter::new(file), header, region, rx, Arc::new(Mutex::new(Timeline::new(0, 1000))), vec![], Arc::new(AtomicBool::new(false)));
         assert!(hp_core::input_log::parse_log(&std::fs::read_to_string(&path).unwrap()).events.is_empty());
+    }
+
+    fn log_with(cursor: bool) -> Vec<Event> {
+        let path = crate::test_media::temp_path(if cursor { "hook-cur-on" } else { "hook-cur-off" }, "a.input.jsonl");
+        let region = Rect { x: 0, y: 0, w: 800, h: 600 };
+        let header = Header { v: 1, mode: "monitor".into(), region, width: 800, height: 600, fps: 30, cursor };
+        let (tx, rx) = mpsc::channel::<Raw>();
+        let now = clock::now_100ns();
+        tx.send(Raw::Mouse { time: now, message: WM_MOUSEMOVE, x: 10, y: 10, wheel: 0 }).unwrap();
+        drop(tx);
+        let timeline = Arc::new(Mutex::new(Timeline::new(now - 10_000_000, clock::TICKS_PER_SEC)));
+        let file = std::fs::File::create(&path).unwrap();
+        write_log(BufWriter::new(file), header, region, rx, timeline, vec![], Arc::new(AtomicBool::new(false)));
+        hp_core::input_log::parse_log(&std::fs::read_to_string(&path).unwrap()).events
+    }
+
+    #[test]
+    fn the_cursor_shape_is_logged_only_when_the_cursor_is_drawn() {
+        let on = log_with(true);
+        assert!(on.iter().any(|e| matches!(e, Event::Cur { .. })), "{on:?}");
+        // A visible cursor comes with its image, logged once (a hidden one is id 0).
+        if let Some(Event::Cur { id, .. }) = on.iter().find(|e| matches!(e, Event::Cur { .. })) && *id != 0 {
+            assert!(on.iter().any(|e| matches!(e, Event::Shape { id: s, .. } if s == id)));
+        }
+        assert!(!log_with(false).iter().any(|e| matches!(e, Event::Cur { .. } | Event::Shape { .. })));
     }
 
     #[test]

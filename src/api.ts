@@ -112,6 +112,8 @@ export interface Settings {
   /** 0, 2, 3, 5 or 10; 0 keeps strokes until cleared. */
   draw_fade_secs: number;
   webcam: WebcamSettings;
+  /** Record without the Windows cursor and draw a smooth one when editing. */
+  smooth_cursor: boolean;
 }
 
 export type CamShape = "circle" | "rounded";

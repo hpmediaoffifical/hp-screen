@@ -524,6 +524,37 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
                       <span className="hint check-hint">Hiện tổ hợp phím như Ctrl + S ở cạnh dưới video. Chữ bạn gõ không bao giờ hiện.</span>
                     </span>
                   </label>
+                  {session.effects.drawn_cursor && (
+                    <>
+                      <label className="check">
+                        <input
+                          type="checkbox"
+                          checked={doc.effects.cursor}
+                          onChange={(e) => change({ ...doc, effects: { ...doc.effects, cursor: e.target.checked } })}
+                        />
+                        <span>
+                          Con trỏ mượt
+                          <span className="hint check-hint">Video này quay không có con trỏ Windows: HP Screen vẽ lại con trỏ mượt, tự ẩn khi đứng yên.</span>
+                        </span>
+                      </label>
+                      {doc.effects.cursor && (
+                        <label className="zoom-scale">
+                          Cỡ con trỏ: <strong>{doc.effects.cursor_size.toFixed(1)}×</strong>
+                          <input
+                            type="range"
+                            min={1}
+                            max={3}
+                            step={0.1}
+                            value={doc.effects.cursor_size}
+                            onChange={(e) => {
+                              const d = latest.current;
+                              if (d) change({ ...d, effects: { ...d.effects, cursor_size: Number(e.target.value) } }, true);
+                            }}
+                          />
+                        </label>
+                      )}
+                    </>
+                  )}
                 </>
               ) : (
                 <p className="hint">Video này không có nhật ký thao tác, nên không có vòng click hay phím tắt.</p>

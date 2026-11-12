@@ -3,6 +3,7 @@
 // pixels for a given time, with the same rules and numbers as the export.
 import type { EffectToggles, Effects, MouseButton, Spot } from "../editApi";
 import { sourceView } from "./layoutMath";
+import { cursorSampleAt, cursorShapeAt } from "./cursorMath";
 
 // Same values as hp-core::effects and src-tauri compositor.
 const RIPPLE_MS = 480;
@@ -80,6 +81,7 @@ export function drawEffects(ctx: CanvasRenderingContext2D, fx: Effects, tMs: num
     }
     ctx.restore();
   }
+  if (fx.drawn_cursor && on.cursor) drawCursor(ctx, fx, tMs, Math.min(3, Math.max(1, on.cursor_size)), scale);
   if (on.keys) {
     const chip = fx.chips.find((c) => c.start_ms <= tMs && tMs < c.end_ms);
     if (chip) {
@@ -165,5 +167,46 @@ export function drawSpot(ctx: CanvasRenderingContext2D, spot: Spot, fill: number
   ctx.strokeStyle = `rgba(255,255,255,${0.5 * spot.alpha})`;
   ctx.lineWidth = 1.5;
   ctx.stroke();
+  ctx.restore();
+}
+
+// Cursor images by their PNG, decoded once.
+const images = new Map<string, HTMLImageElement>();
+function imageOf(png: string): HTMLImageElement {
+  let img = images.get(png);
+  if (!img) {
+    img = new Image();
+    img.src = `data:image/png;base64,${png}`;
+    images.set(png, img);
+  }
+  return img;
+}
+
+/** The drawn cursor, as the export draws it: its shape on its hot spot, or a plain arrow. */
+function drawCursor(ctx: CanvasRenderingContext2D, fx: Effects, tMs: number, size: number, scale: number) {
+  const c = cursorSampleAt(fx.smooth, tMs);
+  const id = cursorShapeAt(fx, tMs);
+  if (!c || c.alpha <= 0 || id === 0) return;
+  const k = size * c.press * scale;
+  const x = c.x * scale;
+  const y = c.y * scale;
+  ctx.save();
+  ctx.globalAlpha = c.alpha;
+  const shape = fx.shapes.find((s) => s.id === id);
+  const img = shape ? imageOf(shape.png) : null;
+  if (shape && img && img.complete && img.naturalWidth > 0) {
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(img, x - shape.hx * k, y - shape.hy * k, img.naturalWidth * k, img.naturalHeight * k);
+  } else {
+    const pts: [number, number][] = [[0, 0], [0, 17], [4, 13], [7, 19], [10, 18], [7, 12], [12, 12]];
+    ctx.beginPath();
+    pts.forEach(([px, py], i) => (i === 0 ? ctx.moveTo(x + px * k, y + py * k) : ctx.lineTo(x + px * k, y + py * k)));
+    ctx.closePath();
+    ctx.fillStyle = "#fff";
+    ctx.fill();
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = Math.max(1, 1.2 * k);
+    ctx.stroke();
+  }
   ctx.restore();
 }

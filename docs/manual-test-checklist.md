@@ -172,6 +172,10 @@ Cột "Máy" ghi những gì kiểm thử tự động đã phủ (video mẫu d
 | Z24 | Chọn một đoạn zoom → Kiểu "Làm tối xung quanh": video không phóng to; vùng trong khung sáng (góc bo, viền mảnh), phần còn lại tối đi; rãnh ghi "Spot". Kéo khung hoặc thêm điểm ◆: vùng sáng di chuyển theo | Đạt (`a_spotlight_lights_the_frame_without_zooming`, `a_spotlight_darkens_only_outside_its_box`), xem trước đã kiểm trên trang thử || Đạt (người dùng xác nhận 2026-11-12) |
 | Z25 | Xuất MP4 có đoạn spotlight: vùng tối hiện dần khi vào đoạn, tắt dần khi ra | Đạt (`a_spotlight_is_drawn_over_the_video`) || Đạt (người dùng xác nhận 2026-11-12) |
 | Z26 | Ô "Nhòe chuyển động khi zoom" (mặc định bật): bản xuất nhòe nhẹ lúc phóng to/thu nhỏ/lia, khung đứng yên vẫn nét; tắt ô thì không nhòe. Khi phát xem trước cũng hơi nhòe lúc camera chạy | Đạt (`motion_blur_smears_the_zoom_in_and_not_still_frames`, `motion_blur_only_while_the_camera_moves`) || Đạt (người dùng xác nhận 2026-11-12) |
+| Z27 | Cài đặt → bật "Con trỏ mượt" (cần nhật ký thao tác). Quay một đoạn có rê chuột, bấm, gõ: file MP4 gốc không có chuột | — | |
+| Z28 | Mở video đó ở trang Chỉnh sửa: xem trước và bản xuất có con trỏ đúng hình (mũi tên, chữ I, bàn tay), đi mượt, không rung | Đạt cho đường mượt và vẽ (`hand_jitter_is_filtered`, `a_recording_without_the_windows_cursor_exports_with_the_drawn_one`) | |
+| Z29 | Chuột đứng yên khoảng 1,5 giây thì con trỏ mờ dần rồi ẩn, nhúc nhích thì hiện ngay; giữ nút thì con trỏ nhỏ lại một chút | Đạt (`an_idle_cursor_fades_out_and_comes_back_when_moved`, `a_held_button_keeps_it_shown_and_presses_it`) | |
+| Z30 | Thẻ Hiệu ứng: "Con trỏ mượt" bật/tắt, thanh "Cỡ con trỏ" 1–3×; con trỏ phóng to theo zoom. Tắt "Con trỏ mượt" ở Cài đặt thì quay lại như cũ (file gốc có chuột) | Đạt cho cỡ mặc định (`the_cursor_is_drawn_only_for_recordings_without_the_windows_cursor`) | |
 
 ## Khung hình và GIF (giai đoạn 2, bước 6)
 
