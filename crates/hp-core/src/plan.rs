@@ -174,7 +174,7 @@ mod tests {
     #[test]
     fn plan_frames_carry_the_camera() {
         use crate::zoom::{ZoomDoc, ZoomSegment};
-        let zoom = ZoomDoc { enabled: true, segments: vec![ZoomSegment { start_ms: 0, end_ms: 10_000, scale: 2.0, center: Some((0.25, 0.25)), manual: true }] };
+        let zoom = ZoomDoc { enabled: true, segments: vec![ZoomSegment { start_ms: 0, end_ms: 10_000, scale: 2.0, center: Some((0.25, 0.25)), manual: true, ..ZoomSegment::default() }], ..ZoomDoc::default() };
         let p = Plan::new(src(640, 480), &EditDoc { zoom, ..EditDoc::default() }, None);
         assert_eq!(p.frame(0).unwrap().camera.scale, 1.0, "eases in from the whole frame");
         let late = p.frame(250).unwrap().camera;

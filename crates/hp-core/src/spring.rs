@@ -17,6 +17,11 @@ pub struct SpringState {
 pub const CAMERA: Spring = Spring { tension: 300.0, mass: 6.75, friction: 120.0 };
 
 impl Spring {
+    /// The same spring `f` times faster: the motion keeps its shape (and its damping ratio).
+    pub fn scaled(&self, f: f32) -> Spring {
+        Spring { tension: self.tension * f * f, mass: self.mass, friction: self.friction * f }
+    }
+
     /// Advances `s` towards `target` by `dt_s` seconds (semi-implicit Euler).
     pub fn step(&self, s: &mut SpringState, target: f32, dt_s: f32) {
         let accel = (self.tension * (target - s.value) - self.friction * s.velocity) / self.mass;

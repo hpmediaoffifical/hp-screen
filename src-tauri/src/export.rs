@@ -343,8 +343,8 @@ mod tests {
 
     fn zoomed(cuts: Vec<Span>, start_ms: i64, end_ms: i64) -> EditDoc {
         use hp_core::zoom::{ZoomDoc, ZoomSegment};
-        let segments = vec![ZoomSegment { start_ms, end_ms, scale: 2.0, center: Some((0.25, 0.25)), manual: true }];
-        EditDoc { cuts, zoom: ZoomDoc { enabled: true, segments }, ..EditDoc::default() }
+        let segments = vec![ZoomSegment { start_ms, end_ms, scale: 2.0, center: Some((0.25, 0.25)), manual: true, ..ZoomSegment::default() }];
+        EditDoc { cuts, zoom: ZoomDoc { enabled: true, segments, ..ZoomDoc::default() }, ..EditDoc::default() }
     }
 
     fn plan_doc(path: &Path, doc: &EditDoc) -> Plan {

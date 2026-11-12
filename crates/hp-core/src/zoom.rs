@@ -21,6 +21,55 @@ pub const MIN_SEGMENT_MS: i64 = 1000;
 pub const DEAD_ZONE: f32 = 0.7;
 /// ...and stays out this long (a quick excursion is ignored).
 pub const LOOK_AHEAD_MS: i64 = 1000;
+/// Keyframes closer than this to the previous one are dropped.
+pub const KEY_MIN_GAP_MS: i64 = 50;
+/// Time factor of the camera spring for each speed.
+pub const SLOW_FACTOR: f32 = 0.6;
+pub const FAST_FACTOR: f32 = 2.0;
+
+/// A keyframe inside a zoom segment: from here the camera aims at this frame.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ZoomKey {
+    /// Source time, strictly inside the segment.
+    pub t_ms: i64,
+    pub cx: f32,
+    pub cy: f32,
+    pub scale: f32,
+}
+
+/// How fast the camera zooms in, out and pans in a segment.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Speed {
+    Slow,
+    #[default]
+    Normal,
+    Fast,
+    /// No motion: the camera cuts to each frame.
+    Instant,
+}
+
+impl Speed {
+    /// Time factor of the camera spring; `None` for a cut.
+    pub fn factor(self) -> Option<f32> {
+        match self {
+            Speed::Slow => Some(SLOW_FACTOR),
+            Speed::Normal => Some(1.0),
+            Speed::Fast => Some(FAST_FACTOR),
+            Speed::Instant => None,
+        }
+    }
+}
+
+/// How eagerly automatic zoom zooms.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Level {
+    Low,
+    #[default]
+    Normal,
+    High,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -32,11 +81,14 @@ pub struct ZoomSegment {
     pub center: Option<(f32, f32)>,
     /// Added or changed by the user; "Tự tạo lại" keeps it.
     pub manual: bool,
+    /// Keyframes after the start (the start is `center` and `scale`).
+    pub keys: Vec<ZoomKey>,
+    pub speed: Speed,
 }
 
 impl Default for ZoomSegment {
     fn default() -> Self {
-        ZoomSegment { start_ms: 0, end_ms: 0, scale: DEFAULT_SCALE, center: None, manual: false }
+        ZoomSegment { start_ms: 0, end_ms: 0, scale: DEFAULT_SCALE, center: None, manual: false, keys: Vec::new(), speed: Speed::Normal }
     }
 }
 
@@ -45,6 +97,8 @@ impl Default for ZoomSegment {
 pub struct ZoomDoc {
     pub enabled: bool,
     pub segments: Vec<ZoomSegment>,
+    /// Level used for automatic segments.
+    pub level: Level,
 }
 
 /// Where the camera looks: centre (0–1 of the frame) and zoom level.
@@ -116,7 +170,7 @@ pub fn auto_segments(clicks: &[(i64, f32, f32)], duration_ms: i64) -> Vec<ZoomSe
             end_ms: s.end,
             scale: DEFAULT_SCALE,
             center: (!s.spread).then(|| centroid(&s.clicks)),
-            manual: false,
+            ..ZoomSegment::default()
         })
         .collect()
 }
@@ -131,36 +185,99 @@ pub fn regenerate(existing: &[ZoomSegment], auto: Vec<ZoomSegment>) -> Vec<ZoomS
     out
 }
 
+fn clamp_scale(s: f32) -> f32 {
+    if s.is_finite() { s.clamp(MIN_SCALE, MAX_SCALE) } else { DEFAULT_SCALE }
+}
+
+fn clamp01(v: f32) -> f32 {
+    if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.5 }
+}
+
+/// One segment made valid: inside the video, values in range, keyframes sorted, inside the
+/// segment and apart; a segment with keyframes always has a fixed centre.
+fn cleaned(s: &ZoomSegment, duration_ms: i64) -> ZoomSegment {
+    let (start_ms, end_ms) = (s.start_ms.max(0), s.end_ms.min(duration_ms));
+    let mut keys: Vec<ZoomKey> = s
+        .keys
+        .iter()
+        .filter(|k| k.t_ms > start_ms && k.t_ms < end_ms)
+        .map(|k| ZoomKey { t_ms: k.t_ms, cx: clamp01(k.cx), cy: clamp01(k.cy), scale: clamp_scale(k.scale) })
+        .collect();
+    keys.sort_by_key(|k| k.t_ms);
+    let mut last = start_ms;
+    keys.retain(|k| {
+        let keep = k.t_ms - last > KEY_MIN_GAP_MS;
+        if keep {
+            last = k.t_ms;
+        }
+        keep
+    });
+    let center = s.center.map(|(x, y)| (clamp01(x), clamp01(y))).or_else(|| keys.first().map(|k| (k.cx, k.cy)));
+    ZoomSegment { start_ms, end_ms, scale: clamp_scale(s.scale), center, manual: s.manual, keys, speed: s.speed }
+}
+
+/// The part `[a, b)` of `s`: it starts from the frame the camera aims at at `a`.
+fn part(s: &ZoomSegment, a: i64, b: i64) -> ZoomSegment {
+    let mut p = ZoomSegment { start_ms: a, end_ms: b, keys: s.keys.iter().filter(|k| k.t_ms > a && k.t_ms < b).copied().collect(), ..s.clone() };
+    if a > s.start_ms
+        && let Some(c) = target_at(s, a)
+    {
+        p.center = Some((c.cx, c.cy));
+        p.scale = c.scale;
+    }
+    p
+}
+
 /// Valid segments only, in order: no empty ones, scale and centre within range, no overlaps
 /// (the later segment wins the overlapping part).
 pub fn normalized(segments: &[ZoomSegment], duration_ms: i64) -> Vec<ZoomSegment> {
-    let mut v: Vec<ZoomSegment> = segments
-        .iter()
-        .map(|s| ZoomSegment {
-            start_ms: s.start_ms.max(0),
-            end_ms: s.end_ms.min(duration_ms),
-            scale: if s.scale.is_finite() { s.scale.clamp(MIN_SCALE, MAX_SCALE) } else { DEFAULT_SCALE },
-            center: s.center.map(|(x, y)| (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0))),
-            manual: s.manual,
-        })
-        .filter(|s| s.end_ms > s.start_ms)
-        .collect();
+    let mut v: Vec<ZoomSegment> = segments.iter().map(|s| cleaned(s, duration_ms)).filter(|s| s.end_ms > s.start_ms).collect();
     v.sort_by_key(|s| s.start_ms);
     // Where segments overlap, the one that starts later wins; a segment inside another splits it.
     let mut cuts: Vec<i64> = v.iter().flat_map(|s| [s.start_ms, s.end_ms]).collect();
     cuts.sort_unstable();
     cuts.dedup();
-    let mut out: Vec<(usize, ZoomSegment)> = Vec::new();
+    let mut pieces: Vec<(usize, i64, i64)> = Vec::new();
     for w in cuts.windows(2) {
         let (a, b) = (w[0], w[1]);
         let winner = v.iter().enumerate().filter(|(_, s)| s.start_ms <= a && s.end_ms >= b).max_by_key(|(i, s)| (s.start_ms, *i));
-        let Some((i, s)) = winner else { continue };
-        match out.last_mut() {
-            Some((last_i, last)) if *last_i == i && last.end_ms == a => last.end_ms = b,
-            _ => out.push((i, ZoomSegment { start_ms: a, end_ms: b, ..s.clone() })),
+        let Some((i, _)) = winner else { continue };
+        match pieces.last_mut() {
+            Some((last_i, _, end)) if *last_i == i && *end == a => *end = b,
+            _ => pieces.push((i, a, b)),
         }
     }
-    out.into_iter().map(|(_, s)| s).collect()
+    pieces.into_iter().map(|(i, a, b)| part(&v[i], a, b)).collect()
+}
+
+/// Where the camera aims in `seg` at `t_ms` from its frames: the start frame and keyframes, eased
+/// between them (`smoothstep`, zoom in log space), held after the last. `None` when the segment
+/// follows the cursor (no fixed centre, no keyframes).
+pub fn target_at(seg: &ZoomSegment, t_ms: i64) -> Option<Camera> {
+    let (cx, cy) = match seg.center {
+        Some(c) => c,
+        None => seg.keys.first().map(|k| (k.cx, k.cy))?,
+    };
+    let mut prev = (seg.start_ms, Camera { cx, cy, scale: seg.scale });
+    for k in &seg.keys {
+        let next = (k.t_ms, Camera { cx: k.cx, cy: k.cy, scale: k.scale });
+        if t_ms < k.t_ms {
+            if seg.speed == Speed::Instant {
+                return Some(prev.1);
+            }
+            let u = ((t_ms - prev.0) as f32 / (next.0 - prev.0).max(1) as f32).clamp(0.0, 1.0);
+            let u = u * u * (3.0 - 2.0 * u);
+            let (a, b) = (prev.1, next.1);
+            let ln = |s: f32| s.max(MIN_SCALE).ln();
+            return Some(Camera {
+                cx: a.cx + (b.cx - a.cx) * u,
+                cy: a.cy + (b.cy - a.cy) * u,
+                scale: (ln(a.scale) + (ln(b.scale) - ln(a.scale)) * u).exp(),
+            });
+        }
+        prev = next;
+    }
+    Some(prev.1)
 }
 
 /// The camera every `step_ms` from 0 to `duration_ms`, moved by the camera spring in 1 ms steps.
@@ -178,6 +295,8 @@ pub fn camera_track(z: &ZoomDoc, cursor: &dyn Fn(i64) -> Option<(f32, f32)>, dur
     );
     let mut out = Vec::with_capacity((duration_ms / step_ms + 2) as usize);
     let mut seg_i = 0usize;
+    // The speed of the segment the camera is in, or of the one it just left.
+    let mut speed = Speed::Normal;
     // Where the camera aims inside the current segment, when it follows the cursor.
     let mut follow: Option<(usize, (f32, f32))> = None;
     for t in 0..=duration_ms {
@@ -188,8 +307,10 @@ pub fn camera_track(z: &ZoomDoc, cursor: &dyn Fn(i64) -> Option<(f32, f32)>, dur
         let (target_scale, target) = match current {
             None => (1.0, (0.5, 0.5)),
             Some(s) => {
-                let aim = match s.center {
-                    Some(c) => c,
+                speed = s.speed;
+                let fixed = target_at(s, t);
+                let aim = match fixed {
+                    Some(c) => (c.cx, c.cy),
                     None => match cursor(t) {
                         None => (0.5, 0.5),
                         Some(now) => {
@@ -210,13 +331,23 @@ pub fn camera_track(z: &ZoomDoc, cursor: &dyn Fn(i64) -> Option<(f32, f32)>, dur
                         }
                     },
                 };
-                (s.scale, aim)
+                (fixed.map_or(s.scale, |c| c.scale), aim)
             }
         };
         if t > 0 {
-            CAMERA.step(&mut scale, target_scale, 0.001);
-            CAMERA.step(&mut cx, target.0, 0.001);
-            CAMERA.step(&mut cy, target.1, 0.001);
+            match speed.factor() {
+                Some(f) => {
+                    let spring = if f == 1.0 { CAMERA } else { CAMERA.scaled(f) };
+                    spring.step(&mut scale, target_scale, 0.001);
+                    spring.step(&mut cx, target.0, 0.001);
+                    spring.step(&mut cy, target.1, 0.001);
+                }
+                None => {
+                    scale = SpringState { value: target_scale, velocity: 0.0 };
+                    cx = SpringState { value: target.0, velocity: 0.0 };
+                    cy = SpringState { value: target.1, velocity: 0.0 };
+                }
+            }
         }
         let s = scale.value.clamp(MIN_SCALE, MAX_SCALE);
         let half = 0.5 / s;
@@ -255,7 +386,15 @@ mod tests {
     }
 
     fn manual(start_ms: i64, end_ms: i64, scale: f32, center: Option<(f32, f32)>) -> ZoomSegment {
-        ZoomSegment { start_ms, end_ms, scale, center, manual: true }
+        ZoomSegment { start_ms, end_ms, scale, center, manual: true, ..ZoomSegment::default() }
+    }
+
+    fn key(t_ms: i64, cx: f32, cy: f32, scale: f32) -> ZoomKey {
+        ZoomKey { t_ms, cx, cy, scale }
+    }
+
+    fn panning(speed: Speed) -> ZoomSegment {
+        ZoomSegment { keys: vec![key(3000, 0.75, 0.75, 2.0)], speed, ..manual(0, 6000, 2.0, Some((0.25, 0.25))) }
     }
 
     fn close(a: f32, b: f32, tol: f32) -> bool {
@@ -364,12 +503,12 @@ mod tests {
     const NO_CURSOR: &dyn Fn(i64) -> Option<(f32, f32)> = &|_| None;
 
     fn on(segments: Vec<ZoomSegment>) -> ZoomDoc {
-        ZoomDoc { enabled: true, segments }
+        ZoomDoc { enabled: true, segments, ..ZoomDoc::default() }
     }
 
     #[test]
     fn disabled_zoom_is_identity() {
-        let z = ZoomDoc { enabled: false, segments: vec![manual(0, 5000, 3.0, None)] };
+        let z = ZoomDoc { enabled: false, segments: vec![manual(0, 5000, 3.0, None)], ..ZoomDoc::default() };
         let t = camera_track(&z, NO_CURSOR, 5000, 100);
         assert_eq!(t.len(), 51);
         assert!(t.iter().all(|(_, c)| *c == Camera::WHOLE));
@@ -441,5 +580,87 @@ mod tests {
         assert_eq!(camera_at(&t, -5).scale, 1.0);
         assert_eq!(camera_at(&t, 500).scale, 2.0);
         assert_eq!(camera_at(&[], 5), Camera::WHOLE);
+    }
+
+    #[test]
+    fn old_segments_read_with_defaults() {
+        let doc = crate::edit::load_edit(r#"{"v":1,"zoom":{"enabled":true,"segments":[{"start_ms":0,"end_ms":1000,"scale":2,"center":[0.5,0.5],"manual":true}]}}"#).unwrap();
+        let s = &doc.zoom.segments[0];
+        assert!(s.keys.is_empty());
+        assert_eq!(s.speed, Speed::Normal);
+        assert_eq!(doc.zoom.level, Level::Normal);
+        let json = serde_json::to_value(&doc.zoom).unwrap();
+        assert_eq!(json["level"], "normal");
+        assert_eq!(json["segments"][0]["speed"], "normal");
+    }
+
+    #[test]
+    fn keys_are_reached_at_their_time() {
+        let t = camera_track(&on(vec![panning(Speed::Fast)]), NO_CURSOR, 6000, 1);
+        let c = camera_at(&t, 3200);
+        assert!(close(c.cx, 0.75, 0.02) && close(c.cy, 0.75, 0.02), "{c:?}");
+        let early = camera_at(&t, 1000);
+        assert!(early.cx < 0.5, "still near the main frame: {early:?}");
+    }
+
+    #[test]
+    fn target_eases_between_keys() {
+        let s = panning(Speed::Normal);
+        let mid = target_at(&s, 1500).unwrap();
+        assert!(close(mid.cx, 0.5, 1e-4), "{mid:?}");
+        let quarter = target_at(&s, 750).unwrap();
+        assert!(quarter.cx < 0.25 + 0.125, "smoothstep is slow at first: {quarter:?}");
+        let after = target_at(&s, 5000).unwrap();
+        assert!(close(after.cx, 0.75, 1e-6), "held after the last key");
+        let zoom = ZoomSegment { keys: vec![key(2000, 0.5, 0.5, 4.0)], ..manual(0, 4000, 1.0, Some((0.5, 0.5))) };
+        assert!(close(target_at(&zoom, 1000).unwrap().scale, 2.0, 1e-4), "scale eases in log space");
+        assert_eq!(target_at(&manual(0, 1000, 2.0, None), 500), None, "follows the cursor");
+    }
+
+    #[test]
+    fn instant_jumps_to_the_target() {
+        let t = camera_track(&on(vec![panning(Speed::Instant)]), NO_CURSOR, 7000, 1);
+        let at = |ms| camera_at(&t, ms);
+        assert!(close(at(1).cx, 0.25, 1e-4) && close(at(1).scale, 2.0, 1e-4), "{:?}", at(1));
+        assert!(close(at(2999).cx, 0.25, 1e-4), "no easing between keys: {:?}", at(2999));
+        assert!(close(at(3001).cx, 0.75, 1e-4), "{:?}", at(3001));
+        assert!(close(at(6001).scale, 1.0, 1e-4), "leaves at once: {:?}", at(6001));
+    }
+
+    #[test]
+    fn slow_is_slower_and_fast_is_faster() {
+        let reach = |speed| {
+            let s = ZoomSegment { speed, ..manual(0, 10_000, 2.0, Some((0.5, 0.5))) };
+            let t = camera_track(&on(vec![s]), NO_CURSOR, 10_000, 1);
+            t.iter().find(|(_, c)| c.scale >= 1.9).map(|(ms, _)| *ms).unwrap()
+        };
+        let (slow, normal, fast) = (reach(Speed::Slow), reach(Speed::Normal), reach(Speed::Fast));
+        assert!(fast < normal && normal < slow, "{fast} {normal} {slow}");
+    }
+
+    #[test]
+    fn normalized_sorts_and_drops_bad_keys() {
+        let s = ZoomSegment {
+            keys: vec![key(3000, 0.5, 0.5, 9.0), key(1000, 2.0, 0.5, 2.0), key(1040, 0.3, 0.3, 2.0), key(5000, 0.5, 0.5, 2.0), key(0, 0.5, 0.5, 2.0)],
+            ..manual(0, 4000, 2.0, None)
+        };
+        let out = normalized(&[s], 10_000);
+        let k = &out[0].keys;
+        assert_eq!(k.iter().map(|k| k.t_ms).collect::<Vec<_>>(), vec![1000, 3000], "outside and too-close keys dropped");
+        assert_eq!((k[0].cx, k[1].scale), (1.0, MAX_SCALE), "clamped");
+        assert_eq!(out[0].center, Some((1.0, 0.5)), "a segment with keys gets a fixed centre");
+    }
+
+    #[test]
+    fn a_split_segment_keeps_keys_in_each_part() {
+        let a = ZoomSegment { keys: vec![key(1000, 0.4, 0.4, 2.0), key(5000, 0.8, 0.8, 2.0)], ..manual(0, 6000, 2.0, Some((0.2, 0.2))) };
+        let out = normalized(&[a.clone(), manual(2000, 3000, 3.0, None)], 10_000);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].keys.iter().map(|k| k.t_ms).collect::<Vec<_>>(), vec![1000]);
+        assert!(out[1].keys.is_empty());
+        assert_eq!(out[2].keys.iter().map(|k| k.t_ms).collect::<Vec<_>>(), vec![5000]);
+        let (cx, _) = out[2].center.unwrap();
+        assert!(close(cx, target_at(&a, 3000).unwrap().cx, 1e-5), "the later part starts where the camera was aiming");
+        assert!(close(out[2].scale, 2.0, 1e-5));
     }
 }
