@@ -169,9 +169,9 @@ Cột "Máy" ghi những gì kiểm thử tự động đã phủ (video mẫu d
 | Z21 | Bấm vào một hộp thoại lớn: zoom vừa cả hộp thoại, không phóng sát vào một góc | Đạt (`the_zoom_fits_the_clicked_element`) || Đạt (người dùng xác nhận 2026-11-12) |
 | Z22 | Quay mới: rê chuột ra chỗ khác rồi gõ chữ vào một ô: zoom tới đúng ô đang gõ | Đạt (`typing_zooms_on_the_field_being_typed_in`) || Đạt (người dùng xác nhận 2026-11-12) |
 | Z23 | Quay mới: chuyển sang cửa sổ khác (Alt+Tab hoặc bấm thanh tác vụ) giữa hai lần thao tác: camera lùi ra toàn cảnh rồi mới zoom vào chỗ mới | Đạt (`a_window_switch_zooms_out_between_groups`, `window_switches_are_logged_relative_to_the_capture_with_no_title`) || Đạt (người dùng xác nhận 2026-11-12) |
-| Z24 | Chọn một đoạn zoom → Kiểu "Làm tối xung quanh": video không phóng to; vùng trong khung sáng (góc bo, viền mảnh), phần còn lại tối đi; rãnh ghi "Spot". Kéo khung hoặc thêm điểm ◆: vùng sáng di chuyển theo | Đạt (`a_spotlight_lights_the_frame_without_zooming`, `a_spotlight_darkens_only_outside_its_box`), xem trước đã kiểm trên trang thử | |
-| Z25 | Xuất MP4 có đoạn spotlight: vùng tối hiện dần khi vào đoạn, tắt dần khi ra | Đạt (`a_spotlight_is_drawn_over_the_video`) | |
-| Z26 | Ô "Nhòe chuyển động khi zoom" (mặc định bật): bản xuất nhòe nhẹ lúc phóng to/thu nhỏ/lia, khung đứng yên vẫn nét; tắt ô thì không nhòe. Khi phát xem trước cũng hơi nhòe lúc camera chạy | Đạt (`motion_blur_smears_the_zoom_in_and_not_still_frames`, `motion_blur_only_while_the_camera_moves`) | |
+| Z24 | Chọn một đoạn zoom → Kiểu "Làm tối xung quanh": video không phóng to; vùng trong khung sáng (góc bo, viền mảnh), phần còn lại tối đi; rãnh ghi "Spot". Kéo khung hoặc thêm điểm ◆: vùng sáng di chuyển theo | Đạt (`a_spotlight_lights_the_frame_without_zooming`, `a_spotlight_darkens_only_outside_its_box`), xem trước đã kiểm trên trang thử || Đạt (người dùng xác nhận 2026-11-12) |
+| Z25 | Xuất MP4 có đoạn spotlight: vùng tối hiện dần khi vào đoạn, tắt dần khi ra | Đạt (`a_spotlight_is_drawn_over_the_video`) || Đạt (người dùng xác nhận 2026-11-12) |
+| Z26 | Ô "Nhòe chuyển động khi zoom" (mặc định bật): bản xuất nhòe nhẹ lúc phóng to/thu nhỏ/lia, khung đứng yên vẫn nét; tắt ô thì không nhòe. Khi phát xem trước cũng hơi nhòe lúc camera chạy | Đạt (`motion_blur_smears_the_zoom_in_and_not_still_frames`, `motion_blur_only_while_the_camera_moves`) || Đạt (người dùng xác nhận 2026-11-12) |
 
 ## Khung hình và GIF (giai đoạn 2, bước 6)
 
