@@ -108,7 +108,7 @@ test("zAtTheEndAddsNothing", () => {
   const later = seg({ start_ms: 3500, end_ms: 6000 });
   const r = addSegmentAt([later], 2000, 10_000, [0.3, 0.7])!;
   assert.equal(r.index, 0);
-  assert.deepEqual(r.segments[0], { start_ms: 2000, end_ms: 3500, scale: 1.5, center: [0.3, 0.7], manual: true, keys: [], speed: "normal" });
+  assert.deepEqual(r.segments[0], { start_ms: 2000, end_ms: 3500, scale: 1.5, center: [0.3, 0.7], manual: true, keys: [], speed: "normal", style: "zoom" });
   const free = addSegmentAt([], 1000, 10_000, null)!;
   assert.deepEqual([free.segments[0].end_ms, free.segments[0].center], [4000, [0.5, 0.5]]);
   assert.equal(addSegmentAt([seg({ start_ms: 2300, end_ms: 6000 })], 2000, 10_000, null), null, "under 0.5 s before the next segment");
@@ -193,4 +193,18 @@ test("an automatic region is dropped where asked, never on another", () => {
   assert.equal(before.index, 0);
   assert.equal(addRegionAt([{ start_ms: 8000, end_ms: 20_000 }], 9000, 60_000), null, "inside a region");
   assert.equal(addRegionAt([], 59_500, 60_000), null, "under 1 s before the end");
+});
+
+import { spotAt } from "./zoomMath.ts";
+
+test("the spotlight is interpolated between samples, absent without data", () => {
+  const sp = (cx: number, alpha: number) => ({ cx, cy: 0.5, scale: 2, alpha });
+  const track: [number, ReturnType<typeof c>, ReturnType<typeof sp>][] = [
+    [0, c(0.5, 0.5, 1), sp(0.2, 0)],
+    [100, c(0.5, 0.5, 1), sp(0.4, 1)],
+  ];
+  const m = spotAt(track, 50)!;
+  assert.ok(near(m.cx, 0.3) && near(m.alpha, 0.5));
+  assert.equal(spotAt([[0, c(0.5, 0.5, 1)]] as never, 0), null, "an old track without spotlight data");
+  assert.equal(spotAt([], 0), null);
 });

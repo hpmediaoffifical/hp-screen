@@ -67,7 +67,8 @@ pub fn run_export_gif(source: &Path, out: &Path, plan: &Plan, progress: &mut dyn
             }
             let Some(fp) = plan.frame(n) else { break };
             let src = video.frame_at(fp.src_ms)?;
-            let frame = compositor.render(src, info.width, info.height, Some(fp.view), Some(plan.layout()), &fp.draws)?;
+            let views: &[(f32, f32, f32, f32)] = if fp.blur_views.is_empty() { std::slice::from_ref(&fp.view) } else { &fp.blur_views };
+            let frame = compositor.render_views(src, info.width, info.height, views, Some(plan.layout()), &fp.draws)?;
             gif.write(frame)?;
             if (n + 1) % PROGRESS_EVERY == 0 || n + 1 == total {
                 progress(n + 1, total);
@@ -166,7 +167,8 @@ fn write_all(
                 compositor = Some(Compositor::new(out_w, out_h, Device::Hardware)?);
             }
             let c = compositor.as_mut().expect("just created");
-            (c.render(src, info.width, info.height, Some(fp.view), Some(layout), &fp.draws)?, out_w * 4)
+            let views: &[(f32, f32, f32, f32)] = if fp.blur_views.is_empty() { std::slice::from_ref(&fp.view) } else { &fp.blur_views };
+            (c.render_views(src, info.width, info.height, views, Some(layout), &fp.draws)?, out_w * 4)
         };
         if first.is_none() {
             first = Some(tight(frame, stride, out_w, out_h));
@@ -376,8 +378,32 @@ mod tests {
             manual: true,
             keys: vec![ZoomKey { t_ms: 2000, cx: 0.75, cy: 0.75, scale: 2.0 }],
             speed: Speed::Instant,
+            ..ZoomSegment::default()
         };
         EditDoc { cuts, zoom: ZoomDoc { enabled: true, segments: vec![seg], ..ZoomDoc::default() }, ..EditDoc::default() }
+    }
+
+    #[test]
+    fn motion_blur_smears_the_zoom_in_and_not_still_frames() {
+        use hp_core::zoom::{ZoomDoc, ZoomSegment};
+        let source = temp_path("exp-blur", "a.mp4");
+        make_quadrants(&source, 3, 320, 240);
+        let doc = |motion_blur: bool| {
+            let seg = ZoomSegment { start_ms: 1000, end_ms: 2600, scale: 3.0, center: Some((0.25, 0.25)), manual: true, ..ZoomSegment::default() };
+            EditDoc { zoom: ZoomDoc { enabled: true, segments: vec![seg], motion_blur, ..ZoomDoc::default() }, ..EditDoc::default() }
+        };
+        let decoded = |path: &Path, ms: i64| VideoDecoder::open(path).unwrap().0.frame_at(ms).unwrap().to_vec();
+        let sharp = export(&source, &plan_doc(&source, &doc(false))).unwrap();
+        let sharp_frames = (decoded(&sharp, 1200), decoded(&sharp, 400));
+        let blurred = export(&source, &plan_doc(&source, &doc(true))).unwrap();
+        let (frames, _, _) = probe(&blurred).unwrap();
+        assert!((89..=91).contains(&frames), "{frames}");
+        // Pixels that changed clearly (more than encoder noise).
+        let changed = |a: &[u8], b: &[u8]| a.iter().zip(b).filter(|(x, y)| (**x as i32 - **y as i32).abs() > 40).count();
+        let moving = changed(&sharp_frames.0, &decoded(&blurred, 1200));
+        let still = changed(&sharp_frames.1, &decoded(&blurred, 400));
+        assert!(moving > 200, "zooming in at 1.2 s: the colour edges are smeared ({moving} values changed)");
+        assert!(still < 50, "a still frame is the same ({still} values changed)");
     }
 
     #[test]

@@ -32,6 +32,8 @@ interface Props {
   camera?: (ms: number) => Camera;
   /** When set, a click on the picture picks that point of the source frame (0–1). */
   onPick?: (x: number, y: number) => void;
+  /** Blur the picture a little while the camera moves (an approximation of the export's motion blur). */
+  motionBlur?: boolean;
   /** When set, the picture is shown unzoomed with this zoom frame to drag over it. */
   frameEdit?: { camera: Camera; onChange: (cam: Camera, first: boolean) => void };
 }
@@ -139,6 +141,14 @@ const Preview = forwardRef<PreviewHandle, Props>(function Preview(props, ref) {
       if (zoom.current) {
         const s = base[2] / now[2];
         zoom.current.style.transform = `scale(${s}) translate(${-now[0] * k1}px, ${-now[1] * k1}px)`;
+        // While playing, blur in proportion to how fast the view moves (up to 3 px).
+        let blur = 0;
+        if (p.motionBlur && p.camera && !v.paused) {
+          const next = sourceView(p.camera(ms + 33), p.srcW, p.srcH, fill);
+          const move = Math.max(Math.abs(next[0] - now[0]), Math.abs(next[1] - now[1]), Math.abs(next[2] - now[2]), Math.abs(next[3] - now[3])) / Math.max(1, now[2]);
+          blur = Math.min(3, move * 150);
+        }
+        zoom.current.style.filter = blur > 0.3 ? `blur(${blur.toFixed(1)}px)` : "";
       }
       const ctx = fit(canvas.current, ew, eh);
       if (ctx) {

@@ -5,7 +5,7 @@ use crate::export::{export_path, run_export};
 use hp_core::cut::Span;
 use hp_core::edit::{EditDoc, LoadError, load_edit, save_edit};
 use hp_core::effects::{Effects, build_effects};
-use hp_core::zoom::{AutoInput, Camera, ZoomSegment, auto_in_regions, camera_track, regenerate};
+use hp_core::zoom::{AutoInput, Camera, Spot, ZoomSegment, auto_in_regions, regenerate};
 use hp_core::input_log::parse_log;
 use hp_core::library::{DATA_DIR, Kind, edit_path, kind_of, sidecar_path};
 use hp_core::plan::{Plan, Source};
@@ -134,10 +134,10 @@ fn auto_zoom(effects: Option<&Effects>, doc: &EditDoc, w: u32, h: u32, duration_
 }
 
 /// Camera samples for the preview: every 1000/60 ms, as in the export.
-fn zoom_samples(effects: Option<&Effects>, doc: &EditDoc, w: u32, h: u32, duration_ms: i64) -> Vec<(i64, Camera)> {
+fn zoom_samples(effects: Option<&Effects>, doc: &EditDoc, w: u32, h: u32, duration_ms: i64) -> Vec<(i64, Camera, Spot)> {
     let (fw, fh) = (w.max(1) as f32, h.max(1) as f32);
     let cursor = |t: i64| effects.and_then(|e| e.cursor_at(t)).map(|(x, y)| (x / fw, y / fh));
-    camera_track(&doc.zoom, &cursor, duration_ms, 1000 / 60)
+    hp_core::zoom::zoom_track(&doc.zoom, &cursor, duration_ms, 1000 / 60)
 }
 
 /// The video's size and length as the edit page knows them (saves reopening the file).
@@ -162,7 +162,7 @@ pub async fn zoom_auto(app: AppHandle, state: State<'_, AppState>, path: String,
 
 /// The zoom camera over source time, for the preview.
 #[tauri::command]
-pub async fn zoom_track(app: AppHandle, state: State<'_, AppState>, path: String, doc: EditDoc, frame: Frame) -> Result<Vec<(i64, Camera)>, String> {
+pub async fn zoom_track(app: AppHandle, state: State<'_, AppState>, path: String, doc: EditDoc, frame: Frame) -> Result<Vec<(i64, Camera, Spot)>, String> {
     let media = video_item(&app, &state, &path)?;
     let fx = effects_for(&media, &frame_info(&frame));
     Ok(zoom_samples(fx.as_ref(), &doc, frame.width, frame.height, frame.duration_ms))

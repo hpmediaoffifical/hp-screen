@@ -5,7 +5,7 @@ use crate::edit::EffectToggles;
 use crate::effects::{Draw, Effects, draws_at};
 use crate::layout::{Layout, layout, source_view};
 use crate::subtitle::{BURN_BOTTOM, Cue, burned_height, cue_at};
-use crate::zoom::{Camera, camera_at, camera_track};
+use crate::zoom::{Camera, Spot, camera_at, spot_at, zoom_track};
 
 /// Camera samples per second for zoom.
 const CAMERA_STEP_MS: i64 = 1000 / 60;
@@ -27,7 +27,14 @@ pub struct FramePlan {
     pub camera: Camera,
     /// The part of the source shown (zoom and fill crop), in source pixels.
     pub view: (f32, f32, f32, f32),
+    /// Views to render and average for motion blur while the camera moves; empty when still.
+    pub blur_views: Vec<(f32, f32, f32, f32)>,
 }
+
+/// Motion blur: views taken across half a frame (a 180° shutter)...
+const BLUR_SAMPLES: usize = 5;
+/// ...used when a corner of the view moves more than this fraction of its size in that time.
+const BLUR_MIN_MOVE: f32 = 0.0025;
 
 #[derive(Clone, Debug)]
 pub struct Plan {
@@ -35,8 +42,11 @@ pub struct Plan {
     cuts: Cuts,
     effects: Option<Effects>,
     toggles: EffectToggles,
-    /// Zoom camera over source time; `None` when zoom is off.
-    track: Option<Vec<(i64, Camera)>>,
+    /// Zoom camera and spotlight over source time; `None` when zoom is off.
+    track: Option<Vec<(i64, Camera, Spot)>>,
+    /// The camera track for callers that want only the camera.
+    cameras: Option<Vec<(i64, Camera)>>,
+    motion_blur: bool,
     layout: Layout,
     /// Cues drawn into the video; `None` when not burned in.
     burned: Option<Vec<Cue>>,
@@ -48,11 +58,12 @@ impl Plan {
         let track = doc.zoom.enabled.then(|| {
             let (w, h) = (src.width.max(1) as f32, src.height.max(1) as f32);
             let cursor = |t: i64| effects.as_ref().and_then(|e| e.cursor_at(t)).map(|(x, y)| (x / w, y / h));
-            camera_track(&doc.zoom, &cursor, src.duration_ms, CAMERA_STEP_MS)
+            zoom_track(&doc.zoom, &cursor, src.duration_ms, CAMERA_STEP_MS)
         });
+        let cameras = track.as_ref().map(|t| t.iter().map(|s| (s.0, s.1)).collect());
         let layout = layout(src.width, src.height, &doc.frame);
         let burned = doc.subtitles.burn.then(|| doc.subtitles.cues.clone());
-        Plan { src, cuts: doc.cuts(src.duration_ms), effects, toggles: doc.effects, track, layout, burned }
+        Plan { src, cuts: doc.cuts(src.duration_ms), effects, toggles: doc.effects, track, cameras, motion_blur: doc.zoom.motion_blur, layout, burned }
     }
 
     /// The same edit as a GIF: `fps` frames per second, `width` pixels wide.
@@ -69,7 +80,35 @@ impl Plan {
 
     /// The zoom camera samples (for the preview).
     pub fn camera_track(&self) -> Option<&[(i64, Camera)]> {
-        self.track.as_deref()
+        self.cameras.as_deref()
+    }
+
+    fn view_at(&self, src_ms: i64) -> (f32, f32, f32, f32) {
+        let camera = self.cameras.as_deref().map_or(Camera::WHOLE, |t| camera_at(t, src_ms));
+        source_view(camera, self.src.width, self.src.height, self.layout.fill_aspect)
+    }
+
+    /// Views across half a frame around output time `out_ms` when the camera moves; else empty.
+    fn blur_views(&self, out_ms: i64) -> Vec<(f32, f32, f32, f32)> {
+        if !self.motion_blur || self.cameras.is_none() {
+            return Vec::new();
+        }
+        let frame_ms = 1000.0 / self.fps() as f64;
+        let views: Vec<_> = (0..BLUR_SAMPLES)
+            .filter_map(|i| {
+                let off = (i as f64 / (BLUR_SAMPLES - 1) as f64 - 0.5) * frame_ms / 2.0;
+                self.cuts.to_source((out_ms as f64 + off).round() as i64).map(|s| self.view_at(s))
+            })
+            .collect();
+        let (first, last) = (views.first(), views.last());
+        let moved = match (first, last) {
+            (Some(a), Some(b)) => {
+                let size = a.2.max(a.3).max(1.0);
+                [(a.0 - b.0).abs(), (a.1 - b.1).abs(), ((a.0 + a.2) - (b.0 + b.2)).abs(), ((a.1 + a.3) - (b.1 + b.3)).abs()].into_iter().fold(0.0f32, f32::max) / size
+            }
+            _ => 0.0,
+        };
+        if views.len() == BLUR_SAMPLES && moved > BLUR_MIN_MOVE { views } else { Vec::new() }
     }
 
     pub fn frames(&self) -> u64 {
@@ -104,9 +143,18 @@ impl Plan {
             }
             draws.push(Draw::Subtitle { text: cue.text.clone() });
         }
-        let camera = self.track.as_deref().map_or(Camera::WHOLE, |t| camera_at(t, src_ms));
+        let camera = self.cameras.as_deref().map_or(Camera::WHOLE, |t| camera_at(t, src_ms));
         let view = source_view(camera, self.src.width, self.src.height, self.layout.fill_aspect);
-        Some(FramePlan { out_ms, src_ms, draws, camera, view })
+        // A spotlight darkens the video around its box, under the click marks.
+        if let Some(track) = self.track.as_deref() {
+            let spot = spot_at(track, src_ms);
+            if spot.alpha > 0.01 {
+                let (x, y, w, h) = source_view(Camera { cx: spot.cx, cy: spot.cy, scale: spot.scale }, self.src.width, self.src.height, None);
+                draws.insert(0, Draw::Spot { x, y, w, h, alpha: spot.alpha });
+            }
+        }
+        let blur_views = self.blur_views(out_ms);
+        Some(FramePlan { out_ms, src_ms, draws, camera, view, blur_views })
     }
 
     pub fn cuts(&self) -> &Cuts {
@@ -231,5 +279,31 @@ mod tests {
     #[test]
     fn odd_sources_give_even_output() {
         assert_eq!(Plan::new(src(641, 481), &EditDoc::default(), None).out_size(), (640, 480));
+    }
+
+    fn zooming(motion_blur: bool, style: crate::zoom::Style) -> EditDoc {
+        use crate::zoom::{ZoomDoc, ZoomSegment};
+        let seg = ZoomSegment { start_ms: 1000, end_ms: 3000, scale: 2.0, center: Some((0.25, 0.25)), manual: true, style, ..ZoomSegment::default() };
+        EditDoc { zoom: ZoomDoc { enabled: true, segments: vec![seg], motion_blur, ..ZoomDoc::default() }, ..EditDoc::default() }
+    }
+
+    #[test]
+    fn a_spotlight_is_drawn_over_the_video() {
+        let p = Plan::new(src(640, 480), &zooming(true, crate::zoom::Style::Spotlight), None);
+        let f = p.frame(75).unwrap(); // 2.5 s
+        let spot = f.draws.iter().find_map(|d| if let Draw::Spot { x, y, w, h, alpha } = d { Some((*x, *y, *w, *h, *alpha)) } else { None });
+        let (x, y, w, h, alpha) = spot.expect("a spotlight at 2.5 s");
+        assert!(x.abs() < 3.0 && y.abs() < 3.0 && (w - 320.0).abs() < 6.0 && (h - 240.0).abs() < 6.0 && alpha > 0.9, "{spot:?}");
+        assert!((f.camera.scale - 1.0).abs() < 1e-3);
+        assert!(!p.frame(0).unwrap().draws.iter().any(|d| matches!(d, Draw::Spot { .. })));
+    }
+
+    #[test]
+    fn motion_blur_only_while_the_camera_moves() {
+        let p = Plan::new(src(640, 480), &zooming(true, crate::zoom::Style::Zoom), None);
+        assert_eq!(p.frame(34).unwrap().blur_views.len(), 5, "zooming in at 1.13 s");
+        assert!(p.frame(0).unwrap().blur_views.is_empty(), "still camera");
+        let off = Plan::new(src(640, 480), &zooming(false, crate::zoom::Style::Zoom), None);
+        assert!(off.frame(34).unwrap().blur_views.is_empty(), "turned off");
     }
 }

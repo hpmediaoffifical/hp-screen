@@ -23,6 +23,8 @@ export interface ZoomKey {
 }
 
 export type Speed = "slow" | "normal" | "fast" | "instant";
+/** "zoom" zooms in on the frame; "spotlight" keeps the whole picture and darkens around the frame. */
+export type ZoomStyle = "zoom" | "spotlight";
 export type Level = "low" | "normal" | "high";
 
 export interface ZoomSegment {
@@ -36,6 +38,7 @@ export interface ZoomSegment {
   /** Keyframes after the start (the start is `center` and `scale`). */
   keys: ZoomKey[];
   speed: Speed;
+  style: ZoomStyle;
 }
 
 export interface ZoomDoc {
@@ -45,6 +48,16 @@ export interface ZoomDoc {
   level: Level;
   /** Where automatic zoom works (dropped on the zoom track); none: no automatic zoom. */
   regions: Span[];
+  /** Exports blur the picture while the camera moves. */
+  motion_blur: boolean;
+}
+
+/** The lit part of a spotlight (like a camera) and how strongly the rest is darkened (0–1). */
+export interface Spot {
+  cx: number;
+  cy: number;
+  scale: number;
+  alpha: number;
 }
 
 /** Where the zoom camera looks: centre (0–1) and zoom level. */
@@ -159,7 +172,7 @@ export const exportStart = (path: string, doc: EditDoc, gif: GifOptions | null =
 export const editLayout = (doc: EditDoc, frame: Frame) => invoke<Layout>("edit_layout", { doc, frame });
 export const exportCancel = () => invoke<void>("export_cancel");
 export const zoomAuto = (path: string, doc: EditDoc, frame: Frame) => invoke<ZoomSegment[]>("zoom_auto", { path, doc, frame });
-export const zoomTrack = (path: string, doc: EditDoc, frame: Frame) => invoke<[number, Camera][]>("zoom_track", { path, doc, frame });
+export const zoomTrack = (path: string, doc: EditDoc, frame: Frame) => invoke<[number, Camera, Spot][]>("zoom_track", { path, doc, frame });
 
 // Every export event names the source video, so a page only follows its own export.
 export const onExportProgress = (handler: (source: string, done: number, total: number) => void): Promise<UnlistenFn> =>

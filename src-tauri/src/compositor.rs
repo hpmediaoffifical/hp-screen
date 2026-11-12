@@ -33,6 +33,8 @@ pub struct Compositor {
     out_w: u32,
     out_h: u32,
     out: Vec<u8>,
+    /// The averaged frame of a motion-blurred render.
+    blended: Vec<u8>,
     text: IDWriteFactory,
     chip_format: IDWriteTextFormat,
     /// Chip font size in pixels.
@@ -156,6 +158,7 @@ impl Compositor {
                 out_w,
                 out_h,
                 out: vec![0; (out_w * out_h * 4) as usize],
+                blended: Vec::new(),
                 text,
                 chip_format,
                 chip_size,
@@ -169,6 +172,32 @@ impl Compositor {
     /// and returns the output as top-down BGRA, `out_w * 4` per row.
     /// `view` is the part of the source shown (x, y, w, h in source pixels), `None` for all of it.
     /// `layout` places it in the output with a background; `None` fills the whole output.
+    /// Renders the frame once per view and averages the results (motion blur); a single view
+    /// renders as usual.
+    pub fn render_views(
+        &mut self,
+        src: &[u8],
+        src_w: u32,
+        src_h: u32,
+        views: &[(f32, f32, f32, f32)],
+        layout: Option<&Layout>,
+        draws: &[Draw],
+    ) -> Result<&[u8], String> {
+        if views.len() <= 1 {
+            return self.render(src, src_w, src_h, views.first().copied(), layout, draws);
+        }
+        let mut acc: Vec<u32> = Vec::new();
+        for v in views {
+            let f = self.render(src, src_w, src_h, Some(*v), layout, draws)?;
+            if acc.len() != f.len() {
+                acc = vec![0; f.len()];
+            }
+            add_into(&mut acc, f);
+        }
+        self.blended = average(&acc, views.len() as u32);
+        Ok(&self.blended)
+    }
+
     pub fn render(
         &mut self,
         src: &[u8],
@@ -305,7 +334,11 @@ impl Compositor {
         unsafe {
             // Marks on the picture stay inside the video window, as in the preview.
             self.ctx.PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-            let on_video = self.draw_marks(draws, &at, sx, full_ring, stroke);
+            let spot = match draws.iter().find(|d| matches!(d, Draw::Spot { .. })) {
+                Some(&Draw::Spot { x, y, w, h, alpha }) if alpha > 0.0 => self.draw_spot(clip, at(x, y), at(x + w, y + h), alpha, video.2.min(video.3)),
+                _ => Ok(()),
+            };
+            let on_video = spot.and_then(|_| self.draw_marks(draws, &at, sx, full_ring, stroke));
             self.ctx.PopAxisAlignedClip();
             on_video?;
             // The subtitle box as laid out; chips sit at least 2% of the frame above it.
@@ -325,6 +358,23 @@ impl Compositor {
             if let Some(b) = sub {
                 self.draw_subtitle(b)?;
             }
+        }
+        Ok(())
+    }
+
+    /// A spotlight: the video outside the box (top-left `a`, bottom-right `b`, output pixels) is
+    /// darkened, with a thin light outline round the box.
+    unsafe fn draw_spot(&self, video: D2D_RECT_F, a: (f32, f32), b: (f32, f32), alpha: f32, short_side: f32) -> Result<(), String> {
+        // SAFETY: Direct2D calls with valid pointers, between BeginDraw and EndDraw.
+        unsafe {
+            let factory = self.ctx.GetFactory().map_err(err("Không vẽ được spotlight"))?;
+            let r = 0.02 * short_side;
+            let lit = D2D1_ROUNDED_RECT { rect: D2D_RECT_F { left: a.0, top: a.1, right: b.0, bottom: b.1 }, radiusX: r, radiusY: r };
+            let outer: ID2D1Geometry = factory.CreateRectangleGeometry(&video).map_err(err("Không vẽ được spotlight"))?.into();
+            let inner: ID2D1Geometry = factory.CreateRoundedRectangleGeometry(&lit).map_err(err("Không vẽ được spotlight"))?.into();
+            let ring = factory.CreateGeometryGroup(D2D1_FILL_MODE_ALTERNATE, &[Some(outer), Some(inner)]).map_err(err("Không vẽ được spotlight"))?;
+            self.ctx.FillGeometry(&ring, &self.brush((0.0, 0.0, 0.0), SPOT_DARK * alpha)?, None);
+            self.ctx.DrawRoundedRectangle(&lit, &self.brush((1.0, 1.0, 1.0), 0.5 * alpha)?, 1.5, None::<&ID2D1StrokeStyle>);
         }
         Ok(())
     }
@@ -454,6 +504,20 @@ impl Compositor {
         Ok(())
     }
 }
+
+fn add_into(acc: &mut [u32], frame: &[u8]) {
+    for (a, b) in acc.iter_mut().zip(frame) {
+        *a += *b as u32;
+    }
+}
+
+fn average(acc: &[u32], n: u32) -> Vec<u8> {
+    let n = n.max(1);
+    acc.iter().map(|&a| ((a + n / 2) / n).min(255) as u8).collect()
+}
+
+/// How dark a spotlight makes the rest of the video.
+const SPOT_DARK: f32 = 0.55;
 
 /// Full ripple radius in output pixels: 2.5% of the source height as the video is shown.
 fn ripple_px(src_h: f32, view_h: f32, video_h: f32) -> f32 {
@@ -639,6 +703,39 @@ mềm ghi màn hình thật nhanh và đơn giản nhé";
         assert!(runs[1].0 && runs[1].1 <= h / 10, "a two-line box, not re-wrapped into many lines: {runs:?}");
         assert!(!runs[2].0 && runs[2].1 >= 5, "a gap between subtitle and chip: {runs:?}");
         assert!(runs[3].0, "the chip: {runs:?}");
+    }
+
+    #[test]
+    fn frames_are_averaged_for_motion_blur() {
+        let mut acc = vec![0u32; 4];
+        add_into(&mut acc, &[0, 100, 255, 255]);
+        add_into(&mut acc, &[10, 101, 0, 255]);
+        assert_eq!(average(&acc, 2), vec![5, 101, 128, 255], "rounded to nearest");
+    }
+
+    #[test]
+    fn several_views_render_as_one_blurred_frame() {
+        let src = solid(64, 64, |x, _| if x < 32 { [255, 0, 0] } else { [0, 0, 255] });
+        let mut c = Compositor::new(64, 64, Device::Warp).unwrap();
+        let sharp = c.render_views(&src, 64, 64, &[(0.0, 0.0, 64.0, 64.0)], None, &[]).unwrap().to_vec();
+        let views: Vec<_> = (0..5).map(|i| (i as f32 * 4.0, 0.0, 64.0, 64.0)).collect();
+        let blurred = c.render_views(&src, 64, 64, &views, None, &[]).unwrap().to_vec();
+        let at = |f: &[u8], x: usize| f[(32 * 64 + x) * 4 + 2];
+        assert!(at(&sharp, 26) > 240 && at(&blurred, 26) < 240, "the edge is smeared: {} vs {}", at(&sharp, 26), at(&blurred, 26));
+    }
+
+    #[test]
+    fn a_spotlight_darkens_only_outside_its_box() {
+        let src = solid(400, 300, |_, _| [255, 255, 255]);
+        let mut c = Compositor::new(400, 300, Device::Warp).unwrap();
+        let spot = Draw::Spot { x: 100.0, y: 75.0, w: 200.0, h: 150.0, alpha: 1.0 };
+        let out = c.render(&src, 400, 300, None, None, &[spot]).unwrap();
+        assert!(rgb_at(out, 400, 200, 150)[0] > 245, "inside stays bright: {:?}", rgb_at(out, 400, 200, 150));
+        let outside = rgb_at(out, 400, 20, 20)[0];
+        assert!((100..130).contains(&outside), "outside darkened by about 55%: {outside}");
+        let half = Draw::Spot { x: 100.0, y: 75.0, w: 200.0, h: 150.0, alpha: 0.5 };
+        let out = c.render(&src, 400, 300, None, None, &[half]).unwrap();
+        assert!(rgb_at(out, 400, 20, 20)[0] > 160, "fading in: lighter");
     }
 
     #[test]

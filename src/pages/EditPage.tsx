@@ -17,6 +17,8 @@ import {
   type Level,
   type Span,
   type Speed,
+  type Spot,
+  type ZoomStyle,
   type ZoomSegment,
 } from "../editApi";
 import ExportPanel from "../editor/ExportPanel";
@@ -24,10 +26,10 @@ import SubtitlesPanel from "../editor/SubtitlesPanel";
 import { chipAbove, cueAt, layoutSubtitle, paintSubtitle } from "../editor/subsMath";
 import Preview, { type PreviewHandle } from "../editor/Preview";
 import Timeline from "../editor/Timeline";
-import { cursorAt, drawEffects } from "../editor/drawEffects";
+import { cursorAt, drawEffects, drawSpot } from "../editor/drawEffects";
 import ZoomTrack, { type ZoomTool } from "../editor/ZoomTrack";
 import ZoomTools from "../editor/ZoomTools";
-import { addKey, addRegionAt, addSegmentAt, cameraAt, editFrameAt, frameAt, setActiveScale, WHOLE } from "../editor/zoomMath";
+import { addKey, addRegionAt, addSegmentAt, cameraAt, editFrameAt, frameAt, setActiveScale, spotAt, WHOLE } from "../editor/zoomMath";
 
 type Tab = "cut" | "effects" | "zoom" | "frame" | "subs" | "export";
 const TABS: { id: Tab; label: string }[] = [
@@ -54,7 +56,7 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
   const [selection, setSelection] = useState<Span | null>(null);
   const [tab, setTab] = useState<Tab>("cut");
   const [message, setMessage] = useState("");
-  const [track, setTrack] = useState<[number, Camera][]>([]);
+  const [track, setTrack] = useState<[number, Camera, Spot][]>([]);
   const [layout, setLayout] = useState<Layout | null>(null);
   const [zoomSel, setZoomSel] = useState<number | null>(null);
   const [keySel, setKeySel] = useState<number | null>(null);
@@ -447,11 +449,17 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
           onTime={setPlayhead}
           onPlaying={setPlaying}
           onError={() => setMessage("Không phát được video này trong trang chỉnh sửa.")}
-          draw={
-            session.effects
-              ? (ctx, ms) => drawEffects(ctx, session.effects!, ms, { ...doc.effects, keys: false }, session.info.height, ctx.canvas.height / session.info.height)
-              : undefined
-          }
+          draw={(ctx, ms) => {
+            // The spotlight (not while its frame is being edited), under the click marks.
+            const spot = doc.zoom.enabled && !frameEditing ? spotAt(track, ms) : null;
+            if (session.effects) {
+              drawEffects(ctx, session.effects, ms, { ...doc.effects, keys: false }, session.info.height, ctx.canvas.height / session.info.height, undefined, spot);
+            } else {
+              ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+              if (spot) drawSpot(ctx, spot);
+            }
+          }}
+          motionBlur={doc.zoom.motion_blur}
           drawFixed={(ctx, ms) => {
             // Shown in the preview whether or not they are burned in, so they can be checked.
             const cue = cueAt(doc.subtitles.cues, ms);
@@ -566,6 +574,13 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
                       <button className="btn btn-small btn-danger" onClick={deleteRegion}>Xóa vùng này</button>
                     </div>
                   )}
+                  <label className="check">
+                    <input type="checkbox" checked={doc.zoom.motion_blur} onChange={(e) => change({ ...doc, zoom: { ...doc.zoom, motion_blur: e.target.checked } })} />
+                    <span>
+                      Nhòe chuyển động khi zoom
+                      <span className="hint check-hint">Video xuất ra nhòe nhẹ lúc phóng to, thu nhỏ và lia, trông mượt như quay phim. Xuất lâu hơn một chút.</span>
+                    </span>
+                  </label>
                   <span className="label">Thêm vào rãnh Zoom</span>
                   <ZoomTools durationMs={duration} autoEnabled={!!session.effects} onPlace={(tool, ms) => dropTool(tool, ms ?? playhead)} />
                   <p className="hint">Kéo một nút xuống rãnh Zoom (hoặc bấm để đặt tại vạch phát). Ngoài các đoạn và vùng đã đặt, video giữ toàn màn hình.</p>
@@ -578,6 +593,7 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
                       hasCursor={!!session.effects}
                       onScale={(scale) => slideScale(zoomSel, scale)}
                       onSpeed={(speed: Speed) => updateSeg(zoomSel, (s) => ({ ...s, speed }))}
+                      onStyle={(style: ZoomStyle) => updateSeg(zoomSel, (s) => ({ ...s, style }))}
                       onAddKey={addKeyHere}
                       onDeleteKey={deleteKey}
                       onFollow={() => {
@@ -722,6 +738,7 @@ function ZoomControls(props: {
   hasCursor: boolean;
   onScale: (scale: number) => void;
   onSpeed: (speed: Speed) => void;
+  onStyle: (style: ZoomStyle) => void;
   onAddKey: () => void;
   onDeleteKey: () => void;
   onFollow: () => void;
@@ -764,6 +781,20 @@ function ZoomControls(props: {
           </button>
         )}
       </div>
+      <span className="label">Kiểu</span>
+      <div className="row" role="radiogroup" aria-label="Kiểu zoom">
+        {(
+          [
+            ["zoom", "Phóng to"],
+            ["spotlight", "Làm tối xung quanh"],
+          ] as const
+        ).map(([v, label]) => (
+          <button key={v} className={"chip chip-toggle" + ((seg.style ?? "zoom") === v ? " on" : "")} aria-pressed={(seg.style ?? "zoom") === v} onClick={() => props.onStyle(v)}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {seg.style === "spotlight" && <p className="hint">Video giữ nguyên cỡ; vùng trong khung sáng, phần còn lại tối đi.</p>}
       <span className="label">Tốc độ</span>
       <div className="row" role="radiogroup" aria-label="Tốc độ zoom">
         {SPEEDS.map(([v, label]) => (

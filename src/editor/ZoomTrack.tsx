@@ -98,7 +98,7 @@ export default function ZoomTrack(props: Props) {
     const ms = msAt(e.clientX);
     if (g.kind === "create") {
       if (Math.abs(ms - g.fromMs) < MIN_LEN_MS) return;
-      const seg: ZoomSegment = { start_ms: Math.min(g.fromMs, ms), end_ms: Math.max(g.fromMs, ms), scale: 1.5, center: null, manual: true, keys: [], speed: "normal" };
+      const seg: ZoomSegment = { start_ms: Math.min(g.fromMs, ms), end_ms: Math.max(g.fromMs, ms), scale: 1.5, center: null, manual: true, keys: [], speed: "normal", style: "zoom" };
       if (g.index === null) {
         g.index = props.segments.length;
         props.onChange([...props.segments, seg], true);
@@ -188,7 +188,7 @@ export default function ZoomTrack(props: Props) {
             onPointerDown={(e) => downOnSegment(e, i)}
             title={`Zoom ${s.scale.toFixed(1)}× — kéo mép để đổi thời gian, kéo giữa để dời`}
           >
-            <span className="zseg-text">{s.scale.toFixed(1)}×</span>
+            <span className="zseg-text">{s.style === "spotlight" ? "Spot" : `${s.scale.toFixed(1)}×`}</span>
           </div>
         ))}
         {props.segments.flatMap((s, i) =>

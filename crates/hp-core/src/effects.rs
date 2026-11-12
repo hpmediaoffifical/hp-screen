@@ -92,6 +92,8 @@ pub enum Draw {
     Chip { text: String, alpha: f32, bottom: f32 },
     /// A burned-in subtitle cue, placed in the output frame.
     Subtitle { text: String },
+    /// A spotlight: the video outside this box (source pixels) is darkened by `alpha`.
+    Spot { x: f32, y: f32, w: f32, h: f32, alpha: f32 },
 }
 
 pub fn build_effects(log: &ParsedLog, video_w: u32, video_h: u32) -> Effects {

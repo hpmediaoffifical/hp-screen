@@ -61,6 +61,29 @@ impl Speed {
     }
 }
 
+/// What a segment does: zoom in on its frame, or keep the whole picture and darken around it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Style {
+    #[default]
+    Zoom,
+    Spotlight,
+}
+
+/// The lit part of a spotlight (centre and zoom-like size, as a camera) and how strongly the rest
+/// is darkened (0–1).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct Spot {
+    pub cx: f32,
+    pub cy: f32,
+    pub scale: f32,
+    pub alpha: f32,
+}
+
+impl Spot {
+    pub const NONE: Spot = Spot { cx: 0.5, cy: 0.5, scale: 1.0, alpha: 0.0 };
+}
+
 /// How eagerly automatic zoom zooms.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -84,15 +107,16 @@ pub struct ZoomSegment {
     /// Keyframes after the start (the start is `center` and `scale`).
     pub keys: Vec<ZoomKey>,
     pub speed: Speed,
+    pub style: Style,
 }
 
 impl Default for ZoomSegment {
     fn default() -> Self {
-        ZoomSegment { start_ms: 0, end_ms: 0, scale: DEFAULT_SCALE, center: None, manual: false, keys: Vec::new(), speed: Speed::Normal }
+        ZoomSegment { start_ms: 0, end_ms: 0, scale: DEFAULT_SCALE, center: None, manual: false, keys: Vec::new(), speed: Speed::Normal, style: Style::Zoom }
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ZoomDoc {
     pub enabled: bool,
@@ -101,6 +125,14 @@ pub struct ZoomDoc {
     pub level: Level,
     /// Where automatic zoom works (the user drops these on the zoom track); none: no automatic zoom.
     pub regions: Vec<crate::cut::Span>,
+    /// Exports blur the picture while the camera moves.
+    pub motion_blur: bool,
+}
+
+impl Default for ZoomDoc {
+    fn default() -> Self {
+        ZoomDoc { enabled: false, segments: Vec::new(), level: Level::Normal, regions: Vec::new(), motion_blur: true }
+    }
 }
 
 /// Where the camera looks: centre (0–1 of the frame) and zoom level.
@@ -510,7 +542,7 @@ fn cleaned(s: &ZoomSegment, duration_ms: i64) -> ZoomSegment {
         keep
     });
     let center = s.center.map(|(x, y)| (clamp01(x), clamp01(y))).or_else(|| keys.first().map(|k| (k.cx, k.cy)));
-    ZoomSegment { start_ms, end_ms, scale: clamp_scale(s.scale), center, manual: s.manual, keys, speed: s.speed }
+    ZoomSegment { start_ms, end_ms, scale: clamp_scale(s.scale), center, manual: s.manual, keys, speed: s.speed, style: s.style }
 }
 
 /// The part `[a, b)` of `s`: it starts from the frame the camera aims at at `a`.
@@ -579,70 +611,82 @@ pub fn target_at(seg: &ZoomSegment, t_ms: i64) -> Option<Camera> {
 
 /// The camera every `step_ms` from 0 to `duration_ms`, moved by the camera spring in 1 ms steps.
 pub fn camera_track(z: &ZoomDoc, cursor: &dyn Fn(i64) -> Option<(f32, f32)>, duration_ms: i64, step_ms: i64) -> Vec<(i64, Camera)> {
+    zoom_track(z, cursor, duration_ms, step_ms).into_iter().map(|(t, c, _)| (t, c)).collect()
+}
+
+/// The camera and the spotlight every `step_ms` from 0 to `duration_ms`. A zoom segment moves
+/// the camera; a spotlight segment keeps the camera out and moves the spotlight instead; both
+/// follow the camera spring (scaled by the segment's speed) in 1 ms steps.
+pub fn zoom_track(z: &ZoomDoc, cursor: &dyn Fn(i64) -> Option<(f32, f32)>, duration_ms: i64, step_ms: i64) -> Vec<(i64, Camera, Spot)> {
     let step_ms = step_ms.max(1);
     let duration_ms = duration_ms.max(0);
     if !z.enabled {
-        return (0..=duration_ms / step_ms).map(|i| (i * step_ms, Camera::WHOLE)).collect();
+        return (0..=duration_ms / step_ms).map(|i| (i * step_ms, Camera::WHOLE, Spot::NONE)).collect();
     }
     let segments = normalized(&z.segments, duration_ms);
-    let (mut scale, mut cx, mut cy) = (
-        SpringState { value: 1.0, velocity: 0.0 },
-        SpringState { value: 0.5, velocity: 0.0 },
-        SpringState { value: 0.5, velocity: 0.0 },
-    );
+    let still = |v: f32| SpringState { value: v, velocity: 0.0 };
+    let (mut scale, mut cx, mut cy) = (still(1.0), still(0.5), still(0.5));
+    let (mut s_scale, mut s_cx, mut s_cy, mut s_alpha) = (still(1.0), still(0.5), still(0.5), still(0.0));
     let mut out = Vec::with_capacity((duration_ms / step_ms + 2) as usize);
     let mut seg_i = 0usize;
     // The speed of the segment the camera is in, or of the one it just left.
     let mut speed = Speed::Normal;
     // Where the camera aims inside the current segment, when it follows the cursor.
     let mut follow: Option<(usize, (f32, f32))> = None;
+    // Where the spotlight rests when no spotlight is on (it fades out in place).
+    let mut spot_rest = (1.0f32, (0.5f32, 0.5f32));
     for t in 0..=duration_ms {
         while seg_i < segments.len() && segments[seg_i].end_ms <= t {
             seg_i += 1;
         }
         let current = segments.get(seg_i).filter(|s| s.start_ms <= t);
-        let (target_scale, target) = match current {
-            None => (1.0, (0.5, 0.5)),
-            Some(s) => {
-                speed = s.speed;
-                let fixed = target_at(s, t);
-                let aim = match fixed {
-                    Some(c) => (c.cx, c.cy),
-                    None => match cursor(t) {
-                        None => (0.5, 0.5),
-                        Some(now) => {
-                            // What can be shown: the view never leaves the frame.
-                            let half = 0.5 / s.scale;
-                            let inside = |p: (f32, f32)| (p.0.clamp(half, 1.0 - half), p.1.clamp(half, 1.0 - half));
-                            let aim = inside(match follow {
-                                Some((i, aim)) if i == seg_i => aim,
-                                _ => cursor(s.start_ms).unwrap_or(now),
-                            });
-                            // Move only when the cursor leaves the central part of the view
-                            // and is still out a moment later.
-                            let reach = DEAD_ZONE * half;
-                            let outside = |p: (f32, f32)| (p.0 - aim.0).abs() > reach || (p.1 - aim.1).abs() > reach;
-                            let aim = if outside(now) && cursor(t + LOOK_AHEAD_MS).is_none_or(outside) { inside(now) } else { aim };
-                            follow = Some((seg_i, aim));
-                            aim
-                        }
-                    },
-                };
-                (fixed.map_or(s.scale, |c| c.scale), aim)
+        let aimed = current.map(|s| {
+            speed = s.speed;
+            let fixed = target_at(s, t);
+            let aim = match fixed {
+                Some(c) => (c.cx, c.cy),
+                None => match cursor(t) {
+                    None => (0.5, 0.5),
+                    Some(now) => {
+                        // What can be shown: the view never leaves the frame.
+                        let half = 0.5 / s.scale;
+                        let inside = |p: (f32, f32)| (p.0.clamp(half, 1.0 - half), p.1.clamp(half, 1.0 - half));
+                        let aim = inside(match follow {
+                            Some((i, aim)) if i == seg_i => aim,
+                            _ => cursor(s.start_ms).unwrap_or(now),
+                        });
+                        // Move only when the cursor leaves the central part of the view
+                        // and is still out a moment later.
+                        let reach = DEAD_ZONE * half;
+                        let outside = |p: (f32, f32)| (p.0 - aim.0).abs() > reach || (p.1 - aim.1).abs() > reach;
+                        let aim = if outside(now) && cursor(t + LOOK_AHEAD_MS).is_none_or(outside) { inside(now) } else { aim };
+                        follow = Some((seg_i, aim));
+                        aim
+                    }
+                },
+            };
+            (s.style, fixed.map_or(s.scale, |c| c.scale), aim)
+        });
+        // The camera's target, and the spotlight's target and strength.
+        let ((target_scale, target), (spot_scale, spot), spot_on) = match aimed {
+            Some((Style::Spotlight, sc, aim)) => {
+                spot_rest = (sc, aim);
+                ((1.0, (0.5, 0.5)), (sc, aim), 1.0)
             }
+            Some((Style::Zoom, sc, aim)) => ((sc, aim), spot_rest, 0.0),
+            None => ((1.0, (0.5, 0.5)), spot_rest, 0.0),
         };
         if t > 0 {
             match speed.factor() {
                 Some(f) => {
                     let spring = if f == 1.0 { CAMERA } else { CAMERA.scaled(f) };
-                    spring.step(&mut scale, target_scale, 0.001);
-                    spring.step(&mut cx, target.0, 0.001);
-                    spring.step(&mut cy, target.1, 0.001);
+                    for (state, to) in [(&mut scale, target_scale), (&mut cx, target.0), (&mut cy, target.1), (&mut s_scale, spot_scale), (&mut s_cx, spot.0), (&mut s_cy, spot.1), (&mut s_alpha, spot_on)] {
+                        spring.step(state, to, 0.001);
+                    }
                 }
                 None => {
-                    scale = SpringState { value: target_scale, velocity: 0.0 };
-                    cx = SpringState { value: target.0, velocity: 0.0 };
-                    cy = SpringState { value: target.1, velocity: 0.0 };
+                    (scale, cx, cy) = (still(target_scale), still(target.0), still(target.1));
+                    (s_scale, s_cx, s_cy, s_alpha) = (still(spot_scale), still(spot.0), still(spot.1), still(spot_on));
                 }
             }
         }
@@ -650,11 +694,33 @@ pub fn camera_track(z: &ZoomDoc, cursor: &dyn Fn(i64) -> Option<(f32, f32)>, dur
         let half = 0.5 / s;
         cx.value = cx.value.clamp(half, 1.0 - half);
         cy.value = cy.value.clamp(half, 1.0 - half);
+        let ss = s_scale.value.clamp(MIN_SCALE, MAX_SCALE);
+        let sh = 0.5 / ss;
+        s_cx.value = s_cx.value.clamp(sh, 1.0 - sh);
+        s_cy.value = s_cy.value.clamp(sh, 1.0 - sh);
         if t % step_ms == 0 {
-            out.push((t, Camera { cx: cx.value, cy: cy.value, scale: s }));
+            let spot = Spot { cx: s_cx.value, cy: s_cy.value, scale: ss, alpha: s_alpha.value.clamp(0.0, 1.0) };
+            out.push((t, Camera { cx: cx.value, cy: cy.value, scale: s }, spot));
         }
     }
     out
+}
+
+/// The spotlight at `t_ms`, interpolated between samples.
+pub fn spot_at(track: &[(i64, Camera, Spot)], t_ms: i64) -> Spot {
+    let (Some(first), Some(last)) = (track.first(), track.last()) else { return Spot::NONE };
+    if t_ms <= first.0 {
+        return first.2;
+    }
+    if t_ms >= last.0 {
+        return last.2;
+    }
+    let i = track.partition_point(|s| s.0 <= t_ms);
+    let (t0, _, a) = track[i - 1];
+    let (t1, _, b) = track[i];
+    let f = (t_ms - t0) as f32 / (t1 - t0).max(1) as f32;
+    let mix = |x: f32, y: f32| x + (y - x) * f;
+    Spot { cx: mix(a.cx, b.cx), cy: mix(a.cy, b.cy), scale: mix(a.scale, b.scale), alpha: mix(a.alpha, b.alpha) }
 }
 
 /// The camera at `t_ms`, interpolated between samples.
@@ -1163,5 +1229,35 @@ mod tests {
         assert!(s.is_empty(), "Enter on a dialog makes no zoom: {s:?}");
         let s = ui(&[], &[5000, 5300], &[], &[(5000, [0.4, 0.4, 0.1, 0.05])], &[]);
         assert_eq!(s.len(), 1);
+    }
+
+    #[test]
+    fn old_docs_have_zoom_style_and_motion_blur() {
+        let doc = crate::edit::load_edit(r#"{"v":1,"zoom":{"enabled":true,"segments":[{"start_ms":0,"end_ms":1000}]}}"#).unwrap();
+        assert_eq!(doc.zoom.segments[0].style, Style::Zoom);
+        assert!(doc.zoom.motion_blur, "on unless turned off");
+        assert!(ZoomDoc::default().motion_blur);
+    }
+
+    #[test]
+    fn a_spotlight_lights_the_frame_without_zooming() {
+        let seg = ZoomSegment { style: Style::Spotlight, speed: Speed::Fast, ..manual(1000, 5000, 2.0, Some((0.25, 0.25))) };
+        let t = zoom_track(&on(vec![seg]), NO_CURSOR, 8000, 10);
+        let at = |ms: i64| t.iter().find(|s| s.0 >= ms).copied().unwrap();
+        let (_, cam, spot) = at(3000);
+        assert!(close(cam.scale, 1.0, 1e-3), "the camera stays out: {cam:?}");
+        assert!(spot.alpha > 0.95 && close(spot.cx, 0.25, 0.01) && close(spot.scale, 2.0, 0.02), "{spot:?}");
+        assert!(at(7500).2.alpha < 0.05, "fades out after the segment");
+        assert!(at(500).2.alpha < 1e-3, "nothing before it");
+        let z = zoom_track(&on(vec![manual(1000, 5000, 2.0, Some((0.25, 0.25)))]), NO_CURSOR, 8000, 10);
+        assert!(z.iter().all(|s| s.2.alpha < 1e-3), "a zoom segment has no spotlight");
+    }
+
+    #[test]
+    fn spot_at_interpolates() {
+        let s = |cx: f32, alpha: f32| Spot { cx, cy: 0.5, scale: 2.0, alpha };
+        let t = vec![(0, Camera::WHOLE, s(0.2, 0.0)), (100, Camera::WHOLE, s(0.4, 1.0))];
+        let m = spot_at(&t, 50);
+        assert!(close(m.cx, 0.3, 1e-5) && close(m.alpha, 0.5, 1e-5));
     }
 }

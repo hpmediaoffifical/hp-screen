@@ -1,7 +1,7 @@
 // Draws click and key effects on the preview canvas. The effects themselves (which rings,
 // holds, wheel marks and chips exist, and when) come from the core; this only turns them into
 // pixels for a given time, with the same rules and numbers as the export.
-import type { EffectToggles, Effects, MouseButton } from "../editApi";
+import type { EffectToggles, Effects, MouseButton, Spot } from "../editApi";
 
 // Same values as hp-core::effects and src-tauri compositor.
 const RIPPLE_MS = 480;
@@ -13,6 +13,8 @@ const WHEEL_FADE_MS = 150;
 const CHIP_FADE_MS = 150;
 const CHIP_BOTTOM = 0.08;
 const CHIP_FONT = 0.032;
+// Same as the compositor's spotlight.
+const SPOT_DARK = 0.55;
 const COLOURS: Record<MouseButton, string> = { left: "#FF5A36", right: "#3B82F6", middle: "#22C55E" };
 
 export function cursorAt(fx: Effects, t: number): [number, number] | null {
@@ -40,9 +42,10 @@ const fade = (t: number, start: number, end: number, fadeIn: number, fadeOut: nu
  * Draws the effects at source time `tMs` onto `ctx`, whose canvas shows the whole video:
  * `scale` is canvas pixels per source pixel, `videoH` the source height.
  */
-export function drawEffects(ctx: CanvasRenderingContext2D, fx: Effects, tMs: number, on: EffectToggles, videoH: number, scale: number, chipBottom = CHIP_BOTTOM): void {
+export function drawEffects(ctx: CanvasRenderingContext2D, fx: Effects, tMs: number, on: EffectToggles, videoH: number, scale: number, chipBottom = CHIP_BOTTOM, spot: Spot | null = null): void {
   const { width, height } = ctx.canvas;
   ctx.clearRect(0, 0, width, height);
+  if (spot) drawSpot(ctx, spot);
   const r = RIPPLE_RADIUS * videoH * scale;
   if (on.clicks) {
     ctx.save();
@@ -138,4 +141,31 @@ function drawChip(ctx: CanvasRenderingContext2D, text: string, size: number, bot
   ctx.fillStyle = "#fff";
   ctx.textBaseline = "middle";
   ctx.fillText(text, left + padX, bottomY - h / 2);
+}
+
+/**
+ * A spotlight on a canvas showing the whole video: everything outside the lit box is darkened,
+ * with a thin light outline, as the export draws it.
+ */
+export function drawSpot(ctx: CanvasRenderingContext2D, spot: Spot): void {
+  if (spot.alpha <= 0.01) return;
+  const { width, height } = ctx.canvas;
+  const s = Math.max(1, spot.scale);
+  const w = width / s;
+  const h = height / s;
+  const x = spot.cx * width - w / 2;
+  const y = spot.cy * height - h / 2;
+  const r = 0.02 * Math.min(width, height);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, width, height);
+  ctx.roundRect(x, y, w, h, r);
+  ctx.fillStyle = `rgba(0,0,0,${SPOT_DARK * spot.alpha})`;
+  ctx.fill("evenodd");
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+  ctx.strokeStyle = `rgba(255,255,255,${0.5 * spot.alpha})`;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.restore();
 }

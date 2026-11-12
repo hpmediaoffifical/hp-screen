@@ -1,12 +1,12 @@
 // Zoom helpers for the edit page preview. The camera path itself comes from the core
 // (zoom_track); these only read it and turn it into a CSS transform.
-import type { Camera, Span, ZoomKey, ZoomSegment } from "../editApi.ts";
+import type { Camera, Span, Spot, ZoomKey, ZoomSegment } from "../editApi.ts";
 import { sourceView, type View } from "./layoutMath.ts";
 
 export const WHOLE: Camera = { cx: 0.5, cy: 0.5, scale: 1 };
 
 /** The camera at `t` ms, interpolated between samples (same as hp-core zoom::camera_at). */
-export function cameraAt(track: [number, Camera][], t: number): Camera {
+export function cameraAt(track: [number, Camera, ...unknown[]][], t: number): Camera {
   if (track.length === 0) return WHOLE;
   if (t <= track[0][0]) return track[0][1];
   const last = track[track.length - 1];
@@ -137,7 +137,7 @@ export function addSegmentAt(segments: ZoomSegment[], ms: number, durationMs: nu
   const next = segments.filter((s) => s.start_ms > start).reduce((m, s) => Math.min(m, s.start_ms), Infinity);
   const end = Math.min(start + Z_LEN_MS, next, durationMs);
   if (end - start < Z_MIN_MS) return null;
-  const seg: ZoomSegment = { start_ms: start, end_ms: end, scale: Z_SCALE, center: center ?? [0.5, 0.5], manual: true, keys: [], speed: "normal" };
+  const seg: ZoomSegment = { start_ms: start, end_ms: end, scale: Z_SCALE, center: center ?? [0.5, 0.5], manual: true, keys: [], speed: "normal", style: "zoom" };
   const out = [...segments, seg].sort((a, b) => a.start_ms - b.start_ms);
   return { segments: out, index: out.indexOf(seg) };
 }
@@ -234,4 +234,18 @@ export function addRegionAt(regions: Span[], ms: number, durationMs: number): { 
   const region = { start_ms: start, end_ms: end };
   const out = [...regions, region].sort((a, b) => a.start_ms - b.start_ms);
   return { regions: out, index: out.indexOf(region) };
+}
+
+/** The spotlight at `t` ms, interpolated between samples (like hp-core zoom::spot_at); null without data. */
+export function spotAt(track: [number, Camera, Spot?][], t: number): Spot | null {
+  if (track.length === 0 || !track[0][2]) return null;
+  let i = track.findIndex((s) => s[0] > t);
+  if (i === 0) return track[0][2] ?? null;
+  if (i < 0) return track[track.length - 1][2] ?? null;
+  const [t0, , a] = track[i - 1];
+  const [t1, , b] = track[i];
+  if (!a || !b) return null;
+  const f = (t - t0) / Math.max(1, t1 - t0);
+  const mix = (x: number, y: number) => x + (y - x) * f;
+  return { cx: mix(a.cx, b.cx), cy: mix(a.cy, b.cy), scale: mix(a.scale, b.scale), alpha: mix(a.alpha, b.alpha) };
 }
