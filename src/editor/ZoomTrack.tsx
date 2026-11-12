@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import type { ZoomSegment } from "../editApi";
+import type { Span, ZoomSegment } from "../editApi";
 import { grabKind, keepKeysInside, moveSegment } from "./zoomMath";
 
 interface Props {
@@ -14,12 +14,23 @@ interface Props {
   onSeek: (ms: number) => void;
   /** `first` is true for the first change of a drag, so one drag is one undo step. */
   onChange: (segments: ZoomSegment[], first: boolean) => void;
+  /** Automatic regions: inside them zoom follows the clicks. */
+  regions: Span[];
+  selectedRegion: number | null;
+  onSelectRegion: (index: number | null) => void;
+  onRegionsChange: (regions: Span[], first: boolean) => void;
 }
+
+export type ZoomTool = "manual" | "auto";
 
 type Drag =
   | { kind: "start" | "end" | "move"; index: number; grabMs: number; orig: ZoomSegment; moved: boolean }
   | { kind: "create"; fromMs: number; index: number | null }
-  | { kind: "key"; index: number; key: number; orig: ZoomSegment; moved: boolean };
+  | { kind: "key"; index: number; key: number; orig: ZoomSegment; moved: boolean }
+  | { kind: "region"; part: "start" | "end" | "move"; index: number; grabMs: number; orig: Span; moved: boolean };
+
+/** An automatic region is at least this long. */
+const REGION_MIN_MS = 1000;
 
 const MIN_LEN_MS = 200;
 /** Keyframes stay this far from each other and from the segment's ends. */
@@ -57,6 +68,15 @@ export default function ZoomTrack(props: Props) {
     props.onSelect(index);
   };
 
+  const downOnRegion = (e: React.PointerEvent, index: number) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    track.current?.setPointerCapture(e.pointerId);
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    drag.current = { kind: "region", part: grabKind(e.clientX - r.left, r.width), index, grabMs: msAt(e.clientX), orig: props.regions[index], moved: false };
+    props.onSelectRegion(index);
+  };
+
   const downOnKey = (e: React.PointerEvent, index: number, key: number) => {
     if (e.button !== 0) return;
     e.stopPropagation();
@@ -90,6 +110,21 @@ export default function ZoomTrack(props: Props) {
     }
     const first = !g.moved;
     g.moved = true;
+    if (g.kind === "region") {
+      const o = g.orig;
+      const len = o.end_ms - o.start_ms;
+      let r: Span;
+      if (g.part === "start") r = { start_ms: Math.min(Math.max(0, ms), o.end_ms - REGION_MIN_MS), end_ms: o.end_ms };
+      else if (g.part === "end") r = { start_ms: o.start_ms, end_ms: Math.max(Math.min(d, ms), o.start_ms + REGION_MIN_MS) };
+      else {
+        const start = Math.min(Math.max(0, o.start_ms + ms - g.grabMs), d - len);
+        r = { start_ms: start, end_ms: start + len };
+      }
+      const next = props.regions.slice();
+      next[g.index] = r;
+      props.onRegionsChange(next, first);
+      return;
+    }
     const o = g.orig;
     if (g.kind === "key") {
       // A keyframe moves between its neighbours, inside its segment.
@@ -126,7 +161,25 @@ export default function ZoomTrack(props: Props) {
   return (
     <div className="ztrack-row">
       <span className="ztrack-label">Zoom</span>
-      <div ref={track} className="track ztrack" onPointerDown={downOnTrack} onPointerMove={move} onPointerUp={up} title="Bấm để tua tới đó; kéo trên chỗ trống để thêm một đoạn zoom">
+      <div
+        ref={track}
+        className="track ztrack"
+        onPointerDown={downOnTrack}
+        onPointerMove={move}
+        onPointerUp={up}
+        title="Bấm để tua tới đó; kéo trên chỗ trống để thêm một đoạn zoom; thả nút từ thẻ Zoom xuống đây"
+      >
+        {props.regions.map((r, i) => (
+          <div
+            key={`r${i}`}
+            className={"zregion" + (i === props.selectedRegion ? " on" : "")}
+            style={{ left: pct(r.start_ms), width: `calc(${pct(r.end_ms)} - ${pct(r.start_ms)})` }}
+            onPointerDown={(e) => downOnRegion(e, i)}
+            title="Vùng tự zoom theo click — kéo mép để đổi, kéo giữa để dời, Delete để xóa"
+          >
+            <span className="zregion-text">Tự động</span>
+          </div>
+        ))}
         {props.segments.map((s, i) => (
           <div
             key={i}

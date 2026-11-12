@@ -5,7 +5,7 @@ use crate::export::{export_path, run_export};
 use hp_core::cut::Span;
 use hp_core::edit::{EditDoc, LoadError, load_edit, save_edit};
 use hp_core::effects::{Effects, build_effects};
-use hp_core::zoom::{AutoInput, Camera, ZoomSegment, auto_segments, camera_track, regenerate};
+use hp_core::zoom::{AutoInput, Camera, ZoomSegment, auto_in_regions, camera_track, regenerate};
 use hp_core::input_log::parse_log;
 use hp_core::library::{DATA_DIR, Kind, edit_path, kind_of, sidecar_path};
 use hp_core::plan::{Plan, Source};
@@ -117,8 +117,8 @@ fn effects_for(media: &Path, info: &VideoInfo) -> Option<Effects> {
     Some(build_effects(&log, info.width, info.height))
 }
 
-/// Zoom segments made from the clicks in `effects`, keeping manual ones; without a log the
-/// existing segments stay as they are.
+/// Automatic zoom segments from the clicks in `effects` inside the automatic regions, keeping
+/// manual ones; without a log the existing segments stay as they are.
 fn auto_zoom(effects: Option<&Effects>, doc: &EditDoc, w: u32, h: u32, duration_ms: i64) -> Vec<ZoomSegment> {
     let Some(fx) = effects else { return doc.zoom.segments.clone() };
     let (w, h) = (w.max(1) as f32, h.max(1) as f32);
@@ -126,7 +126,7 @@ fn auto_zoom(effects: Option<&Effects>, doc: &EditDoc, w: u32, h: u32, duration_
     let wheels: Vec<(i64, f32, f32)> = fx.scrolls.iter().map(|s| (s.0, s.1 / w, s.2 / h)).collect();
     let cursor = |t: i64| fx.cursor_at(t).map(|(x, y)| (x / w, y / h));
     let input = AutoInput { clicks: &clicks, wheels: &wheels, typing: &fx.typing, cursor: &cursor, edge_guard: fx.edge_guard };
-    regenerate(&doc.zoom.segments, auto_segments(&input, doc.zoom.level, duration_ms))
+    regenerate(&doc.zoom.segments, auto_in_regions(&input, doc.zoom.level, &doc.zoom.regions, duration_ms))
 }
 
 /// Camera samples for the preview: every 1000/60 ms, as in the export.
@@ -324,7 +324,10 @@ mod tests {
         use hp_core::input_log::{Button, Event, ParsedLog};
         let log = ParsedLog { header: None, events: vec![Event::Down { t: 1000, b: Button::Left, x: 160, y: 120 }] };
         let fx = build_effects(&log, 640, 480);
-        let out = auto_zoom(Some(&fx), &EditDoc::default(), 640, 480, 10_000);
+        assert!(auto_zoom(Some(&fx), &EditDoc::default(), 640, 480, 10_000).is_empty(), "no automatic region: nothing automatic");
+        let mut doc = EditDoc::default();
+        doc.zoom.regions = vec![hp_core::cut::Span { start_ms: 0, end_ms: 10_000 }];
+        let out = auto_zoom(Some(&fx), &doc, 640, 480, 10_000);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].center, Some((0.25, 0.25)), "clicks are normalised to the frame");
     }

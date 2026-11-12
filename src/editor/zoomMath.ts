@@ -1,6 +1,6 @@
 // Zoom helpers for the edit page preview. The camera path itself comes from the core
 // (zoom_track); these only read it and turn it into a CSS transform.
-import type { Camera, ZoomKey, ZoomSegment } from "../editApi.ts";
+import type { Camera, Span, ZoomKey, ZoomSegment } from "../editApi.ts";
 import { sourceView, type View } from "./layoutMath.ts";
 
 export const WHOLE: Camera = { cx: 0.5, cy: 0.5, scale: 1 };
@@ -218,4 +218,20 @@ export function grabKind(x: number, width: number): "start" | "end" | "move" {
   if (x < edge) return "start";
   if (width - x < edge) return "end";
   return "move";
+}
+
+/** An automatic region dropped on the zoom track: this long, at least this long. */
+export const REGION_LEN_MS = 10_000;
+export const REGION_MIN_MS = 1000;
+
+/** A new automatic region at `ms`: 10 s, or up to the next region or the end; null inside a region or under 1 s. */
+export function addRegionAt(regions: Span[], ms: number, durationMs: number): { regions: Span[]; index: number } | null {
+  const start = Math.max(0, Math.round(ms));
+  if (regions.some((r) => r.start_ms <= start && start < r.end_ms)) return null;
+  const next = regions.filter((r) => r.start_ms > start).reduce((m, r) => Math.min(m, r.start_ms), Infinity);
+  const end = Math.min(start + REGION_LEN_MS, next, durationMs);
+  if (end - start < REGION_MIN_MS) return null;
+  const region = { start_ms: start, end_ms: end };
+  const out = [...regions, region].sort((a, b) => a.start_ms - b.start_ms);
+  return { regions: out, index: out.indexOf(region) };
 }

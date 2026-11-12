@@ -43,6 +43,8 @@ export interface ZoomDoc {
   segments: ZoomSegment[];
   /** Level of automatic zoom. */
   level: Level;
+  /** Where automatic zoom works (dropped on the zoom track); none: no automatic zoom. */
+  regions: Span[];
 }
 
 /** Where the zoom camera looks: centre (0–1) and zoom level. */

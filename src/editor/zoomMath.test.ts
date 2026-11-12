@@ -182,3 +182,15 @@ test("dragging the frame records a point where the playhead is", () => {
   assert.equal(follow.keys.length, 1);
   assert.ok(follow.center !== null, "a cursor-following segment gets a fixed start");
 });
+
+import { addRegionAt } from "./zoomMath.ts";
+
+test("an automatic region is dropped where asked, never on another", () => {
+  const r = addRegionAt([], 5000, 60_000)!;
+  assert.deepEqual(r, { regions: [{ start_ms: 5000, end_ms: 15_000 }], index: 0 }, "10 s by default");
+  const before = addRegionAt([{ start_ms: 8000, end_ms: 20_000 }], 2000, 60_000)!;
+  assert.deepEqual(before.regions[0], { start_ms: 2000, end_ms: 8000 }, "stops at the next region");
+  assert.equal(before.index, 0);
+  assert.equal(addRegionAt([{ start_ms: 8000, end_ms: 20_000 }], 9000, 60_000), null, "inside a region");
+  assert.equal(addRegionAt([], 59_500, 60_000), null, "under 1 s before the end");
+});

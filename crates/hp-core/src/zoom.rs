@@ -99,6 +99,8 @@ pub struct ZoomDoc {
     pub segments: Vec<ZoomSegment>,
     /// Level used for automatic segments.
     pub level: Level,
+    /// Where automatic zoom works (the user drops these on the zoom track); none: no automatic zoom.
+    pub regions: Vec<crate::cut::Span>,
 }
 
 /// Where the camera looks: centre (0–1 of the frame) and zoom level.
@@ -321,6 +323,34 @@ pub fn auto_segments(input: &AutoInput, level: Level, duration_ms: i64) -> Vec<Z
             Some(seg)
         })
         .collect()
+}
+
+/// Automatic segments made only inside `regions`, each kept within its region: outside them
+/// the video stays full frame unless the user adds zoom by hand.
+pub fn auto_in_regions(input: &AutoInput, level: Level, regions: &[crate::cut::Span], duration_ms: i64) -> Vec<ZoomSegment> {
+    let mut regions: Vec<(i64, i64)> = regions.iter().map(|r| (r.start_ms.max(0), r.end_ms.min(duration_ms))).filter(|r| r.1 > r.0).collect();
+    regions.sort_unstable();
+    let mut out = Vec::new();
+    for (a, b) in regions {
+        let inside = |t: i64| t >= a && t < b;
+        let clicks: Vec<(i64, f32, f32)> = input.clicks.iter().copied().filter(|c| inside(c.0)).collect();
+        if clicks.is_empty() {
+            continue;
+        }
+        let wheels: Vec<(i64, f32, f32)> = input.wheels.iter().copied().filter(|w| inside(w.0)).collect();
+        let typing: Vec<i64> = input.typing.iter().copied().filter(|&t| inside(t)).collect();
+        let part = AutoInput { clicks: &clicks, wheels: &wheels, typing: &typing, cursor: input.cursor, edge_guard: input.edge_guard };
+        for mut seg in auto_segments(&part, level, b) {
+            seg.start_ms = seg.start_ms.max(a);
+            seg.end_ms = seg.end_ms.min(b);
+            seg.keys.retain(|k| k.t_ms > seg.start_ms && k.t_ms < seg.end_ms);
+            if seg.end_ms - seg.start_ms >= MIN_SEGMENT_MS / 2 {
+                out.push(seg);
+            }
+        }
+    }
+    out.sort_by_key(|s| s.start_ms);
+    out
 }
 
 /// New automatic segments, keeping every manual one (automatic ones overlapping them are dropped).
@@ -923,5 +953,35 @@ mod tests {
         let away = |t: i64| Some(if t < 1300 { (0.5, 0.5) } else { (0.95, 0.95) });
         let s = auto_segments(&input(&clicks, &[], &typing, &away, false), Level::Normal, 60_000);
         assert_eq!(s[0].end_ms, 4900, "typing until 3.9 s holds to 4.9 s");
+    }
+
+    #[test]
+    fn auto_zoom_only_inside_regions() {
+        use crate::cut::Span;
+        let clicks = [(1000, 0.5, 0.5), (20_000, 0.5, 0.5)];
+        let inp = input(&clicks, &[], &[], NO_CURSOR, false);
+        assert!(auto_in_regions(&inp, Level::Normal, &[], 60_000).is_empty(), "no region, no automatic zoom");
+        let s = auto_in_regions(&inp, Level::Normal, &[Span { start_ms: 0, end_ms: 5000 }], 60_000);
+        assert_eq!(s.len(), 1, "the click at 20 s is outside the region");
+        assert_eq!((s[0].start_ms, s[0].end_ms), (600, 2800));
+        let both = auto_in_regions(&inp, Level::Normal, &[Span { start_ms: 0, end_ms: 5000 }, Span { start_ms: 18_000, end_ms: 30_000 }], 60_000);
+        assert_eq!(both.len(), 2);
+    }
+
+    #[test]
+    fn automatic_segments_stay_inside_their_region() {
+        use crate::cut::Span;
+        let clicks = [(4500, 0.5, 0.5), (10_100, 0.5, 0.5)];
+        let typing: Vec<i64> = (46..=80).map(|i| i * 100).collect();
+        let inp = input(&clicks, &[], &typing, NO_CURSOR, false);
+        let s = auto_in_regions(&inp, Level::Normal, &[Span { start_ms: 2000, end_ms: 6000 }, Span { start_ms: 10_000, end_ms: 20_000 }], 60_000);
+        assert_eq!((s[0].start_ms, s[0].end_ms), (4100, 6000), "typing past the region end does not carry the zoom out of it");
+        assert_eq!(s[1].start_ms, 10_000, "a click just inside the start begins at the region start");
+    }
+
+    #[test]
+    fn old_zoom_docs_have_no_regions() {
+        let doc = crate::edit::load_edit(r#"{"v":1,"zoom":{"enabled":true,"segments":[]}}"#).unwrap();
+        assert!(doc.zoom.regions.is_empty());
     }
 }

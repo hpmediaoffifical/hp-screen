@@ -368,3 +368,15 @@ html[data-window="region-border"], html[data-window="region-border"] body { back
 .zkey { position: absolute; top: 50%; width: 9px; height: 9px; margin: -5px 0 0 -5px; background: #fff; border: 1px solid #1b2232; transform: rotate(45deg); cursor: ew-resize; z-index: 2; }
 .zkey.on { background: var(--warn); }
 .track-knob { position: absolute; top: -10px; left: -6px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 2px rgba(0, 0, 0, .35); pointer-events: auto; cursor: ew-resize; z-index: 3; }
+
+/* Automatic regions on the zoom track and the Zoom tab's tools */
+.ztrack { height: 30px; }
+.zregion { position: absolute; top: 1px; bottom: 1px; border: 1px dashed rgba(76, 141, 255, .8); background: rgba(76, 141, 255, .10); border-radius: 5px; cursor: grab; overflow: hidden; min-width: 10px; }
+.zregion.on { outline: 2px solid #fff; }
+.zregion-text { position: absolute; left: 4px; bottom: 1px; font-size: 10px; color: #9cc0ff; pointer-events: none; white-space: nowrap; }
+.zseg { z-index: 1; }
+.ztool { cursor: grab; }
+.ztool-manual { border-color: var(--warn); }
+.ztool-auto { border-color: var(--accent); }
+.ztool-ghost { position: fixed; z-index: 50; pointer-events: none; padding: 4px 10px; border-radius: 6px; font-size: 12px; color: #fff; background: rgba(20, 20, 24, .92); border: 1px solid var(--accent); white-space: nowrap; }
+.ztool-ghost.ztool-manual { border-color: var(--warn); }

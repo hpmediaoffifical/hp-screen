@@ -25,8 +25,9 @@ import { chipAbove, cueAt, layoutSubtitle, paintSubtitle } from "../editor/subsM
 import Preview, { type PreviewHandle } from "../editor/Preview";
 import Timeline from "../editor/Timeline";
 import { cursorAt, drawEffects } from "../editor/drawEffects";
-import ZoomTrack from "../editor/ZoomTrack";
-import { addKey, addSegmentAt, cameraAt, editFrameAt, frameAt, setActiveScale, WHOLE } from "../editor/zoomMath";
+import ZoomTrack, { type ZoomTool } from "../editor/ZoomTrack";
+import ZoomTools from "../editor/ZoomTools";
+import { addKey, addRegionAt, addSegmentAt, cameraAt, editFrameAt, frameAt, setActiveScale, WHOLE } from "../editor/zoomMath";
 
 type Tab = "cut" | "effects" | "zoom" | "frame" | "subs" | "export";
 const TABS: { id: Tab; label: string }[] = [
@@ -57,6 +58,7 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
   const [layout, setLayout] = useState<Layout | null>(null);
   const [zoomSel, setZoomSel] = useState<number | null>(null);
   const [keySel, setKeySel] = useState<number | null>(null);
+  const [regionSel, setRegionSel] = useState<number | null>(null);
   const preview = useRef<PreviewHandle>(null);
   const past = useRef<EditDoc[]>([]);
   const future = useRef<EditDoc[]>([]);
@@ -141,6 +143,36 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
     };
   }, [doc?.zoom, session, props.path]);
 
+  // Automatic segments follow the regions and the level: recomputed shortly after they change,
+  // as part of the same undo step. Not on opening (the file already has them).
+  const autoKey = doc ? JSON.stringify([doc.zoom.regions, doc.zoom.level]) : "";
+  const lastAutoKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (!doc || !session) return;
+    if (lastAutoKey.current === null || lastAutoKey.current === autoKey) {
+      lastAutoKey.current = autoKey;
+      return;
+    }
+    lastAutoKey.current = autoKey;
+    if (!session.effects) return;
+    let alive = true;
+    const timer = window.setTimeout(() => {
+      const d = latest.current;
+      if (!d) return;
+      zoomAuto(props.path, d, frameOf(session))
+        .then((segments) => {
+          const now = latest.current;
+          if (!alive || !now || JSON.stringify(now.zoom.segments) === JSON.stringify(segments)) return;
+          changeRef.current({ ...now, zoom: { ...now.zoom, segments } }, true);
+        })
+        .catch((e) => alive && setMessage(errorMessage(e)));
+    }, 200);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [autoKey, session, props.path]);
+
   /** Applies a change: recorded for undo (unless it continues the last one), saved a moment later. */
   const change = useCallback(
     (next: EditDoc, merge = false) => {
@@ -155,6 +187,9 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
     },
     [save],
   );
+
+  const changeRef = useRef(change);
+  changeRef.current = change;
 
   const undoRedo = useCallback(
     (back: boolean) => {
@@ -216,6 +251,7 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
         e.preventDefault();
         // A cut selection wins; then the selected keyframe; then the selected zoom segment.
         if (selection) removeSelection();
+        else if (regionSel !== null && doc?.zoom.enabled && doc.zoom.regions[regionSel]) deleteRegion();
         else if (zoomSel !== null && doc?.zoom.enabled && doc.zoom.segments[zoomSel]) {
           if (keySel !== null && doc.zoom.segments[zoomSel].keys[keySel]) deleteKey();
           else {
@@ -250,22 +286,53 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
   const cameraNow = () => (track.length > 0 ? cameraAt(track, playhead) : WHOLE);
 
   /** Z: a new zoom segment at the playhead, centred on the mouse there (when logged). */
-  const addZoomHere = () => {
+  const addZoomHere = (at: number = playhead) => {
     const d = latest.current;
     if (!d || !session) return;
-    const p = session.effects ? cursorAt(session.effects, playhead) : null;
+    const p = session.effects ? cursorAt(session.effects, at) : null;
     const center: [number, number] | null = p ? [p[0] / session.info.width, p[1] / session.info.height] : null;
-    const r = addSegmentAt(d.zoom.segments, playhead, duration, center);
+    const r = addSegmentAt(d.zoom.segments, at, duration, center);
     if (!r) {
       setMessage("Không thêm được đoạn zoom ở đây: chỗ này đã có đoạn zoom, hoặc còn chưa tới 0,5 giây trước đoạn sau hay cuối video.");
       return;
     }
     preview.current?.pause();
+    if (Math.abs(at - playhead) > 1) preview.current?.seek(at);
     change({ ...d, zoom: { ...d.zoom, enabled: true, segments: r.segments } });
     setZoomSel(r.index);
     setKeySel(null);
+    setRegionSel(null);
     setTab("zoom");
   };
+
+  /** An automatic region at `at`: inside it, zoom follows the clicks. */
+  const addAutoHere = (at: number = playhead) => {
+    const d = latest.current;
+    if (!d || !session) return;
+    if (!session.effects) {
+      setMessage("Video này không có nhật ký thao tác nên không tự zoom theo click được.");
+      return;
+    }
+    const r = addRegionAt(d.zoom.regions, at, duration);
+    if (!r) {
+      setMessage("Không đặt được vùng tự động ở đây: chỗ này đã có vùng, hoặc còn chưa tới 1 giây trước cuối video.");
+      return;
+    }
+    change({ ...d, zoom: { ...d.zoom, enabled: true, regions: r.regions } });
+    setRegionSel(r.index);
+    setZoomSel(null);
+    setKeySel(null);
+    setTab("zoom");
+  };
+
+  const deleteRegion = () => {
+    const d = latest.current;
+    if (!d || regionSel === null) return;
+    change({ ...d, zoom: { ...d.zoom, regions: d.zoom.regions.filter((_, i) => i !== regionSel) } });
+    setRegionSel(null);
+  };
+
+  const dropTool = (tool: ZoomTool, at: number) => (tool === "manual" ? addZoomHere(at) : addAutoHere(at));
 
   /** K: a keyframe at the playhead in the selected segment, starting where the camera is. */
   const addKeyHere = () => {
@@ -292,26 +359,21 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
     setKeySel(null);
   };
 
-  const setLevel = async (level: Level) => {
+  const setLevel = (level: Level) => {
     const d = latest.current;
-    if (!d || !session) return;
-    const next = { ...d, zoom: { ...d.zoom, level } };
-    try {
-      const segments = session.effects ? await zoomAuto(props.path, next, frameOf(session)) : next.zoom.segments;
-      change({ ...next, zoom: { ...next.zoom, segments } });
-      setZoomSel(null);
-      setKeySel(null);
-    } catch (e) {
-      setMessage(errorMessage(e));
-    }
+    if (!d) return;
+    change({ ...d, zoom: { ...d.zoom, level } });
+    setZoomSel(null);
+    setKeySel(null);
   };
 
   const clearAuto = () => {
     const d = latest.current;
     if (!d) return;
-    change({ ...d, zoom: { ...d.zoom, segments: d.zoom.segments.filter((s) => s.manual) } });
+    change({ ...d, zoom: { ...d.zoom, regions: [], segments: d.zoom.segments.filter((s) => s.manual) } });
     setZoomSel(null);
     setKeySel(null);
+    setRegionSel(null);
   };
 
   const regenerateZoom = async () => {
@@ -330,20 +392,13 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
   const setZoomEnabled = async (enabled: boolean) => {
     const d = latest.current;
     if (!d || !session) return;
-    let segments = d.zoom.segments;
-    // First time on: start from the clicks.
-    if (enabled && segments.length === 0 && session.effects) {
-      try {
-        segments = await zoomAuto(props.path, d, frameOf(session));
-      } catch (e) {
-        setMessage(errorMessage(e));
-      }
-    }
+    // Turning zoom on adds nothing: the user drops manual zooms and automatic regions where wanted.
     if (!enabled) {
       setZoomSel(null);
       setKeySel(null);
+      setRegionSel(null);
     }
-    change({ ...d, zoom: { ...d.zoom, enabled, segments } });
+    change({ ...d, zoom: { ...d.zoom, enabled } });
   };
 
   const close = async () => {
@@ -480,7 +535,7 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
                 <>
                   {session.effects ? (
                     <>
-                      <span className="label">Tự động</span>
+                      <span className="label">Mức tự động</span>
                       <div className="row" role="radiogroup" aria-label="Mức zoom tự động">
                         {(
                           [
@@ -489,23 +544,31 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
                             ["high", "Nhiều"],
                           ] as const
                         ).map(([v, label]) => (
-                          <button key={v} className={"chip chip-toggle" + (doc.zoom.level === v ? " on" : "")} aria-pressed={doc.zoom.level === v} onClick={() => void setLevel(v)}>
+                          <button key={v} className={"chip chip-toggle" + (doc.zoom.level === v ? " on" : "")} aria-pressed={doc.zoom.level === v} onClick={() => setLevel(v)}>
                             {label}
                           </button>
                         ))}
                       </div>
                       <div className="row">
-                        <button className="btn btn-small" onClick={() => void regenerateZoom()}>Tự tạo lại</button>
-                        <button className="btn btn-small" disabled={!doc.zoom.segments.some((s) => !s.manual)} onClick={clearAuto}>
-                          Xóa các đoạn tự động
+                        <button className="btn btn-small" disabled={doc.zoom.regions.length === 0} onClick={() => void regenerateZoom()}>Tính lại</button>
+                        <button className="btn btn-small" disabled={doc.zoom.regions.length === 0 && !doc.zoom.segments.some((s) => !s.manual)} onClick={clearAuto}>
+                          Xóa vùng tự động
                         </button>
                       </div>
-                      <p className="hint">Đoạn xanh là tự động, đoạn vàng là bạn làm. "Tự tạo lại" luôn giữ đoạn của bạn.</p>
+                      <p className="hint">Đoạn xanh là tự động (trong vùng nét đứt), đoạn vàng là bạn làm tay. Mức Ít / Vừa / Nhiều áp cho các vùng tự động.</p>
                     </>
                   ) : (
                     <p className="hint">Video này không có nhật ký thao tác: chỉ thêm zoom bằng tay được.</p>
                   )}
-                  <button className="btn btn-small" onClick={addZoomHere} title="Phím Z">+ Zoom tại đây</button>
+                  {regionSel !== null && doc.zoom.regions[regionSel] && (
+                    <div className="row">
+                      <span className="hint">Vùng tự động đang chọn.</span>
+                      <button className="btn btn-small btn-danger" onClick={deleteRegion}>Xóa vùng này</button>
+                    </div>
+                  )}
+                  <span className="label">Thêm vào rãnh Zoom</span>
+                  <ZoomTools durationMs={duration} autoEnabled={!!session.effects} onPlace={(tool, ms) => dropTool(tool, ms ?? playhead)} />
+                  <p className="hint">Kéo một nút xuống rãnh Zoom (hoặc bấm để đặt tại vạch phát). Ngoài các đoạn và vùng đã đặt, video giữ toàn màn hình.</p>
                   {selSeg && zoomSel !== null ? (
                     <ZoomControls
                       seg={selSeg}
@@ -598,10 +661,20 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
             segments={doc.zoom.segments}
             selected={zoomSel}
             selectedKey={keySel}
+            regions={doc.zoom.regions}
+            selectedRegion={regionSel}
+            onSelectRegion={(i) => {
+              setRegionSel(i);
+              setZoomSel(null);
+              setKeySel(null);
+              if (i !== null) setTab("zoom");
+            }}
+            onRegionsChange={(regions, first) => change({ ...doc, zoom: { ...doc.zoom, regions } }, !first)}
             playhead={playhead}
             onSelect={(i) => {
               setZoomSel(i);
               setKeySel(null);
+              setRegionSel(null);
               if (i === null) return;
               setTab("zoom");
               const s = doc.zoom.segments[i];
