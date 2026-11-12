@@ -120,57 +120,180 @@ impl Camera {
     }
 }
 
-/// Segments made from clicks `(ms, x, y)` with coordinates 0–1 of the frame.
-pub fn auto_segments(clicks: &[(i64, f32, f32)], duration_ms: i64) -> Vec<ZoomSegment> {
-    let mut sorted = clicks.to_vec();
-    sorted.sort_by_key(|c| c.0);
+/// What automatic zoom looks at, with coordinates 0–1 of the frame.
+pub struct AutoInput<'a> {
+    pub clicks: &'a [(i64, f32, f32)],
+    /// Wheel events (ms, x, y).
+    pub wheels: &'a [(i64, f32, f32)],
+    /// Moments of typing (ms).
+    pub typing: &'a [i64],
+    pub cursor: &'a dyn Fn(i64) -> Option<(f32, f32)>,
+    /// Full-screen recording: clicks at the edge are ignored (taskbar, window buttons).
+    pub edge_guard: bool,
+}
+
+/// Clicks within this distance of an edge (fraction of the frame) are ignored when guarded.
+pub const EDGE_GUARD: f32 = 0.04;
+/// At the Low level a lone click counts when typing or scrolling follows within this time.
+pub const LOW_ACTIVITY_MS: i64 = 2000;
+/// Typing or scrolling keeps the zoom this long after it.
+pub const ACTIVITY_HOLD_MS: i64 = 1000;
+/// ...but not longer than this after the last click.
+pub const MAX_ACTIVITY_MS: i64 = 20_000;
+/// The cursor out of the view this long ends the zoom early.
+pub const LEAVE_MS: i64 = 1000;
+/// Automatic zoom levels: at most `AUTO_MAX_SCALE`, at least `AUTO_MIN_SCALE`.
+pub const AUTO_MAX_SCALE: f32 = 2.0;
+pub const AUTO_MIN_SCALE: f32 = 1.25;
+/// Margin kept around the clicks of a group, on each side.
+pub const AUTO_MARGIN: f32 = 0.1;
+/// Hold after the last click at the High level.
+pub const HIGH_HOLD_MS: i64 = 1200;
+
+struct LevelParams {
+    min_clicks: usize,
+    hold_ms: i64,
+    guard_edges: bool,
+}
+
+fn level_params(l: Level) -> LevelParams {
+    match l {
+        Level::Low => LevelParams { min_clicks: 2, hold_ms: HOLD_MS, guard_edges: true },
+        Level::Normal => LevelParams { min_clicks: 1, hold_ms: HOLD_MS, guard_edges: true },
+        Level::High => LevelParams { min_clicks: 1, hold_ms: HIGH_HOLD_MS, guard_edges: false },
+    }
+}
+
+/// Zoom that shows every click of a group with a margin: a single click gets 2x.
+pub fn auto_scale(clicks: &[(i64, f32, f32)]) -> f32 {
+    let span = |f: fn(&(i64, f32, f32)) -> f32| {
+        let (lo, hi) = clicks.iter().map(f).fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)));
+        (hi - lo).max(0.0)
+    };
+    let m = span(|c| c.1).max(span(|c| c.2));
+    (1.0 / (m + 2.0 * AUTO_MARGIN)).min(AUTO_MAX_SCALE).clamp(AUTO_MIN_SCALE, AUTO_MAX_SCALE)
+}
+
+/// One group of clicks close in time and place, with the zoom it gets.
+struct Group {
+    clicks: Vec<(i64, f32, f32)>,
+    center: (f32, f32),
+    scale: f32,
+    start: i64,
+    end: i64,
+}
+
+impl Group {
+    fn first(&self) -> i64 {
+        self.clicks[0].0
+    }
+    /// Whether `p` is in what the camera shows for this group.
+    fn shows(&self, p: (f32, f32)) -> bool {
+        let half = 0.5 / self.scale;
+        let c = (self.center.0.clamp(half, 1.0 - half), self.center.1.clamp(half, 1.0 - half));
+        (p.0 - c.0).abs() <= half && (p.1 - c.1).abs() <= half
+    }
+}
+
+/// Automatic zoom segments (spec "Zoom thông minh" 4): groups of clicks, zoom chosen from their
+/// spread, kept while typing or scrolling, ended early when the cursor leaves, panning with
+/// keyframes between groups far apart.
+pub fn auto_segments(input: &AutoInput, level: Level, duration_ms: i64) -> Vec<ZoomSegment> {
+    let p = level_params(level);
+    let at_edge = |x: f32, y: f32| x <= EDGE_GUARD || y <= EDGE_GUARD || x >= 1.0 - EDGE_GUARD || y >= 1.0 - EDGE_GUARD;
+    let mut clicks: Vec<(i64, f32, f32)> = input.clicks.iter().copied().filter(|c| !(input.edge_guard && p.guard_edges && at_edge(c.1, c.2))).collect();
+    clicks.sort_by_key(|c| c.0);
+    let mut typing = input.typing.to_vec();
+    typing.sort_unstable();
+    let mut wheels = input.wheels.to_vec();
+    wheels.sort_by_key(|w| w.0);
+
     // Groups of clicks close in time and place.
-    let mut groups: Vec<Vec<(i64, f32, f32)>> = Vec::new();
-    for c in sorted {
-        let joins = groups.last().and_then(|g| g.last()).is_some_and(|last| {
+    let mut raw: Vec<Vec<(i64, f32, f32)>> = Vec::new();
+    for c in clicks {
+        let joins = raw.last().and_then(|g| g.last()).is_some_and(|last| {
             let d = ((c.1 - last.1).powi(2) + (c.2 - last.2).powi(2)).sqrt();
             c.0 - last.0 < GROUP_GAP_MS && d < GROUP_DISTANCE
         });
-        match groups.last_mut() {
+        match raw.last_mut() {
             Some(g) if joins => g.push(c),
-            _ => groups.push(vec![c]),
+            _ => raw.push(vec![c]),
         }
     }
-    let centroid = |g: &[(i64, f32, f32)]| {
-        let n = g.len().max(1) as f32;
-        (g.iter().map(|c| c.1).sum::<f32>() / n, g.iter().map(|c| c.2).sum::<f32>() / n)
+    let active_after = |from: i64, within: i64| {
+        typing.iter().any(|&t| t > from && t <= from + within) || wheels.iter().any(|w| w.0 > from && w.0 <= from + within)
     };
-    // Each group's time span, merged with the next when they nearly touch. A span made of
-    // groups far apart has no single good centre: it follows the cursor instead.
-    struct Span {
-        start: i64,
-        end: i64,
-        clicks: Vec<(i64, f32, f32)>,
-        spread: bool,
-    }
-    let mut spans: Vec<Span> = Vec::new();
-    for g in groups {
-        let start = (g[0].0 - LEAD_MS).max(0);
-        let end = (g[g.len() - 1].0 + HOLD_MS).min(duration_ms);
-        match spans.last_mut() {
-            Some(last) if start - last.end < MERGE_GAP_MS => {
-                let (a, b) = (centroid(&last.clicks), centroid(&g));
-                last.spread |= ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt() >= GROUP_DISTANCE;
-                last.end = last.end.max(end);
-                last.clicks.extend(g);
+    let mut groups: Vec<Group> = Vec::new();
+    for g in raw {
+        let last = g[g.len() - 1].0;
+        if g.len() < p.min_clicks && !active_after(last, LOW_ACTIVITY_MS) {
+            continue;
+        }
+        let n = g.len() as f32;
+        let center = (g.iter().map(|c| c.1).sum::<f32>() / n, g.iter().map(|c| c.2).sum::<f32>() / n);
+        let mut group = Group { scale: auto_scale(&g), center, start: (g[0].0 - LEAD_MS).max(0), end: last + p.hold_ms, clicks: g };
+        // Typing, or scrolling in view, keeps the zoom a moment longer; never past the cap.
+        let cap = last + MAX_ACTIVITY_MS;
+        let mut activity: Vec<i64> = typing.iter().copied().filter(|&t| t > last).collect();
+        activity.extend(wheels.iter().filter(|w| w.0 > last && group.shows((w.1, w.2))).map(|w| w.0));
+        activity.sort_unstable();
+        for t in activity {
+            if t > group.end || t > cap {
+                break;
             }
-            _ => spans.push(Span { start, end, clicks: g, spread: false }),
+            group.end = group.end.max((t + ACTIVITY_HOLD_MS).min(cap));
+        }
+        // The cursor out of view for a while ends the zoom early.
+        let mut out_since: Option<i64> = None;
+        let mut t = last;
+        while t <= group.end {
+            match (input.cursor)(t) {
+                Some(c) if !group.shows(c) => {
+                    let since = *out_since.get_or_insert(t);
+                    if t - since >= LEAVE_MS {
+                        group.end = group.end.min(since + LEAVE_MS);
+                        break;
+                    }
+                }
+                _ => out_since = None,
+            }
+            t += 50;
+        }
+        group.end = group.end.max(group.start + MIN_SEGMENT_MS).min(duration_ms);
+        groups.push(group);
+    }
+
+    // Groups that nearly touch make one segment; groups far apart in it are keyframes.
+    let mut spans: Vec<Vec<Group>> = Vec::new();
+    for g in groups {
+        match spans.last_mut() {
+            Some(span) if g.start - span.iter().map(|s| s.end).max().unwrap_or(0) < MERGE_GAP_MS => span.push(g),
+            _ => spans.push(vec![g]),
         }
     }
     spans
         .into_iter()
-        .filter(|s| s.end - s.start >= MIN_SEGMENT_MS)
-        .map(|s| ZoomSegment {
-            start_ms: s.start,
-            end_ms: s.end,
-            scale: DEFAULT_SCALE,
-            center: (!s.spread).then(|| centroid(&s.clicks)),
-            ..ZoomSegment::default()
+        .filter_map(|span| {
+            let start = span[0].start;
+            let end = span.iter().map(|g| g.end).max().unwrap_or(start).min(duration_ms);
+            if end - start < MIN_SEGMENT_MS {
+                return None;
+            }
+            let dist = |a: (f32, f32), b: (f32, f32)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+            let spread = span.windows(2).any(|w| dist(w[0].center, w[1].center) >= GROUP_DISTANCE);
+            let seg = if spread {
+                let keys = span[1..]
+                    .iter()
+                    .map(|g| ZoomKey { t_ms: (g.first() - LEAD_MS).max(start + KEY_MIN_GAP_MS + 1), cx: g.center.0, cy: g.center.1, scale: g.scale })
+                    .collect();
+                ZoomSegment { start_ms: start, end_ms: end, scale: span[0].scale, center: Some(span[0].center), keys, ..ZoomSegment::default() }
+            } else {
+                let all: Vec<(i64, f32, f32)> = span.iter().flat_map(|g| g.clicks.iter().copied()).collect();
+                let n = all.len() as f32;
+                let center = (all.iter().map(|c| c.1).sum::<f32>() / n, all.iter().map(|c| c.2).sum::<f32>() / n);
+                ZoomSegment { start_ms: start, end_ms: end, scale: auto_scale(&all), center: Some(center), ..ZoomSegment::default() }
+            };
+            Some(seg)
         })
         .collect()
 }
@@ -397,38 +520,48 @@ mod tests {
         ZoomSegment { keys: vec![key(3000, 0.75, 0.75, 2.0)], speed, ..manual(0, 6000, 2.0, Some((0.25, 0.25))) }
     }
 
+    fn auto(clicks: &[(i64, f32, f32)], duration_ms: i64) -> Vec<ZoomSegment> {
+        auto_segments(&AutoInput { clicks, wheels: &[], typing: &[], cursor: NO_CURSOR, edge_guard: false }, Level::Normal, duration_ms)
+    }
+
+    fn input<'a>(clicks: &'a [(i64, f32, f32)], wheels: &'a [(i64, f32, f32)], typing: &'a [i64], cursor: &'a dyn Fn(i64) -> Option<(f32, f32)>, edge_guard: bool) -> AutoInput<'a> {
+        AutoInput { clicks, wheels, typing, cursor, edge_guard }
+    }
+
     fn close(a: f32, b: f32, tol: f32) -> bool {
         (a - b).abs() <= tol
     }
 
     #[test]
     fn clicks_close_in_time_and_place_make_one_segment() {
-        let s = auto_segments(&[(1000, 0.2, 0.4), (2000, 0.3, 0.4)], 60_000);
+        let s = auto(&[(1000, 0.2, 0.4), (2000, 0.3, 0.4)], 60_000);
         assert_eq!(s.len(), 1);
         assert_eq!((s[0].start_ms, s[0].end_ms), (600, 3800));
         let (cx, cy) = s[0].center.unwrap();
         assert!(close(cx, 0.25, 1e-4) && close(cy, 0.4, 1e-4));
-        assert_eq!(s[0].scale, DEFAULT_SCALE);
+        assert_eq!(s[0].scale, auto_scale(&[(1000, 0.2, 0.4), (2000, 0.3, 0.4)]), "zoom chosen from the spread");
         assert!(!s[0].manual);
     }
 
     #[test]
     fn far_apart_clicks_split() {
-        assert_eq!(auto_segments(&[(1000, 0.2, 0.2), (9000, 0.2, 0.2)], 60_000).len(), 2, "far in time");
-        assert_eq!(auto_segments(&[(1000, 0.1, 0.1), (1500, 0.9, 0.9)], 60_000).len(), 1, "far in place but merged: gap < 800 ms");
-        let s = auto_segments(&[(1000, 0.1, 0.1), (4000, 0.9, 0.9)], 60_000);
+        assert_eq!(auto(&[(1000, 0.2, 0.2), (9000, 0.2, 0.2)], 60_000).len(), 2, "far in time");
+        assert_eq!(auto(&[(1000, 0.1, 0.1), (1500, 0.9, 0.9)], 60_000).len(), 1, "far in place but merged: gap < 800 ms");
+        let s = auto(&[(1000, 0.1, 0.1), (4000, 0.9, 0.9)], 60_000);
         assert_eq!(s.len(), 2, "[600, 2800) and [3600, 5800): a gap of exactly 800 ms is not merged");
-        let s = auto_segments(&[(1000, 0.1, 0.1), (6000, 0.9, 0.9)], 60_000);
+        let s = auto(&[(1000, 0.1, 0.1), (6000, 0.9, 0.9)], 60_000);
         assert_eq!(s.len(), 2);
     }
 
     #[test]
-    fn merged_clicks_far_apart_follow_the_cursor() {
-        // Two clicks 500 ms apart at opposite corners: one span, but no single centre shows both.
-        let s = auto_segments(&[(1000, 0.1, 0.1), (1500, 0.9, 0.9)], 60_000);
+    fn merged_clicks_far_apart_pan_between_them() {
+        // Two clicks 500 ms apart at opposite corners: one span; no single centre shows both, so
+        // the camera pans from the first to the second instead of zooming on the empty middle.
+        let s = auto(&[(1000, 0.1, 0.1), (1500, 0.9, 0.9)], 60_000);
         assert_eq!(s.len(), 1);
-        assert_eq!(s[0].center, None, "follows the cursor instead of zooming on the empty middle");
-        let near = auto_segments(&[(1000, 0.2, 0.2), (1500, 0.25, 0.2)], 60_000);
+        assert_eq!(s[0].center, Some((0.1, 0.1)));
+        assert_eq!(s[0].keys.iter().map(|k| (k.t_ms, k.cx)).collect::<Vec<_>>(), vec![(1100, 0.9)]);
+        let near = auto(&[(1000, 0.2, 0.2), (1500, 0.25, 0.2)], 60_000);
         assert!(near[0].center.is_some(), "clicks close together keep their centre");
     }
 
@@ -451,20 +584,20 @@ mod tests {
     #[test]
     fn nearby_segments_merge() {
         // [600, 2800) and [3200, 5400): 400 ms apart.
-        let s = auto_segments(&[(1000, 0.1, 0.1), (3600, 0.8, 0.8)], 60_000);
+        let s = auto(&[(1000, 0.1, 0.1), (3600, 0.8, 0.8)], 60_000);
         assert_eq!(s.len(), 1);
         assert_eq!((s[0].start_ms, s[0].end_ms), (600, 5400));
     }
 
     #[test]
     fn short_segments_are_dropped() {
-        assert!(auto_segments(&[(100, 0.5, 0.5)], 900).is_empty(), "clamped to [0, 900): too short");
-        assert_eq!(auto_segments(&[(100, 0.5, 0.5)], 60_000).len(), 1);
+        assert!(auto(&[(100, 0.5, 0.5)], 900).is_empty(), "clamped to [0, 900): too short");
+        assert_eq!(auto(&[(100, 0.5, 0.5)], 60_000).len(), 1);
     }
 
     #[test]
     fn segments_are_clamped_to_the_video() {
-        let s = auto_segments(&[(100, 0.5, 0.5), (8500, 0.5, 0.5)], 10_000);
+        let s = auto(&[(100, 0.5, 0.5), (8500, 0.5, 0.5)], 10_000);
         assert_eq!(s.first().unwrap().start_ms, 0);
         assert_eq!(s.last().unwrap().end_ms, 10_000);
     }
@@ -662,5 +795,77 @@ mod tests {
         let (cx, _) = out[2].center.unwrap();
         assert!(close(cx, target_at(&a, 3000).unwrap().cx, 1e-5), "the later part starts where the camera was aiming");
         assert!(close(out[2].scale, 2.0, 1e-5));
+    }
+
+    #[test]
+    fn auto_scale_follows_the_spread() {
+        assert_eq!(auto(&[(1000, 0.5, 0.5)], 60_000)[0].scale, 2.0, "a single click");
+        let row: Vec<(i64, f32, f32)> = (0..6).map(|i| (1000 + i * 100, 0.2 + 0.12 * i as f32, 0.5)).collect();
+        let s = auto(&row, 60_000);
+        assert_eq!(s.len(), 1);
+        assert!(close(s[0].scale, 1.25, 1e-4), "{}", s[0].scale);
+    }
+
+    #[test]
+    fn far_groups_pan_with_keys() {
+        let s = auto(&[(1000, 0.2, 0.2), (2500, 0.8, 0.8)], 60_000);
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].center, Some((0.2, 0.2)));
+        assert_eq!(s[0].scale, 2.0);
+        assert_eq!(s[0].keys, vec![ZoomKey { t_ms: 2100, cx: 0.8, cy: 0.8, scale: 2.0 }]);
+    }
+
+    #[test]
+    fn edge_clicks_are_ignored_when_guarded() {
+        let clicks = [(1000, 0.5, 0.99)];
+        assert!(auto_segments(&input(&clicks, &[], &[], NO_CURSOR, true), Level::Normal, 60_000).is_empty());
+        assert_eq!(auto_segments(&input(&clicks, &[], &[], NO_CURSOR, false), Level::Normal, 60_000).len(), 1, "not a full-screen recording");
+        assert_eq!(auto_segments(&input(&clicks, &[], &[], NO_CURSOR, true), Level::High, 60_000).len(), 1);
+    }
+
+    #[test]
+    fn low_level_needs_more_than_a_lone_click() {
+        let lone = [(1000, 0.5, 0.5)];
+        assert!(auto_segments(&input(&lone, &[], &[], NO_CURSOR, false), Level::Low, 60_000).is_empty());
+        assert_eq!(auto_segments(&input(&lone, &[], &[1800], NO_CURSOR, false), Level::Low, 60_000).len(), 1, "typing right after");
+        let two = [(1000, 0.5, 0.5), (1500, 0.52, 0.5)];
+        assert_eq!(auto_segments(&input(&two, &[], &[], NO_CURSOR, false), Level::Low, 60_000).len(), 1);
+    }
+
+    #[test]
+    fn typing_keeps_the_zoom() {
+        let clicks = [(1000, 0.5, 0.5)];
+        let typing: Vec<i64> = (3..=12).map(|i| i * 500).collect();
+        let s = auto_segments(&input(&clicks, &[], &typing, NO_CURSOR, false), Level::Normal, 60_000);
+        assert_eq!(s[0].end_ms, 7000);
+        let long: Vec<i64> = (3..=60).map(|i| i * 500).collect();
+        let s = auto_segments(&input(&clicks, &[], &long, NO_CURSOR, false), Level::Normal, 60_000);
+        assert_eq!(s[0].end_ms, 21_000, "at most 20 s after the last click");
+    }
+
+    #[test]
+    fn scrolling_inside_the_view_keeps_the_zoom() {
+        let clicks = [(1000, 0.5, 0.5)];
+        let inside = auto_segments(&input(&clicks, &[(2500, 0.5, 0.5)], &[], NO_CURSOR, false), Level::Normal, 60_000);
+        assert_eq!(inside[0].end_ms, 3500);
+        let outside = auto_segments(&input(&clicks, &[(2500, 0.9, 0.9)], &[], NO_CURSOR, false), Level::Normal, 60_000);
+        assert_eq!(outside[0].end_ms, 2800);
+    }
+
+    #[test]
+    fn leaving_the_view_ends_early() {
+        let clicks = [(1000, 0.5, 0.5)];
+        let cursor = |t: i64| Some(if t < 1300 { (0.5, 0.5) } else { (0.95, 0.95) });
+        let s = auto_segments(&input(&clicks, &[], &[], &cursor, false), Level::Normal, 60_000);
+        assert_eq!(s[0].end_ms, 2300);
+        let stays = |_t: i64| Some((0.5, 0.5));
+        assert_eq!(auto_segments(&input(&clicks, &[], &[], &stays, false), Level::Normal, 60_000)[0].end_ms, 2800);
+    }
+
+    #[test]
+    fn high_level_holds_shorter() {
+        let clicks = [(1000, 0.5, 0.5)];
+        assert_eq!(auto_segments(&input(&clicks, &[], &[], NO_CURSOR, false), Level::High, 60_000)[0].end_ms, 2200);
+        assert_eq!(auto_segments(&input(&clicks, &[], &[], NO_CURSOR, false), Level::Normal, 60_000)[0].end_ms, 2800);
     }
 }

@@ -35,13 +35,15 @@ pub enum Event {
     Up { t: i64, b: Button, x: i32, y: i32 },
     Wheel { t: i64, dx: i32, dy: i32, x: i32, y: i32 },
     Key { t: i64, k: String },
+    /// A moment of typing: never which key.
+    Type { t: i64 },
 }
 
 impl Event {
     /// Video time of the event in milliseconds.
     pub fn t(&self) -> i64 {
         match self {
-            Event::Move { t, .. } | Event::Down { t, .. } | Event::Up { t, .. } | Event::Wheel { t, .. } | Event::Key { t, .. } => *t,
+            Event::Move { t, .. } | Event::Down { t, .. } | Event::Up { t, .. } | Event::Wheel { t, .. } | Event::Key { t, .. } | Event::Type { t } => *t,
         }
     }
 }
@@ -177,6 +179,13 @@ mod tests {
 
     fn key(ctrl: bool, alt: bool, shift: bool, win: bool, vk: u32) -> KeyStroke {
         KeyStroke { ctrl, alt, shift, win, vk }
+    }
+
+    #[test]
+    fn type_lines_are_read() {
+        let log = parse_log("{\"e\":\"type\",\"t\":500}\n{\"e\":\"future\",\"t\":1}\n{\"e\":\"move\",\"t\":9,\"x\":1,\"y\":2}");
+        assert_eq!(log.events, vec![Event::Move { t: 9, x: 1, y: 2 }, Event::Type { t: 500 }]);
+        assert_eq!(to_line(&Event::Type { t: 7 }), "{\"e\":\"type\",\"t\":7}");
     }
 
     #[test]

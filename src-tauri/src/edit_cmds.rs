@@ -5,7 +5,7 @@ use crate::export::{export_path, run_export};
 use hp_core::cut::Span;
 use hp_core::edit::{EditDoc, LoadError, load_edit, save_edit};
 use hp_core::effects::{Effects, build_effects};
-use hp_core::zoom::{Camera, ZoomSegment, auto_segments, camera_track, regenerate};
+use hp_core::zoom::{AutoInput, Camera, ZoomSegment, auto_segments, camera_track, regenerate};
 use hp_core::input_log::parse_log;
 use hp_core::library::{DATA_DIR, Kind, edit_path, kind_of, sidecar_path};
 use hp_core::plan::{Plan, Source};
@@ -123,7 +123,10 @@ fn auto_zoom(effects: Option<&Effects>, doc: &EditDoc, w: u32, h: u32, duration_
     let Some(fx) = effects else { return doc.zoom.segments.clone() };
     let (w, h) = (w.max(1) as f32, h.max(1) as f32);
     let clicks: Vec<(i64, f32, f32)> = fx.ripples.iter().map(|r| (r.t_ms, r.x / w, r.y / h)).collect();
-    regenerate(&doc.zoom.segments, auto_segments(&clicks, duration_ms))
+    let wheels: Vec<(i64, f32, f32)> = fx.scrolls.iter().map(|s| (s.0, s.1 / w, s.2 / h)).collect();
+    let cursor = |t: i64| fx.cursor_at(t).map(|(x, y)| (x / w, y / h));
+    let input = AutoInput { clicks: &clicks, wheels: &wheels, typing: &fx.typing, cursor: &cursor, edge_guard: fx.edge_guard };
+    regenerate(&doc.zoom.segments, auto_segments(&input, doc.zoom.level, duration_ms))
 }
 
 /// Camera samples for the preview: every 1000/60 ms, as in the export.

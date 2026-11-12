@@ -63,6 +63,12 @@ pub struct Effects {
     pub chips: Vec<Chip>,
     /// Cursor positions over time: (ms, x, y).
     pub cursor: Vec<(i64, f32, f32)>,
+    /// Moments of typing (ms), for automatic zoom.
+    pub typing: Vec<i64>,
+    /// Wheel events (ms, x, y), for automatic zoom.
+    pub scrolls: Vec<(i64, f32, f32)>,
+    /// A full-screen recording: clicks at the very edge are taskbar or window buttons.
+    pub edge_guard: bool,
 }
 
 /// One thing to draw over a frame.
@@ -82,7 +88,7 @@ pub fn build_effects(log: &ParsedLog, video_w: u32, video_h: u32) -> Effects {
         _ => (1.0, 1.0),
     };
     let at = |x: i32, y: i32| (x as f32 * sx, y as f32 * sy);
-    let mut fx = Effects::default();
+    let mut fx = Effects { edge_guard: log.header.as_ref().is_some_and(|h| h.mode == "monitor"), ..Effects::default() };
     let mut open_holds: Vec<(i64, Button)> = Vec::new();
     let mut chip_key: Option<(String, u32)> = None;
     for e in &log.events {
@@ -106,6 +112,7 @@ pub fn build_effects(log: &ParsedLog, video_w: u32, video_h: u32) -> Effects {
             Event::Wheel { t, dy, x, y, .. } => {
                 let (px, py) = at(*x, *y);
                 fx.cursor.push((*t, px, py));
+                fx.scrolls.push((*t, px, py));
                 if *dy == 0 {
                     continue;
                 }
@@ -122,6 +129,7 @@ pub fn build_effects(log: &ParsedLog, video_w: u32, video_h: u32) -> Effects {
                     }
                 }
             }
+            Event::Type { t } => fx.typing.push(*t),
             Event::Key { t, k } => {
                 let showing = fx.chips.last().is_some_and(|c| c.end_ms > *t);
                 match (&mut chip_key, fx.chips.last_mut()) {
@@ -221,6 +229,20 @@ mod tests {
 
     fn log(events: Vec<Event>) -> ParsedLog {
         ParsedLog { header: None, events }
+    }
+
+    #[test]
+    fn typing_scrolls_and_edge_guard_come_from_the_log() {
+        use crate::geometry::Rect;
+        use crate::input_log::Header;
+        let header = |mode: &str| Header { v: 1, mode: mode.into(), region: Rect { x: 0, y: 0, w: 200, h: 100 }, width: 200, height: 100, fps: 30 };
+        let events = vec![Event::Type { t: 100 }, Event::Wheel { t: 200, dx: 0, dy: 120, x: 50, y: 40 }, Event::Type { t: 300 }];
+        let fx = build_effects(&ParsedLog { header: Some(header("monitor")), events: events.clone() }, 400, 200);
+        assert!(fx.edge_guard);
+        assert_eq!(fx.typing, vec![100, 300]);
+        assert_eq!(fx.scrolls, vec![(200, 100.0, 80.0)], "in video pixels");
+        assert!(!build_effects(&ParsedLog { header: Some(header("region")), events: events.clone() }, 400, 200).edge_guard);
+        assert!(!build_effects(&log(events), 400, 200).edge_guard, "no header");
     }
 
     fn rings(d: &[Draw]) -> Vec<(f32, f32, Button)> {
