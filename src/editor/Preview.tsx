@@ -56,10 +56,12 @@ const Preview = forwardRef<PreviewHandle, Props>(function Preview(props, ref) {
   live.current = props;
   const view = useRef<View>([0, 0, props.srcW, props.srcH]);
   const repaint = useRef<() => void>(() => {});
-  useEffect(() => repaint.current(), [props.draw, props.drawFixed, props.camera, props.layout, frame]);
+  useEffect(() => repaint.current(), [props.draw, props.drawFixed, props.camera, props.layout, props.frameEdit, frame]);
 
-  const outW = props.layout?.out_w ?? props.srcW;
-  const outH = props.layout?.out_h ?? props.srcH;
+  // While the zoom frame is edited the preview shows the plain, whole source.
+  const shownLayout = props.frameEdit ? null : props.layout;
+  const outW = shownLayout?.out_w ?? props.srcW;
+  const outH = shownLayout?.out_h ?? props.srcH;
 
   // The frame is as large as fits the preview area, at the output aspect.
   useEffect(() => {
@@ -115,7 +117,7 @@ const Preview = forwardRef<PreviewHandle, Props>(function Preview(props, ref) {
       if (!w || p.srcW <= 0 || p.srcH <= 0) return;
       const ms = v.currentTime * 1000;
       const cam = p.camera ? p.camera(ms) : WHOLE;
-      const fill = p.layout?.fill_aspect ?? null;
+      const fill = p.frameEdit ? null : (p.layout?.fill_aspect ?? null);
       const now = sourceView(cam, p.srcW, p.srcH, fill);
       const base = sourceView(WHOLE, p.srcW, p.srcH, fill);
       view.current = now;
@@ -201,7 +203,7 @@ const Preview = forwardRef<PreviewHandle, Props>(function Preview(props, ref) {
     props.onPick(x, y);
   };
 
-  const l = props.layout;
+  const l = shownLayout;
   const k = frame.w > 0 ? frame.w / outW : 0;
   const [vx, vy, vw, vh] = l ? l.video : [0, 0, outW, outH];
   const background = !l || !l.decorated ? "#000" : l.background.kind === "solid" ? css(l.background.color) : `linear-gradient(${gradientAngle(outW, outH)}deg, ${css(l.background.from)}, ${css(l.background.to)})`;
@@ -229,7 +231,7 @@ const Preview = forwardRef<PreviewHandle, Props>(function Preview(props, ref) {
             <canvas ref={canvas} className="preview-overlay" aria-hidden="true" />
           </div>
           {props.frameEdit && (
-            <ZoomFrame camera={props.frameEdit.camera} srcW={props.srcW} srcH={props.srcH} fill={l?.fill_aspect ?? null} onChange={props.frameEdit.onChange} />
+            <ZoomFrame camera={props.frameEdit.camera} srcW={props.srcW} srcH={props.srcH} fill={props.layout?.fill_aspect ?? null} onChange={props.frameEdit.onChange} />
           )}
         </div>
         <canvas ref={fixed} className="preview-overlay" aria-hidden="true" />

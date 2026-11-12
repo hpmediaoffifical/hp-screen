@@ -132,6 +132,8 @@ export function keepKeysInside(seg: ZoomSegment): ZoomSegment {
 /** A new manual segment at `ms` (the Z key): 3 s, or up to the next segment or the end; null when under 0.5 s. */
 export function addSegmentAt(segments: ZoomSegment[], ms: number, durationMs: number, center: [number, number] | null): { segments: ZoomSegment[]; index: number } | null {
   const start = Math.max(0, Math.round(ms));
+  // Never on top of a segment that is already here.
+  if (segments.some((s) => s.start_ms <= start && start < s.end_ms)) return null;
   const next = segments.filter((s) => s.start_ms > start).reduce((m, s) => Math.min(m, s.start_ms), Infinity);
   const end = Math.min(start + Z_LEN_MS, next, durationMs);
   if (end - start < Z_MIN_MS) return null;
@@ -143,10 +145,25 @@ export function addSegmentAt(segments: ZoomSegment[], ms: number, durationMs: nu
 /** The frame shown for editing at `ms`: the active keyframe or start frame; `camera` places a cursor-following one. */
 export function frameAt(seg: ZoomSegment, ms: number, camera: Camera): Camera {
   const i = activeKey(seg, ms);
-  if (i >= 0) {
-    const k = seg.keys[i];
-    return { cx: k.cx, cy: k.cy, scale: k.scale };
-  }
-  if (seg.center) return { cx: seg.center[0], cy: seg.center[1], scale: seg.scale };
-  return { cx: camera.cx, cy: camera.cy, scale: seg.scale };
+  const raw = i >= 0 ? seg.keys[i] : seg.center ? { cx: seg.center[0], cy: seg.center[1], scale: seg.scale } : { cx: camera.cx, cy: camera.cy, scale: seg.scale };
+  // Kept inside the picture exactly as the core keeps the camera (zoom::camera_track).
+  const s = Math.min(MAX_SCALE, Math.max(MIN_SCALE, raw.scale));
+  const half = 0.5 / s;
+  const keep = (v: number) => Math.min(1 - half, Math.max(half, v));
+  return { cx: keep(raw.cx), cy: keep(raw.cy), scale: s };
+}
+
+/** The scale slider: changes only the zoom of the active frame (a cursor-following start frame keeps following). */
+export function setActiveScale(seg: ZoomSegment, ms: number, scale: number, camera: Camera): ZoomSegment {
+  if (activeKey(seg, ms) < 0 && !seg.center) return { ...seg, scale, manual: true };
+  return setActiveFrame(seg, ms, { ...frameAt(seg, ms, camera), scale });
+}
+
+/**
+ * Where the frame sits on the editing picture, which shows the whole source: fractions of its
+ * width and height. In Fill this is the cropped part the export shows.
+ */
+export function frameRect(cam: Camera, srcW: number, srcH: number, fill: number | null): { left: number; top: number; width: number; height: number } {
+  const [x, y, w, h] = sourceView(cam, srcW, srcH, fill);
+  return { left: x / srcW, top: y / srcH, width: w / srcW, height: h / srcH };
 }

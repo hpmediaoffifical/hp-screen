@@ -122,3 +122,33 @@ test("the frame shown for editing is the active frame itself", () => {
   assert.deepEqual(frameAt(s, 3500, c(0.5, 0.5, 1)), c(0.8, 0.7, 3));
   assert.deepEqual(frameAt(seg({ center: null, scale: 2.5 }), 2000, c(0.6, 0.4, 2.2)), c(0.6, 0.4, 2.5), "cursor-following: where the camera is, at the segment's zoom");
 });
+
+import { setActiveScale } from "./zoomMath.ts";
+
+test("the editing frame is kept inside the picture like the export camera", () => {
+  const s = seg({ center: [0.08, 0.5], scale: 2 });
+  assert.deepEqual(frameAt(s, 2000, c(0.5, 0.5, 1)), c(0.25, 0.5, 2), "a 2x frame cannot centre closer than 0.25 to the edge");
+});
+
+test("the scale slider keeps a cursor-following segment following", () => {
+  const follow = setActiveScale(seg({ center: null, scale: 1.5 }), 2000, 2.5, c(0.7, 0.3, 1.5));
+  assert.deepEqual([follow.center, follow.scale], [null, 2.5]);
+  const fixed = setActiveScale(seg({ center: [0.4, 0.4], keys: [{ t_ms: 3000, cx: 0.6, cy: 0.6, scale: 2 }] }), 3500, 3, c(0.5, 0.5, 1));
+  assert.deepEqual(fixed.keys[0], { t_ms: 3000, cx: 0.6, cy: 0.6, scale: 3 }, "a keyframe keeps its centre");
+});
+
+test("Z inside an existing segment adds nothing", () => {
+  assert.equal(addSegmentAt([seg({ start_ms: 1000, end_ms: 5000 })], 1000, 10_000, null), null, "at its start");
+  assert.equal(addSegmentAt([seg({ start_ms: 1000, end_ms: 5000 })], 3000, 10_000, null), null, "in its middle");
+  assert.ok(addSegmentAt([seg({ start_ms: 1000, end_ms: 5000 })], 5000, 10_000, null), "right after it is fine");
+});
+
+import { frameRect } from "./zoomMath.ts";
+
+test("in Fill the frame is placed on the whole source, so it never leaves the editing picture", () => {
+  // Fit → Fill after placing the frame at the left edge: still fully visible.
+  const r = frameRect(c(0.25, 0.5, 2), 1600, 900, 9 / 16);
+  assert.ok(r.left >= 0 && r.left + r.width <= 1 && r.top >= 0 && r.top + r.height <= 1, JSON.stringify(r));
+  const [x, , w] = sourceView(c(0.25, 0.5, 2), 1600, 900, 9 / 16);
+  assert.ok(near(r.left, x / 1600) && near(r.width, w / 1600), "exactly the part the export shows");
+});

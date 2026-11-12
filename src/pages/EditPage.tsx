@@ -26,7 +26,7 @@ import Preview, { type PreviewHandle } from "../editor/Preview";
 import Timeline from "../editor/Timeline";
 import { cursorAt, drawEffects } from "../editor/drawEffects";
 import ZoomTrack from "../editor/ZoomTrack";
-import { addKey, addSegmentAt, cameraAt, frameAt, setActiveFrame, WHOLE } from "../editor/zoomMath";
+import { addKey, addSegmentAt, cameraAt, frameAt, setActiveFrame, setActiveScale, WHOLE } from "../editor/zoomMath";
 
 type Tab = "cut" | "effects" | "zoom" | "frame" | "subs" | "export";
 const TABS: { id: Tab; label: string }[] = [
@@ -243,7 +243,7 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
     const now = performance.now();
     const merge = scaleRun.current?.index === index && now - scaleRun.current.at < 1000;
     scaleRun.current = { index, at: now };
-    updateSeg(index, (s) => setActiveFrame(s, playhead, { ...frameAt(s, playhead, cameraNow()), scale }), merge);
+    updateSeg(index, (s) => setActiveScale(s, playhead, scale, cameraNow()), merge);
   };
 
   /** Where the zoom camera is at the playhead. */
@@ -257,7 +257,7 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
     const center: [number, number] | null = p ? [p[0] / session.info.width, p[1] / session.info.height] : null;
     const r = addSegmentAt(d.zoom.segments, playhead, duration, center);
     if (!r) {
-      setMessage("Không đủ chỗ để thêm đoạn zoom ở đây: cần ít nhất 0,5 giây trước đoạn sau hoặc cuối video.");
+      setMessage("Không thêm được đoạn zoom ở đây: chỗ này đã có đoạn zoom, hoặc còn chưa tới 0,5 giây trước đoạn sau hay cuối video.");
       return;
     }
     preview.current?.pause();
