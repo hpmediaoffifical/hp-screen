@@ -1,6 +1,7 @@
 // Zoom helpers for the edit page preview. The camera path itself comes from the core
 // (zoom_track); these only read it and turn it into a CSS transform.
-import type { Camera } from "../editApi.ts";
+import type { Camera, ZoomKey, ZoomSegment } from "../editApi.ts";
+import { sourceView, type View } from "./layoutMath.ts";
 
 export const WHOLE: Camera = { cx: 0.5, cy: 0.5, scale: 1 };
 
@@ -35,4 +36,106 @@ export function pickPoint(cam: Camera, px: number, py: number, w: number, h: num
   const s = Math.max(1, cam.scale);
   const clamp = (v: number) => Math.min(1, Math.max(0, v));
   return [clamp(cam.cx - 0.5 / s + px / w / s), clamp(cam.cy - 0.5 / s + py / h / s)];
+}
+
+// --- The zoom frame on the preview (spec "Zoom thông minh" 3) ---
+
+export const MIN_SCALE = 1;
+export const MAX_SCALE = 4;
+/** Keyframes closer than this to another (or to the start) are refused. */
+export const KEY_GAP_MS = 50;
+/** A segment added with Z: length, zoom, and the least it may be. */
+export const Z_LEN_MS = 3000;
+export const Z_SCALE = 1.5;
+export const Z_MIN_MS = 500;
+
+/** The camera whose view (as `sourceView` gives it) is `view`. */
+export function cameraFromView(view: View, srcW: number, srcH: number, fill: number | null): Camera {
+  const [x, y, w, h] = view;
+  const cropsWidth = !!fill && fill > 0 && srcW / srcH > fill;
+  const scale = cropsWidth ? srcH / h : srcW / w;
+  return { cx: (x + w / 2) / srcW, cy: (y + h / 2) / srcH, scale: Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale)) };
+}
+
+const inside = (v: View, srcW: number, srcH: number): View => {
+  const [x, y, w, h] = v;
+  return [Math.min(Math.max(0, x), Math.max(0, srcW - w)), Math.min(Math.max(0, y), Math.max(0, srcH - h)), w, h];
+};
+
+/** `cam` with its frame moved by (dx, dy) source pixels, kept inside the picture. */
+export function moveFrame(cam: Camera, dx: number, dy: number, srcW: number, srcH: number, fill: number | null): Camera {
+  const [x, y, w, h] = sourceView(cam, srcW, srcH, fill);
+  return cameraFromView(inside([x + dx, y + dy, w, h], srcW, srcH), srcW, srcH, fill);
+}
+
+export type Corner = "nw" | "ne" | "sw" | "se";
+
+/**
+ * `cam` with its frame resized by dragging `corner` to (px, py) in source pixels: the opposite
+ * corner stays when it can, the aspect is kept, the zoom stays within 1–4×, and the frame never
+ * turns inside out.
+ */
+export function resizeFrame(cam: Camera, corner: Corner, px: number, py: number, srcW: number, srcH: number, fill: number | null): Camera {
+  const [x, y, w, h] = sourceView(cam, srcW, srcH, fill);
+  const [, , bw] = sourceView({ cx: 0.5, cy: 0.5, scale: 1 }, srcW, srcH, fill);
+  const ratio = w / h;
+  const east = corner === "ne" || corner === "se";
+  const south = corner === "sw" || corner === "se";
+  const ax = east ? x : x + w;
+  const ay = south ? y : y + h;
+  const dx = east ? px - ax : ax - px;
+  const dy = south ? py - ay : ay - py;
+  const nw = Math.min(bw / MIN_SCALE, Math.max(bw / MAX_SCALE, Math.max(dx, dy * ratio)));
+  const nh = nw / ratio;
+  const view: View = [east ? ax : ax - nw, south ? ay : ay - nh, nw, nh];
+  return cameraFromView(inside(view, srcW, srcH), srcW, srcH, fill);
+}
+
+/** The keyframe being edited at `ms`: the last one at or before it, or -1 for the start frame. */
+export function activeKey(seg: ZoomSegment, ms: number): number {
+  let i = -1;
+  seg.keys.forEach((k, j) => {
+    if (k.t_ms <= ms) i = j;
+  });
+  return i;
+}
+
+const keyOf = (t_ms: number, cam: Camera): ZoomKey => ({ t_ms, cx: cam.cx, cy: cam.cy, scale: cam.scale });
+
+/** `seg` with the frame active at `ms` set to `cam`; made manual. */
+export function setActiveFrame(seg: ZoomSegment, ms: number, cam: Camera): ZoomSegment {
+  const i = activeKey(seg, ms);
+  if (i < 0) return { ...seg, center: [cam.cx, cam.cy], scale: cam.scale, manual: true };
+  return { ...seg, keys: seg.keys.map((k, j) => (j === i ? keyOf(k.t_ms, cam) : k)), manual: true };
+}
+
+/** `seg` with a keyframe at `ms` showing `cam`, or null when `ms` is outside it or too close to another. */
+export function addKey(seg: ZoomSegment, ms: number, cam: Camera): ZoomSegment | null {
+  if (ms - seg.start_ms <= KEY_GAP_MS || ms >= seg.end_ms) return null;
+  if (seg.keys.some((k) => Math.abs(k.t_ms - ms) <= KEY_GAP_MS)) return null;
+  const keys = [...seg.keys, keyOf(Math.round(ms), cam)].sort((a, b) => a.t_ms - b.t_ms);
+  // Keyframes need a fixed start frame: a cursor-following segment starts where the camera is.
+  const center: [number, number] = seg.center ?? [cam.cx, cam.cy];
+  return { ...seg, keys, center, manual: true };
+}
+
+/** `seg` moved by `dMs`, its keyframes with it. */
+export function moveSegment(seg: ZoomSegment, dMs: number): ZoomSegment {
+  return { ...seg, start_ms: seg.start_ms + dMs, end_ms: seg.end_ms + dMs, keys: seg.keys.map((k) => ({ ...k, t_ms: k.t_ms + dMs })) };
+}
+
+/** `seg` without the keyframes outside it (after an edge was dragged). */
+export function keepKeysInside(seg: ZoomSegment): ZoomSegment {
+  return { ...seg, keys: seg.keys.filter((k) => k.t_ms > seg.start_ms && k.t_ms < seg.end_ms) };
+}
+
+/** A new manual segment at `ms` (the Z key): 3 s, or up to the next segment or the end; null when under 0.5 s. */
+export function addSegmentAt(segments: ZoomSegment[], ms: number, durationMs: number, center: [number, number] | null): { segments: ZoomSegment[]; index: number } | null {
+  const start = Math.max(0, Math.round(ms));
+  const next = segments.filter((s) => s.start_ms > start).reduce((m, s) => Math.min(m, s.start_ms), Infinity);
+  const end = Math.min(start + Z_LEN_MS, next, durationMs);
+  if (end - start < Z_MIN_MS) return null;
+  const seg: ZoomSegment = { start_ms: start, end_ms: end, scale: Z_SCALE, center: center ?? [0.5, 0.5], manual: true, keys: [], speed: "normal" };
+  const out = [...segments, seg].sort((a, b) => a.start_ms - b.start_ms);
+  return { segments: out, index: out.indexOf(seg) };
 }

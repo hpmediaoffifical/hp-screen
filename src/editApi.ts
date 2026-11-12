@@ -14,6 +14,17 @@ export interface EffectToggles {
   keys: boolean;
 }
 
+/** A keyframe inside a zoom segment (hp-core::zoom::ZoomKey): from here the camera aims at this frame. */
+export interface ZoomKey {
+  t_ms: number;
+  cx: number;
+  cy: number;
+  scale: number;
+}
+
+export type Speed = "slow" | "normal" | "fast" | "instant";
+export type Level = "low" | "normal" | "high";
+
 export interface ZoomSegment {
   start_ms: number;
   end_ms: number;
@@ -22,11 +33,16 @@ export interface ZoomSegment {
   center: [number, number] | null;
   /** Added or changed by hand: "Tự tạo lại" keeps it. */
   manual: boolean;
+  /** Keyframes after the start (the start is `center` and `scale`). */
+  keys: ZoomKey[];
+  speed: Speed;
 }
 
 export interface ZoomDoc {
   enabled: boolean;
   segments: ZoomSegment[];
+  /** Level of automatic zoom. */
+  level: Level;
 }
 
 /** Where the zoom camera looks: centre (0–1) and zoom level. */

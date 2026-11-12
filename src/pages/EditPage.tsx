@@ -259,7 +259,7 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
       setZoomSel(null);
       setPicking(false);
     }
-    change({ ...d, zoom: { enabled, segments } });
+    change({ ...d, zoom: { ...d.zoom, enabled, segments } });
   };
 
   const close = async () => {

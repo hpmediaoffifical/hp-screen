@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import type { ZoomSegment } from "../editApi";
+import { keepKeysInside, moveSegment } from "./zoomMath";
 
 interface Props {
   durationMs: number;
@@ -63,7 +64,7 @@ export default function ZoomTrack(props: Props) {
     const ms = msAt(e.clientX);
     if (g.kind === "create") {
       if (Math.abs(ms - g.fromMs) < MIN_LEN_MS) return;
-      const seg: ZoomSegment = { start_ms: Math.min(g.fromMs, ms), end_ms: Math.max(g.fromMs, ms), scale: 1.5, center: null, manual: true };
+      const seg: ZoomSegment = { start_ms: Math.min(g.fromMs, ms), end_ms: Math.max(g.fromMs, ms), scale: 1.5, center: null, manual: true, keys: [], speed: "normal" };
       if (g.index === null) {
         g.index = props.segments.length;
         props.onChange([...props.segments, seg], true);
@@ -78,11 +79,12 @@ export default function ZoomTrack(props: Props) {
     const o = g.orig;
     const len = o.end_ms - o.start_ms;
     let seg: ZoomSegment;
-    if (g.kind === "start") seg = { ...o, start_ms: Math.min(Math.max(0, ms), o.end_ms - MIN_LEN_MS) };
-    else if (g.kind === "end") seg = { ...o, end_ms: Math.max(Math.min(d, ms), o.start_ms + MIN_LEN_MS) };
+    // Dragging an edge drops the keyframes it passes; moving the segment carries them along.
+    if (g.kind === "start") seg = keepKeysInside({ ...o, start_ms: Math.min(Math.max(0, ms), o.end_ms - MIN_LEN_MS) });
+    else if (g.kind === "end") seg = keepKeysInside({ ...o, end_ms: Math.max(Math.min(d, ms), o.start_ms + MIN_LEN_MS) });
     else {
       const start = Math.min(Math.max(0, o.start_ms + ms - g.grabMs), d - len);
-      seg = { ...o, start_ms: start, end_ms: start + len };
+      seg = moveSegment(o, start - o.start_ms);
     }
     replace(g.index, { ...seg, manual: true }, first);
   };
