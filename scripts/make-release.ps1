@@ -1,9 +1,9 @@
 # Builds latest.json + checksums.txt next to the NSIS installer, ready to upload to a
 # GitHub release. Run after `pnpm tauri build` (which needs TAURI_SIGNING_PRIVATE_KEY set).
-# Usage:  pwsh scripts/make-release.ps1
+# Usage:  powershell -File scripts\make-release.ps1
 param(
-    [string]$BundleDir = "src-tauri\target\release\bundle\nsis",
-    [string]$OutDir = "src-tauri\target\release\bundle\release",
+    [string]$BundleDir = "target\release\bundle\nsis",
+    [string]$OutDir = "target\release\bundle\release",
     [string]$Repo = "hpmediaoffifical/hp-screen"
 )
 $ErrorActionPreference = "Stop"
@@ -33,10 +33,10 @@ $release = [ordered]@{
 }
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-$release | ConvertTo-Json -Depth 5 | Out-File "$OutDir\latest.json" -Encoding utf8NoBOM
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText("$PWD\$OutDir\latest.json", ($release | ConvertTo-Json -Depth 5), $utf8NoBom)
 $hash = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash
-"SHA-256 ($($setup.Name)): $hash" | Out-File "$OutDir\checksums.txt" -Encoding utf8NoBOM
-# A v2-format update endpoint also accepts the msi updater artifact name; nsis is our target.
+[System.IO.File]::WriteAllText("$PWD\$OutDir\checksums.txt", "SHA-256 ($($setup.Name)): $hash", $utf8NoBom)
 Write-Host "Wrote $OutDir\latest.json and checksums.txt"
 Write-Host "  version:  $version"
 Write-Host "  url:      $url"
