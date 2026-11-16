@@ -3,6 +3,7 @@ use crate::capture::{self, Target};
 use crate::commands::AppState;
 use crate::{events, screenshot};
 use hp_core::settings::Settings;
+use hp_core::state::RecState;
 use serde::Serialize;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
@@ -95,6 +96,7 @@ fn default_hotkey(action: HotkeyAction) -> &'static str {
         HotkeyAction::Pause => DEFAULT_HOTKEY_PAUSE,
         HotkeyAction::Screenshot => DEFAULT_HOTKEY_SCREENSHOT,
         HotkeyAction::Quickshot => DEFAULT_HOTKEY_QUICKSHOT,
+        HotkeyAction::Draw => DEFAULT_HOTKEY_DRAW,
     }
 }
 
@@ -158,12 +160,23 @@ pub fn default_target() -> Target {
 }
 
 pub fn run_action(app: &AppHandle, action: HotkeyAction) {
-    #[cfg(debug_assertions)]
-    eprintln!("[hp] run_action {action:?} state {:?}", app.try_state::<AppState>().map(|s| s.recorder.status().state));
     let Some(state) = app.try_state::<AppState>() else { return };
+    let before = state.recorder.status().state;
     let settings = state.settings();
     let result = match action {
-        HotkeyAction::Toggle => state.recorder.toggle(default_target(), settings),
+        HotkeyAction::Toggle => {
+            // A press that races the session changing state must not be lost on a technicality:
+            // retry briefly, and treat "already stopping/stopped" as success.
+            let mut outcome = state.recorder.toggle(default_target(), settings.clone());
+            for _ in 0..2 {
+                if outcome.is_ok() || matches!(state.recorder.status().state, RecState::Finalizing | RecState::Idle) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(30));
+                outcome = state.recorder.toggle(default_target(), settings.clone());
+            }
+            outcome
+        }
         // Pressing pause when nothing is recording is not an error worth showing.
         HotkeyAction::Pause => state.recorder.toggle_pause().or(Ok(())),
         HotkeyAction::Screenshot => {
@@ -197,6 +210,12 @@ pub fn run_action(app: &AppHandle, action: HotkeyAction) {
             Ok(())
         }
     };
+    // Every press is logged, whether it worked or not: the one report we could not reproduce
+    // was "the stop key sometimes does nothing", and this line is how we catch it next time.
+    match &result {
+        Ok(()) => crate::paths::log_diag(app, &format!("hotkey {action:?} in {before:?}: ok")),
+        Err(message) => crate::paths::log_diag(app, &format!("hotkey {action:?} in {before:?}: FAILED {message}")),
+    }
     if let Err(message) = result {
         events::rec_error(app, &message);
     }

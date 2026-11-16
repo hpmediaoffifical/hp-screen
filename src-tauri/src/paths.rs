@@ -86,6 +86,16 @@ pub fn ensure_recordable(dir: &Path) -> Result<(), String> {
 
 /// Appends a line to the app's log file; used for errors the user may want to send us.
 pub fn log_error(app: &AppHandle, message: &str) {
+    log_line(app, message);
+}
+
+/// Diagnostic lines: hotkey presses, the state they met and their outcome. Used to run down
+/// rare reports like a stop hotkey that seems to vanish; safe to call from any thread.
+pub fn log_diag(app: &AppHandle, message: &str) {
+    log_line(app, &format!("[diag] {message}"));
+}
+
+fn log_line(app: &AppHandle, message: &str) {
     use std::io::Write;
     let Ok(dir) = app.path().app_log_dir() else { return };
     let _ = std::fs::create_dir_all(&dir);

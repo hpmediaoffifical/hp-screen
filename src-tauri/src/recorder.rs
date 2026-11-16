@@ -303,6 +303,10 @@ impl Inner {
     }
 
     fn stop(self: Arc<Self>) -> Result<(), String> {
+        // A second stop while the file is being closed is fine: the first one is finishing.
+        if matches!(*lock(&self.state), RecState::Finalizing) {
+            return Ok(());
+        }
         self.apply(Command::Stop)?;
         self.emit(None, None);
         std::thread::spawn(move || {
