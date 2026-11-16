@@ -48,7 +48,7 @@ cargo test -p hp-screen --lib -- --ignored --test-threads=1
 
 | # | Việc cần thử | Máy | Người |
 |---|---|---|---|
-| 17 | Đang ở ứng dụng khác, bấm Ctrl+Alt+R: đếm ngược rồi quay; bấm lần nữa: dừng | Đạt phần lớn. **Có 2 trong khoảng 8 lần chạy bằng phím giả lập, lệnh dừng không tới ứng dụng; chưa tìm ra nguyên nhân, chưa lặp lại được theo ý muốn.** Cần người bấm phím thật nhiều lần | |
+| 17 | Đang ở ứng dụng khác, bấm Ctrl+Alt+R: đếm ngược rồi quay; bấm lần nữa: dừng | Đạt phần lớn. Có 2/8 lần bằng phím giả lập lệnh dừng không tới ứng dụng. Từ 0.2.1: mỗi lần bấm phím được ghi dòng `[diag]` vào `logs\hp-screen.log` (kèm trạng thái và kết quả), phím dừng bấm lúc đang đóng file không còn báo lỗi, phím đè lên lúc đổi trạng thái được thử lại — lần tái hiện kế tiếp sẽ truy được nguyên nhân từ log | |
 | 18 | Ctrl+Alt+P tạm dừng và tiếp tục | Đạt | |
 | 19 | Bấm Ctrl+Alt+R thật nhanh 5 lần: không có hai phiên quay, không treo | Một phần (logic trạng thái có kiểm thử; chưa thử bấm thật) | |
 | 20 | Ctrl+Alt+S chụp ảnh | Không đạt trên máy phát triển: một ứng dụng khác đang giữ tổ hợp này; trang Cài đặt báo đúng. Đổi sang tổ hợp khác rồi thử lại | |
@@ -203,3 +203,17 @@ Cần mạng cho lần đầu (tải khoảng 584 MB với model "Chính xác", 
 | S6 | Bật "Ghi cứng phụ đề vào video", xuất MP4: chữ nằm gần cạnh dưới, nền tối; phím tắt (nếu có) nằm trên phụ đề | Đạt (`subtitle_is_drawn_near_the_bottom`, `chips_move_above_a_burned_subtitle`) | |
 | S7 | "Xuất SRT": file `_edit.srt` cạnh video, mở trong CapCut hoặc VLC thấy đúng dấu tiếng Việt và đúng giờ (cả khi đã cắt bớt đoạn giữa) | Đạt (`srt_is_written_next_to_the_video_without_overwriting`, `srt_uses_output_time`) | |
 | S8 | Video không có tiếng: nút Tạo phụ đề tắt, có lời giải thích; vẫn "Thêm dòng tại đây" bằng tay được | Đạt cho phát hiện không có tiếng (`a_silent_video_gives_no_wav`) | |
+
+## Tự cập nhật (0.2.1)
+
+Cần một bản HP Screen đã cài (0.2.1 trở lên) và một bản phát hành GitHub mới hơn có `latest.json`.
+
+| # | Việc cần thử | Máy | Người |
+|---|---|---|---|
+| U1 | Mở app ~5 giây sau khi có bản mới: thẻ thông báo hiện góc phải-dưới, đúng số phiên bản | — | |
+| U2 | Bấm "Cài đặt": thanh tiến độ chạy theo MB, app tự khởi động lại, Cài đặt → Phiên bản đúng bản mới | — | |
+| U3 | Đang quay mà bấm cài đặt: app chờ hết phiên quay rồi mới cập nhật (không mất video) | — | |
+| U4 | Tắt "Tự kiểm tra bản mới" trong Cài đặt: không còn tự báo, nút kiểm tra tay vẫn dùng được | — | |
+| U5 | Không có bản mới: không hiện thông báo gì; nút kiểm tra tay báo "đang dùng bản mới nhất" | — | |
+| U6 | Bản phát hành có `latest.json` và `.sig` khớp khóa trong `tauri.conf.json` (xem docs/RELEASE.md) | — | |
+
