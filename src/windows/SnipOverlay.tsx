@@ -600,6 +600,10 @@ export default function SnipOverlay() {
         editBase.current = shapes;
         setHistory((h) => ({ ...h, present: h.present.filter((_, i) => i !== drag.index) }));
         setColor(s.color);
+        // The size buttons follow the text being edited, so committing it keeps its size
+        // when only the background (or colour) was meant to change.
+        const size = SIZES.findIndex((z) => Math.abs(z.font * scale - s.size) < 1);
+        if (size >= 0) setSizeIndex(size);
         setTextAt(s.at);
         setTextValue(s.text);
         setTextBg(s.bg);
@@ -882,7 +886,12 @@ export default function SnipOverlay() {
             background: textColors(color, textBg).box ?? "rgba(0, 0, 0, 0.25)",
           }}
           onChange={(e) => setTextValue(e.target.value)}
-          onBlur={commitText}
+          onBlur={(e) => {
+            // Moving focus into the options (Tab) keeps the editor open too, so a background
+            // picked with the keyboard also shows live instead of committing the text first.
+            if ((e.relatedTarget as HTMLElement | null)?.closest(".snip-options")) return;
+            commitText();
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
@@ -944,7 +953,12 @@ export default function SnipOverlay() {
               </button>
             </div>
             {tool && tool !== "mosaic" && (
-              <div className="snip-col snip-options">
+              <div
+                className="snip-col snip-options"
+                // Clicking an option (background, colour, size) must not take focus from an
+                // open text editor: no blur, no commit — the change shows on the text at once.
+                onMouseDown={(e) => e.preventDefault()}
+              >
                 <div className="snip-col" role="radiogroup" aria-label="Màu">
                   {COLORS.map((c, i) => (
                     <button
