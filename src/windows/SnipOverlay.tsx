@@ -581,9 +581,17 @@ export default function SnipOverlay() {
 
   function onPointerUp() {
     if (!drag || !image) return;
-    if (drag.kind === "select" && selection && (selection.w < 4 || selection.h < 4)) {
-      // A click without dragging takes the window under the pointer.
-      setSelection(drag.snap ? { ...drag.snap.rect } : null);
+    if (drag.kind === "select") {
+      if (selection && (selection.w < 4 || selection.h < 4)) {
+        // A click without dragging takes the window under the pointer.
+        if (drag.snap) {
+          setSelection({ ...drag.snap.rect });
+          setTool("pen");
+        } else setSelection(null);
+      } else {
+        // The area is chosen: the pen is on by default, ready to draw or annotate at once.
+        setTool("pen");
+      }
     }
     if (drag.kind === "draw") {
       // A click with a shape tool draws nothing (a pen click still makes a dot).
@@ -747,6 +755,8 @@ export default function SnipOverlay() {
       if (e.ctrlKey && key === "a" && image) {
         e.preventDefault();
         setSelection({ x: 0, y: 0, w: image.naturalWidth, h: image.naturalHeight });
+        // Same as a dragged selection: the pen is on by default once the area is chosen.
+        setTool((current) => current ?? "pen");
         return;
       }
       if (!selection) return;
