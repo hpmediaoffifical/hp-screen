@@ -49,7 +49,8 @@ pub struct Settings {
     pub webcam: crate::webcam::WebcamSettings,
     /// Record without the Windows cursor and draw a smooth one when editing (needs the input log).
     pub smooth_cursor: bool,
-    /// Look for a new release on start and every few hours, and offer to install it.
+    /// Look for a new release on start and hourly, and install it without asking (never
+    /// while a recording is running). Off: releases are only offered for a manual install.
     pub auto_update: bool,
 }
 

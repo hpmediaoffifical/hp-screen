@@ -105,6 +105,7 @@ pub fn run() {
             commands::compact_hide,
             commands::open_main,
             commands::get_target,
+            commands::open_website,
             edit_cmds::edit_open,
             edit_cmds::edit_save,
             edit_cmds::edit_keep,

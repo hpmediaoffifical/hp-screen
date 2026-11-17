@@ -1,10 +1,11 @@
 //! Self-update from GitHub Releases.
 //!
-//! A background thread looks for a new release a little after start and every few hours while
-//! "Tự động cập nhật" is on. A release found this way is announced to the UI, which asks the
-//! user; nothing is installed without a click on "Cập nhật ngay". Installing waits until no
-//! recording is in progress, because the installer closes HP Screen. On Windows the installer
-//! (passive mode) starts HP Screen again by itself once it is done.
+//! A background thread looks for a new release a little after start and every hour while
+//! "Tự động cập nhật" is on. A release found this way is announced to the UI and, with the
+//! setting on, downloaded and installed without a click; the notice card shows the progress.
+//! Installing still waits until no recording is in progress, because the installer closes
+//! HP Screen. On Windows the installer (passive mode) starts HP Screen again by itself once
+//! it is done.
 use crate::commands::AppState;
 use hp_core::update::{check_due, may_install};
 use serde::Serialize;
@@ -107,7 +108,9 @@ async fn check(app: &AppHandle) -> Result<Option<UpdateInfo>, String> {
 }
 
 /// Starts the thread behind automatic checks. It reads the setting on every tick, so turning
-/// "Tự động cập nhật" on or off takes effect without a restart.
+/// "Tự động cập nhật" on or off takes effect without a restart. While the setting is on, a
+/// release it finds is also downloaded and installed right here in the thread (quietly
+/// stepping aside when a manual install got there first).
 pub fn start_background(app: &AppHandle) {
     let app = app.clone();
     let started = Instant::now();
@@ -121,14 +124,21 @@ pub fn start_background(app: &AppHandle) {
             if state.installing.load(Ordering::SeqCst) || !check_due(auto, started.elapsed().as_secs(), since_last) {
                 continue;
             }
-            let _result = tauri::async_runtime::block_on(check(&app));
+            let result = tauri::async_runtime::block_on(check(&app));
             #[cfg(debug_assertions)]
-            eprintln!("[hp] update check: {_result:?}");
+            eprintln!("[hp] update check: {result:?}");
+            if auto && result.is_ok_and(|found| found.is_some()) {
+                if let Err(message) = tauri::async_runtime::block_on(install_once(&app, true)) {
+                    let _ = app.emit(UPDATE_PROGRESS, UpdateProgress::Failed { message });
+                }
+            }
         })
         .ok();
 }
 
-/// "Kiểm tra cập nhật": looks right now, whatever the automatic setting says.
+/// "Kiểm tra cập nhật": looks right now, whatever the automatic setting says. A release
+/// found this way still waits for "Cập nhật ngay"; only the background thread installs on
+/// its own.
 #[tauri::command]
 pub async fn update_check(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
     check(&app).await
@@ -140,17 +150,30 @@ pub fn update_pending(state: State<'_, UpdateState>) -> Option<UpdateInfo> {
     lock(&state.pending).as_ref().map(info)
 }
 
+/// Starts the install once; the `installing` flag keeps the automatic path and a click on
+/// "Cập nhật ngay" from both running it. With `quiet`, an install that is already running
+/// is not an error (the automatic path simply steps aside).
+async fn install_once(app: &AppHandle, quiet: bool) -> Result<(), String> {
+    let state = app.state::<UpdateState>();
+    if state.installing.swap(true, Ordering::SeqCst) {
+        if quiet {
+            return Ok(());
+        }
+        return Err("Bản cập nhật đang được tải.".to_string());
+    }
+    let result = install(app).await;
+    if result.is_err() {
+        state.installing.store(false, Ordering::SeqCst);
+    }
+    result
+}
+
 /// "Cập nhật ngay": downloads the release, waits for any recording to finish, then installs
 /// it. On Windows HP Screen closes here and the installer opens the new version.
 #[tauri::command]
 pub async fn update_install(app: AppHandle) -> Result<(), String> {
-    let state = app.state::<UpdateState>();
-    if state.installing.swap(true, Ordering::SeqCst) {
-        return Err("Bản cập nhật đang được tải.".to_string());
-    }
-    let result = install(&app).await;
+    let result = install_once(&app, false).await;
     if let Err(message) = &result {
-        state.installing.store(false, Ordering::SeqCst);
         let _ = app.emit(UPDATE_PROGRESS, UpdateProgress::Failed { message: message.clone() });
     }
     result

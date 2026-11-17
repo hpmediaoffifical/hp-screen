@@ -2,9 +2,9 @@
 use crate::state::RecState;
 
 /// First automatic check, a little after start so it does not slow the app down.
-pub const FIRST_CHECK_DELAY_SECS: u64 = 20;
+pub const FIRST_CHECK_DELAY_SECS: u64 = 10;
 /// Automatic checks after the first one.
-pub const CHECK_INTERVAL_SECS: u64 = 6 * 60 * 60;
+pub const CHECK_INTERVAL_SECS: u64 = 60 * 60;
 
 /// Installing closes HP Screen, so it waits until nothing is being recorded or saved.
 pub fn may_install(state: RecState) -> bool {

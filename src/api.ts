@@ -200,6 +200,8 @@ export const snipCancel = () => invoke<void>("snip_cancel");
 export const compactShow = () => invoke<void>("compact_show");
 export const compactHide = () => invoke<void>("compact_hide");
 export const openMain = () => invoke<void>("open_main");
+/** Opens HP Media's website (https://hpvn.media) in the default browser. */
+export const openWebsite = () => invoke<void>("open_website");
 export const getTarget = () => invoke<Target>("get_target");
 export const onTargetChanged = (handler: (t: Target) => void): Promise<UnlistenFn> =>
   listen<Target>("target-changed", (e) => handler(e.payload));

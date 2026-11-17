@@ -184,6 +184,13 @@ pub fn library_reveal(app: AppHandle, state: State<'_, AppState>, path: Option<S
     }
 }
 
+/// Opens HP Media's website (the publisher's page) in the default browser.
+#[tauri::command]
+pub fn open_website(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_url("https://hpvn.media", None::<&str>).map_err(|e| format!("Không mở được trang web: {e}"))
+}
+
 /// The file name the pattern would give right now, for the live preview in Settings.
 #[tauri::command]
 pub fn preview_name(pattern: String) -> String {

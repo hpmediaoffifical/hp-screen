@@ -8,6 +8,7 @@ import {
   hotkeyStatus,
   onHotkeysChanged,
   onSettingsChanged,
+  openWebsite,
   outputFolder,
   pickFolder,
   previewName,
@@ -262,6 +263,20 @@ export default function SettingsPage({ focusHotkey = null }: { focusHotkey?: Hot
       </Group>
 
       <UpdateGroup autoUpdate={settings.auto_update} onAutoUpdate={(auto_update) => save({ auto_update })} />
+
+      <Group title="Giới thiệu">
+        <Field label="Tác giả">
+          <p className="hint about-line">Nguyễn Hoàng Phụng</p>
+        </Field>
+        <Field label="Nhà phát hành">
+          <p className="hint about-line">
+            HP Media ·{" "}
+            <button type="button" className="site-link" onClick={() => openWebsite().catch(() => {})}>
+              https://hpvn.media
+            </button>
+          </p>
+        </Field>
+      </Group>
     </section>
   );
 }
@@ -278,7 +293,7 @@ function UpdateGroup(props: { autoUpdate: boolean; onAutoUpdate: (on: boolean) =
     <Group title="Cập nhật">
       <Check
         label="Tự động cập nhật"
-        hint="Tự kiểm tra bản mới trên GitHub khi mở HP Screen và vài giờ một lần, rồi hỏi bạn trước khi cài. Không bao giờ cài khi đang quay."
+        hint="Tự tìm, tải và cài bản mới trên GitHub ngay khi mở HP Screen và mỗi giờ một lần. Bản mới chỉ được cài khi không đang quay; cài xong HP Screen tự mở lại. Tắt nếu bạn muốn tự bấm cập nhật."
         checked={props.autoUpdate}
         onChange={props.onAutoUpdate}
       />

@@ -8,7 +8,7 @@ export default function UpdateNotice() {
 
   return (
     <aside className="update-notice" role="status" aria-live="polite">
-      <div className="update-title">Có bản HP Screen mới: {available.version}</div>
+      <div className="update-title">{busy ? `Đang cập nhật lên bản ${available.version}…` : `Có bản HP Screen mới: ${available.version}`}</div>
       <p className="update-sub">
         {busy ? progressText(progress) : `Bạn đang dùng bản ${available.current_version}. Nếu đang quay, bản mới sẽ được cài khi quay xong.`}
       </p>
