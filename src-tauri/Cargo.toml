@@ -1,6 +1,6 @@
 [package]
 name = "hp-screen"
-version = "0.2.3"
+version = "0.2.4"
 description = "HP Screen - quay màn hình cho Windows 11"
 authors = ["Nguyễn Hoàng Phụng (HP Media)"]
 license = "MIT"
