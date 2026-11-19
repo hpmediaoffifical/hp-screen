@@ -61,6 +61,8 @@ pub fn run() {
                 edit_cmds::remove_stale_parts(&dir);
             }
             app.manage(AppState { settings: Mutex::new(settings.clone()), recorder: Recorder::new(handle.clone()) });
+            // Repairs a startup entry left pointing at another copy of the app.
+            commands::sync_autostart(handle, settings.autostart);
             shell::setup(handle)?;
             app.manage(updater::UpdateState::default());
             updater::start_background(handle);

@@ -110,15 +110,28 @@ pub fn settings_set(app: AppHandle, state: State<'_, AppState>, settings: Settin
     if hotkeys(&previous) != hotkeys(&settings) {
         crate::hotkeys::register_hotkeys(&app, &settings);
     }
-    {
-        use tauri_plugin_autostart::ManagerExt;
-        let autostart = app.autolaunch();
-        // Best effort: a failure here must not lose the other settings.
-        let _ = if settings.autostart { autostart.enable() } else { autostart.disable() };
-    }
+    sync_autostart(&app, settings.autostart);
     // Every window keeps its own copy of the settings; tell them all.
     let _ = tauri::Emitter::emit(&app, "settings-changed", &settings);
     Ok(settings)
+}
+
+/// Makes the "start with Windows" entry match the setting and point at this exe. Called at
+/// startup too: the entry stores an exe path, and one written by another copy (an old build,
+/// a moved install) would keep launching that copy at login, which then holds the
+/// single-instance lock so the installed app seems not to open.
+///
+/// Development builds never touch the entry: they would point Windows at a debug exe that
+/// shows a blank window without the dev server.
+pub fn sync_autostart(app: &AppHandle, enabled: bool) {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    use tauri_plugin_autostart::ManagerExt;
+    let autostart = app.autolaunch();
+    // Best effort: a failure here must not lose the other settings. `enable` rewrites the
+    // path even when an entry already exists.
+    let _ = if enabled { autostart.enable() } else { autostart.disable() };
 }
 
 fn library_dir(app: &AppHandle, state: &State<'_, AppState>) -> Result<std::path::PathBuf, String> {
