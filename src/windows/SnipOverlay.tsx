@@ -35,6 +35,7 @@ import {
   type TextBg,
   type TextShape,
 } from "./snipModel";
+import { sensitiveGroups } from "./pii";
 
 /**
  * "Capture and annotate": the frozen screen fills this window. Point at a window and click to
@@ -309,6 +310,9 @@ export default function SnipOverlay() {
   const [sizeIndex, setSizeIndex] = useState(1);
   const [history, setHistory] = useState<History>(() => historyOf([]));
   const shapes = history.present;
+  /** What `finish` sends, kept current for the callback that outlives this render. */
+  const shapesRef = useRef<Shape[]>([]);
+  shapesRef.current = shapes;
   /** Shape picked with no tool on: it can be dragged or deleted. */
   const [picked, setPicked] = useState<number | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -318,6 +322,8 @@ export default function SnipOverlay() {
   const [textBg, setTextBg] = useState<TextBg>("none");
   /** Shapes as they were before a text was opened for editing (the edit is one undo step). */
   const editBase = useRef<Shape[] | null>(null);
+  /** The library picture being edited again, when this overlay reopens one. */
+  const origin = useRef<string | null>(null);
   /** The area whose drawings were cleared when a new area was chosen, and at which undo depth:
    * undoing that step brings the area back with them. */
   const clearedArea = useRef<{ depth: number; area: Box } | null>(null);
@@ -348,12 +354,18 @@ export default function SnipOverlay() {
       .then(async (ctx) => {
         if (!ctx) return snipCancel();
         setContext(ctx);
+        // Reopening a saved picture: its annotations come with it, and the whole picture is
+        // the area to work in.
+        const saved = (ctx.shapes ?? []) as unknown as Shape[];
+        if (Array.isArray(saved) && saved.length > 0) setHistory(historyOf(saved));
+        origin.current = ctx.origin ?? null;
         const bytes = await snipFrozen();
         url = URL.createObjectURL(new Blob([bytes], { type: "image/bmp" }));
         const img = new Image();
         img.onload = () => {
           setScale(img.naturalWidth / window.innerWidth || 1);
           setImage(img);
+          if (ctx.origin) setSelection({ x: 0, y: 0, w: img.naturalWidth, h: img.naturalHeight });
         };
         img.onerror = () => snipCancel();
         img.src = url;
@@ -653,7 +665,8 @@ export default function SnipOverlay() {
       if (!out) return;
       setBusy(true);
       try {
-        await snipFinish(action, out.png);
+        // The layers travel with the picture, so it stays editable later.
+        await snipFinish(action, out.png, shapesRef.current);
       } catch (e) {
         setError(errorMessage(e));
         setBusy(false);
@@ -693,6 +706,36 @@ export default function SnipOverlay() {
       setError(errorMessage(e));
     }
   }, [render, busy]);
+
+  /** Finds phone numbers, emails, ID and card numbers in the area and blurs each one. */
+  const hideSensitive = useCallback(async () => {
+    if (busy) return;
+    const out = render(false);
+    if (!out) return;
+    setBusy(true);
+    setError("");
+    const run = ++ocrRun.current; // closes the text panel if it is open
+    try {
+      const found = await snipOcr(out.png);
+      if (run !== ocrRun.current) return;
+      const groups = sensitiveGroups(found.words ?? []);
+      if (groups.length === 0) {
+        setError("Không tìm thấy số điện thoại, email, số CCCD/CMND hay số thẻ nào trong vùng chọn.");
+        return;
+      }
+      const pad = 3 * scale;
+      const mosaics: Shape[] = groups.map((g) => ({
+        kind: "mosaic",
+        from: { x: out.rect.x + g.x - pad, y: out.rect.y + g.y - pad },
+        to: { x: out.rect.x + g.x + g.w + pad, y: out.rect.y + g.y + g.h + pad },
+      }));
+      change((s) => [...s, ...mosaics]);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [render, busy, scale, change]);
 
   /** Long pages: the user scrolls the area while it is captured and joined. */
   const scrollCapture = useCallback(async () => {
@@ -1050,9 +1093,17 @@ export default function SnipOverlay() {
               >
                 ⇕ Chụp cuộn
               </button>
-              <button className="snip-btn snip-wide" title="Nhận chữ trong vùng chọn (OCR)" disabled={busy || ocr?.busy} onClick={readText}>
-                {ocr?.busy ? "Đang đọc…" : "Nhận chữ"}
-              </button>
+            <button className="snip-btn snip-wide" title="Nhận chữ trong vùng chọn (OCR)" disabled={busy || ocr?.busy} onClick={readText}>
+              {ocr?.busy ? "Đang đọc…" : "Nhận chữ"}
+            </button>
+            <button
+              className="snip-btn snip-wide"
+              title="Tự làm mờ số điện thoại, email, số CCCD/CMND, số thẻ trong vùng chọn"
+              disabled={busy || ocr?.busy}
+              onClick={hideSensitive}
+            >
+              🔒 Che thông tin
+            </button>
               <button className="snip-btn snip-wide" title="Ghim ảnh nổi trên màn hình (F3)" disabled={busy} onClick={pin}>
                 📌 Ghim
               </button>

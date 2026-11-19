@@ -7,6 +7,7 @@ import {
   libraryOpen,
   libraryRename,
   libraryReveal,
+  snipEditStart,
   type LibraryEntry,
   type MediaKind,
 } from "../api";
@@ -21,7 +22,7 @@ const FILTERS: { value: MediaKind | null; label: string }[] = [
 
 const stemOf = (name: string) => name.replace(/\.[^.]+$/, "");
 
-export default function LibraryPage(props: { onEdit?: (path: string) => void } = {}) {
+export default function LibraryPage(props: { onEdit?: (path: string, seekMs?: number) => void } = {}) {
   const [filter, setFilter] = useState<MediaKind | null>(null);
   const { items, error } = useLibrary(filter);
   const [selected, setSelected] = useState<string | null>(null);
@@ -123,6 +124,24 @@ export default function LibraryPage(props: { onEdit?: (path: string) => void } =
                 </button>
                 {item.kind === "video" && props.onEdit && (
                   <button className="btn btn-small" onClick={() => props.onEdit?.(item.path)}>Chỉnh sửa</button>
+                )}
+                {item.kind === "image" && item.in_video && props.onEdit && (
+                  <button
+                    className="btn btn-small"
+                    title="Mở video tại đúng khoảnh khắc ảnh này được chụp"
+                    onClick={() => props.onEdit?.(item.in_video!.video, item.in_video!.at_ms)}
+                  >
+                    ▶ Trong video · {formatElapsed(item.in_video.at_ms)}
+                  </button>
+                )}
+                {item.kind === "image" && (
+                  <button
+                    className="btn btn-small"
+                    title="Mở lại các nét vẽ ghi chú trên ảnh này để sửa tiếp"
+                    onClick={() => run(() => snipEditStart(item.path))}
+                  >
+                    Sửa ghi chú
+                  </button>
                 )}
                 <button className="btn btn-small" onClick={() => run(() => libraryReveal(item.path))}>Thư mục</button>
                 <button className="btn btn-small" onClick={() => setRenaming(item.path)}>Đổi tên</button>

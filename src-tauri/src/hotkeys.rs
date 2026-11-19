@@ -191,10 +191,18 @@ pub fn run_action(app: &AppHandle, action: HotkeyAction) {
         }
         HotkeyAction::Quickshot => {
             let target = state.recorder.last_target().unwrap_or_else(default_target);
+            // Read the moment at the press: capturing takes a moment of its own.
+            let moment = crate::library_fs::recording_moment(&state.recorder);
             let app = app.clone();
             // Capturing takes a moment; keep the hotkey thread free.
             std::thread::spawn(move || match screenshot::take_screenshot(&app, &settings, &target) {
-                Ok(_) => events::library_changed(&app),
+                Ok(path) => {
+                    // Taken during a recording: the picture remembers where in the video it belongs.
+                    if let Some((video, at_ms)) = moment {
+                        crate::library_fs::append_mark(&video, &path, at_ms);
+                    }
+                    events::library_changed(&app)
+                }
                 Err(message) => events::rec_error(&app, &message),
             });
             Ok(())

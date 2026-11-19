@@ -23,11 +23,15 @@ pub fn take_screenshot(app: &AppHandle, settings: &Settings, target: &Target) ->
 pub fn save_png(dir: &Path, settings: &Settings, image: &RgbaImage) -> Result<PathBuf, String> {
     let path = new_media_path(dir, settings, "png");
     image.save(&path).map_err(|e| format!("Không lưu được ảnh chụp: {e}"))?;
-    // Preview for the library; best effort, and never larger than the picture.
+    write_thumb(image, &path);
+    Ok(path)
+}
+
+/// (Re)writes a picture's library preview; best effort, and never larger than the picture.
+pub fn write_thumb(image: &RgbaImage, path: &Path) {
     let thumb_width = THUMB_WIDTH.min(image.width()).max(1);
     let thumb_height = (image.height() as u64 * thumb_width as u64 / image.width().max(1) as u64).max(1) as u32;
-    let _ = image::imageops::thumbnail(image, thumb_width, thumb_height).save(thumb_path(&path));
-    Ok(path)
+    let _ = image::imageops::thumbnail(image, thumb_width, thumb_height).save(thumb_path(path));
 }
 
 /// Puts `image` on the clipboard and checks that it is really there.

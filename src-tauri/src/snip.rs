@@ -67,6 +67,10 @@ pub struct SnipContext {
     pub monitor: MonitorInfo,
     /// Windows the selection can snap to, top-most first, as they were when the screen froze.
     pub windows: Vec<SnapWindow>,
+    /// Saved annotation layers to continue editing, when this overlay reopens an old picture.
+    pub shapes: Option<serde_json::Value>,
+    /// The library picture being edited again, when this overlay reopens an old one.
+    pub origin: Option<String>,
 }
 
 /// A window on the frozen screen, relative to the monitor, in physical pixels.
@@ -86,7 +90,15 @@ pub enum SnipAction {
 }
 
 #[derive(Default)]
-pub struct SnipState(Mutex<Option<SnipContext>>);
+pub struct SnipState(Mutex<Option<SnipSession>>);
+
+/// One overlay sitting on screen: what it shows, and — when the screen was frozen during a
+/// recording — which moment of the video the frozen picture belongs to.
+#[derive(Clone)]
+struct SnipSession {
+    context: SnipContext,
+    moment: Option<(PathBuf, i64)>,
+}
 
 fn frozen_file(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_cache_dir().map_err(|e| e.to_string())?;
@@ -127,8 +139,68 @@ fn open_overlay(app: &AppHandle) -> Result<(), String> {
         .save_with_format(&path, image::ImageFormat::Bmp)
         .map_err(|e| format!("Không lưu được ảnh tạm: {e}"))?;
 
-    let context = SnipContext { frozen: path.to_string_lossy().into_owned(), monitor: monitor.clone(), windows };
-    *app.state::<SnipState>().0.lock().unwrap_or_else(|e| e.into_inner()) = Some(context);
+    let context = SnipContext {
+        frozen: path.to_string_lossy().into_owned(),
+        monitor: monitor.clone(),
+        windows,
+        shapes: None,
+        origin: None,
+    };
+    store_session_and_open_window(app, context)
+}
+
+/// Reopens a saved screenshot with its annotation layers, to keep drawing on it. Saving
+/// overwrites the same picture instead of making a new one.
+pub fn edit_start(app: &AppHandle, path: &str) -> Result<(), String> {
+    if app.get_webview_window(SNIP).is_some() {
+        return Ok(()); // already open
+    }
+    let settings = app.state::<AppState>().settings();
+    let dir = crate::paths::output_dir(app, &settings)?;
+    let path = PathBuf::from(path);
+    if hp_core::library::kind_of(&path) != Some(hp_core::library::Kind::Image)
+        || path.parent().map(|p| p.to_string_lossy().to_lowercase()) != Some(dir.to_string_lossy().to_lowercase())
+    {
+        return Err("Ảnh này không nằm trong thư viện của HP Screen.".to_string());
+    }
+    let bytes = std::fs::read(&path).map_err(|e| format!("Không đọc được ảnh: {e}"))?;
+    let cache = app.path().app_cache_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
+    let frozen = cache.join("snip-edit.png");
+    std::fs::write(&frozen, bytes).map_err(|e| format!("Không chuẩn bị được ảnh: {e}"))?;
+
+    let monitor = capture::list_monitors()
+        .into_iter()
+        .find(|m| m.primary)
+        .or_else(|| capture::list_monitors().into_iter().next())
+        .ok_or("Không tìm thấy màn hình nào")?;
+    let shapes = read_shapes(&path);
+    shell::suspend_bar(app);
+    let context = SnipContext {
+        frozen: frozen.to_string_lossy().into_owned(),
+        monitor,
+        windows: Vec::new(),
+        shapes,
+        origin: Some(path.to_string_lossy().into_owned()),
+    };
+    let opened = store_session_and_open_window(app, context);
+    if opened.is_err() {
+        shell::resume_bar(app);
+    }
+    opened
+}
+
+/// The saved annotation layers of a picture, when there are any.
+fn read_shapes(png: &std::path::Path) -> Option<serde_json::Value> {
+    let text = std::fs::read_to_string(hp_core::library::shapes_path(png)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn store_session_and_open_window(app: &AppHandle, context: SnipContext) -> Result<(), String> {
+    // The screen frozen during a recording: this picture belongs to that moment of the video.
+    let moment = crate::library_fs::recording_moment(&app.state::<AppState>().recorder);
+    let monitor = context.monitor.clone();
+    *app.state::<SnipState>().0.lock().unwrap_or_else(|e| e.into_inner()) = Some(SnipSession { context, moment });
 
     let window = WebviewWindowBuilder::new(app, SNIP, WebviewUrl::App("index.html".into()))
         .title("HP Screen - Chụp ảnh")
@@ -146,17 +218,58 @@ fn open_overlay(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn context(app: &AppHandle) -> Option<SnipContext> {
-    app.state::<SnipState>().0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    app.state::<SnipState>()
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map(|session| session.context.clone())
 }
 
-/// Copies and/or saves the finished picture, then closes the overlay.
-pub fn finish(app: &AppHandle, action: SnipAction, png: &str) -> Result<Option<String>, String> {
+/// Copies and/or saves the finished picture, then closes the overlay. `shapes` are the
+/// annotation layers, saved beside the picture so it can be edited again later.
+pub fn finish(
+    app: &AppHandle,
+    action: SnipAction,
+    png: &str,
+    shapes: Option<serde_json::Value>,
+) -> Result<Option<String>, String> {
     let image = decode_png(png)?;
+    let session = app
+        .state::<SnipState>()
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     let mut saved = None;
     if matches!(action, SnipAction::Save | SnipAction::Both) {
         let settings = app.state::<AppState>().settings();
-        let dir = crate::paths::output_dir(app, &settings)?;
-        let path = screenshot::save_png(&dir, &settings, &image)?;
+        let path = match session.as_ref().and_then(|s| s.context.origin.clone()) {
+            // Editing a saved picture again: it keeps its name, its thumbnail and its links.
+            Some(origin) => {
+                let origin = PathBuf::from(origin);
+                image.save(&origin).map_err(|e| format!("Không lưu được ảnh chụp: {e}"))?;
+                screenshot::write_thumb(&image, &origin);
+                origin
+            }
+            None => {
+                let dir = crate::paths::output_dir(app, &settings)?;
+                let path = screenshot::save_png(&dir, &settings, &image)?;
+                // The screen was frozen during a recording: this picture belongs to that
+                // moment of the video, and the library will offer to jump there.
+                if let Some((video, at_ms)) = session.as_ref().and_then(|s| s.moment.clone()) {
+                    crate::library_fs::append_mark(&video, &path, at_ms);
+                }
+                path
+            }
+        };
+        // The layers are the picture's own: written down even when the annotations are empty,
+        // so a picture saved once stays editable forever.
+        if let Some(json) = shapes {
+            if let Ok(text) = serde_json::to_string(&json) {
+                let _ = std::fs::write(hp_core::library::shapes_path(&path), text);
+            }
+        }
         saved = Some(path.to_string_lossy().into_owned());
         events::library_changed(app);
     }
@@ -173,8 +286,9 @@ pub fn close(app: &AppHandle) {
     }
     app.state::<SnipState>().0.lock().unwrap_or_else(|e| e.into_inner()).take();
     shell::resume_bar(app);
-    if let Ok(path) = frozen_file(app) {
-        let _ = std::fs::remove_file(path);
+    if let Ok(dir) = app.path().app_cache_dir() {
+        let _ = std::fs::remove_file(dir.join("snip-frozen.bmp"));
+        let _ = std::fs::remove_file(dir.join("snip-edit.png"));
     }
 }
 

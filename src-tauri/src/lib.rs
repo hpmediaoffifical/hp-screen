@@ -131,6 +131,7 @@ pub fn run() {
             live_cmds::cam_on,
             commands::snip_pin,
             commands::snip_ocr,
+            commands::snip_edit_start,
             commands::copy_text,
             commands::pin_image,
             commands::pin_copy,

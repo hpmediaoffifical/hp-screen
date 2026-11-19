@@ -46,7 +46,7 @@ const SAVE_DELAY_MS = 1000;
 const nameOf = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
 /** The edit page of one video: preview, timeline, tabs. Every change is saved on its own. */
-export default function EditPage(props: { path: string; onClose: () => void }) {
+export default function EditPage(props: { path: string; seekMs?: number | null; onClose: () => void }) {
   const [session, setSession] = useState<EditSession | null>(null);
   const [loadError, setLoadError] = useState("");
   const [doc, setDocState] = useState<EditDoc | null>(null);
@@ -86,6 +86,15 @@ export default function EditPage(props: { path: string; onClose: () => void }) {
       alive = false;
     };
   }, [props.path]);
+
+  // Opened at a moment (a screenshot taken mid-recording): start there.
+  useEffect(() => {
+    if (!session || props.seekMs == null) return;
+    setPlayhead(props.seekMs);
+    // The video element needs a moment before it can seek; the playhead is already there.
+    const timer = window.setTimeout(() => preview.current?.seek(props.seekMs!), 300);
+    return () => window.clearTimeout(timer);
+  }, [session, props.seekMs]);
 
   const save = useCallback(async () => {
     window.clearTimeout(saveTimer.current);

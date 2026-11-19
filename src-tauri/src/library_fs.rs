@@ -1,7 +1,9 @@
 //! The library on disk: listing the output folder and renaming or deleting an item together
 //! with the files that accompany it.
-use hp_core::library::{Item, Kind, MediaMeta, companion_paths, kind_of, meta_path, sort_and_filter, thumb_path};
+use crate::recorder::Recorder;
+use hp_core::library::{Item, Kind, Mark, MediaMeta, companion_paths, kind_of, marks_path, meta_path, sort_and_filter, thumb_path};
 use hp_core::naming::sanitize;
+use hp_core::state::RecState;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -19,6 +21,24 @@ pub struct LibraryEntry {
     pub duration_ms: Option<u64>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    /// For a video: the screenshots taken while it was recording, in order, that still exist.
+    pub shots: Vec<Shot>,
+    /// For an image taken while recording: the video and the moment it belongs to.
+    pub in_video: Option<VideoAt>,
+}
+
+/// A screenshot taken during a video.
+#[derive(Clone, Debug, Serialize)]
+pub struct Shot {
+    pub png: String,
+    pub at_ms: i64,
+}
+
+/// The video an image was taken during, and where in it.
+#[derive(Clone, Debug, Serialize)]
+pub struct VideoAt {
+    pub video: String,
+    pub at_ms: i64,
 }
 
 /// Videos and screenshots directly inside `dir`, newest first.
@@ -35,7 +55,31 @@ pub fn list(dir: &Path, filter: Option<Kind>) -> Vec<LibraryEntry> {
             Some(Item { path, kind, created_ms, size: meta.len() })
         })
         .collect();
-    sort_and_filter(items, filter).into_iter().map(describe).collect()
+    let mut listed: Vec<LibraryEntry> = sort_and_filter(items, filter).into_iter().map(describe).collect();
+
+    // Screenshots taken while recording link both ways: the video lists them, and the image
+    // knows which moment of which video it shows.
+    let mut images: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (i, entry) in listed.iter().enumerate() {
+        if entry.kind == Kind::Image {
+            images.insert(entry.path.clone(), i);
+        }
+    }
+    for i in 0..listed.len() {
+        if listed[i].kind != Kind::Video {
+            continue;
+        }
+        for mark in read_marks(Path::new(&listed[i].path)) {
+            let key = mark.png.to_string_lossy().into_owned();
+            let Some(&image) = images.get(&key) else { continue };
+            if listed[image].in_video.is_none() {
+                listed[image].in_video =
+                    Some(VideoAt { video: listed[i].path.clone(), at_ms: mark.at_ms });
+            }
+            listed[i].shots.push(Shot { png: mark.png.to_string_lossy().into_owned(), at_ms: mark.at_ms });
+        }
+    }
+    listed
 }
 
 fn describe(item: Item) -> LibraryEntry {
@@ -61,6 +105,8 @@ fn describe(item: Item) -> LibraryEntry {
         duration_ms,
         width,
         height,
+        shots: Vec::new(),
+        in_video: None,
     }
 }
 
@@ -73,6 +119,42 @@ pub fn write_meta(media: &Path, meta: &MediaMeta) {
     if let Ok(json) = serde_json::to_string(meta) {
         let _ = std::fs::write(meta_path(media), json);
     }
+}
+
+/// The screenshots taken during a video, as they were written down.
+pub fn read_marks(video: &Path) -> Vec<Mark> {
+    std::fs::read_to_string(marks_path(video))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+/// Adds a screenshot to a video's list of taken-during-recording shots, written at once.
+pub fn append_mark(video: &Path, png: &Path, at_ms: i64) {
+    let mut marks = read_marks(video);
+    marks.push(Mark { png: png.to_path_buf(), at_ms });
+    write_marks(video, &marks);
+}
+
+/// Writes the marks file whole; an interrupted write must not lose the earlier shots.
+fn write_marks(video: &Path, marks: &[Mark]) {
+    let Ok(json) = serde_json::to_string(marks) else { return };
+    let path = marks_path(video);
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, &json).and_then(|_| std::fs::rename(&tmp, &path)).is_err() {
+        let _ = std::fs::write(&path, json); // the plain write may still work
+    }
+}
+
+/// Where a screenshot taken right now would sit in the video being recorded, if any. The
+/// clock is the video's own (pauses excluded), so the moment matches what the editor shows.
+pub fn recording_moment(recorder: &Recorder) -> Option<(PathBuf, i64)> {
+    let status = recorder.status();
+    if !matches!(status.state, RecState::Recording | RecState::Paused) {
+        return None;
+    }
+    let video = PathBuf::from(status.file?);
+    Some((video, status.elapsed_ms.max(0)))
 }
 
 /// Whether any video or screenshot in `dir` is already called `stem` (ignoring case).

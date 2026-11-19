@@ -19,6 +19,19 @@ pub struct OcrOutcome {
     pub vietnamese: bool,
     /// Shown above the text when it was not read in Vietnamese: why, and how to fix it.
     pub note: Option<String>,
+    /// Every word read, with its box in the *input* picture's pixels (unscaled). Words follow
+    /// line order, top to bottom, left to right within a line.
+    pub words: Vec<OcrWord>,
+}
+
+/// One word and where it sits in the picture.
+#[derive(Clone, Debug, Serialize)]
+pub struct OcrWord {
+    pub text: String,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
 }
 
 const HOW_TO_ADD_VIETNAMESE: &str = "Cách thêm: mở Cài đặt Windows → Thời gian và ngôn ngữ → Ngôn ngữ và vùng → Thêm ngôn ngữ → Tiếng Việt, \
@@ -87,12 +100,26 @@ pub fn recognize(picture: &RgbaImage) -> Result<OcrOutcome, String> {
     let buffer = writer.DetachBuffer().map_err(ocr_error)?;
     let bitmap = SoftwareBitmap::CreateCopyFromBuffer(&buffer, BitmapPixelFormat::Bgra8, w as i32, h as i32).map_err(ocr_error)?;
     let result = engine.RecognizeAsync(&bitmap).map_err(ocr_error)?.join().map_err(ocr_error)?;
-    let lines: Vec<String> = result
-        .Lines()
-        .map_err(ocr_error)?
-        .into_iter()
-        .filter_map(|line| line.Text().ok().map(|t| t.to_string()))
-        .collect();
+    let mut lines: Vec<String> = Vec::new();
+    let mut words: Vec<OcrWord> = Vec::new();
+    for line in result.Lines().map_err(ocr_error)?.into_iter() {
+        match line.Text() {
+            Ok(t) => lines.push(t.to_string()),
+            Err(_) => lines.push(String::new()),
+        }
+        // The boxes come back in the *scaled* bitmap's pixels; undo the enlargement so they
+        // point into the picture the caller handed in.
+        for word in line.Words().map_err(ocr_error)?.into_iter() {
+            let (text, r) = (word.Text().unwrap_or_default(), word.BoundingRect().unwrap_or_default());
+            words.push(OcrWord {
+                text: text.to_string(),
+                x: r.X as f64 / scale,
+                y: r.Y as f64 / scale,
+                w: r.Width as f64 / scale,
+                h: r.Height as f64 / scale,
+            });
+        }
+    }
 
     let tag = &tags[index];
     let display = language.DisplayName().map(|n| n.to_string()).unwrap_or_else(|_| tag.clone());
@@ -101,7 +128,7 @@ pub fn recognize(picture: &RgbaImage) -> Result<OcrOutcome, String> {
     let note = (!vietnamese).then(|| {
         format!("Máy chưa có bộ nhận chữ tiếng Việt nên HP Screen đọc bằng {name}; chữ có dấu có thể bị sai. {HOW_TO_ADD_VIETNAMESE}")
     });
-    Ok(OcrOutcome { text: lines.join("\n"), language: name, vietnamese, note })
+    Ok(OcrOutcome { text: lines.join("\n"), language: name, vietnamese, note, words })
 }
 
 /// Puts text on the clipboard, retrying while another program holds it.

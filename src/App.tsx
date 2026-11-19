@@ -18,7 +18,7 @@ const NAV: { id: PageId; label: string; icon: string }[] = [
 export default function App() {
   const [page, setPage] = useState<PageId>("record");
   // A video open in the edit page replaces the current page until it is closed.
-  const [editing, setEditing] = useState<string | null>(null);
+  const [editing, setEditing] = useState<{ path: string; seekMs: number | null } | null>(null);
   /** Hotkey field to bring into view when Settings opens from the hotkey warning. */
   const [focusHotkey, setFocusHotkey] = useState<HotkeyField | null>(null);
   return (
@@ -46,7 +46,7 @@ export default function App() {
         </button>
       </nav>
       <main className="content">
-        {editing && <EditPage key={editing} path={editing} onClose={() => setEditing(null)} />}
+        {editing && <EditPage key={editing.path} path={editing.path} seekMs={editing.seekMs} onClose={() => setEditing(null)} />}
         {!editing && (
           <>
             <HotkeyWarning
@@ -56,7 +56,14 @@ export default function App() {
               }}
             />
             {page === "record" && <RecordPage />}
-            {page === "library" && <LibraryPage onEdit={setEditing} />}
+            {page === "library" && (
+              <LibraryPage
+                onEdit={(path, seekMs) => {
+                  setEditing({ path, seekMs: seekMs ?? null });
+                  setFocusHotkey(null);
+                }}
+              />
+            )}
             {page === "settings" && <SettingsPage focusHotkey={focusHotkey} />}
           </>
         )}

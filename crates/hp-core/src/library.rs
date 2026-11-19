@@ -100,6 +100,7 @@ mod tests {
         let c = companion_paths(Path::new("d/hp_a.mp4"));
         assert_eq!(c[3], Path::new("d").join(".hpscreen").join("hp_a.edit.json"));
         assert_eq!(c[4], Path::new("d").join(".hpscreen").join("hp_a.preview.mp4"));
+        assert_eq!(c[5], Path::new("d").join(".hpscreen").join("hp_a.shapes.json"));
     }
 
     #[test]
@@ -126,8 +127,33 @@ pub fn preview_path(media: &Path) -> PathBuf {
     companion(media, "preview.mp4")
 }
 
-pub fn companion_paths(media: &Path) -> [PathBuf; 5] {
-    [sidecar_path(media), thumb_path(media), meta_path(media), edit_path(media), preview_path(media)]
+/// `<dir>/.hpscreen/<stem>.shapes.json`: the annotation layers of a saved screenshot.
+pub fn shapes_path(media: &Path) -> PathBuf {
+    companion(media, "shapes.json")
+}
+
+pub fn companion_paths(media: &Path) -> [PathBuf; 6] {
+    [
+        sidecar_path(media),
+        thumb_path(media),
+        meta_path(media),
+        edit_path(media),
+        preview_path(media),
+        shapes_path(media),
+    ]
+}
+
+/// A screenshot taken while a recording was running: which picture, and the moment in the
+/// video it belongs to (in ms, pause-excluded like the whole timeline).
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct Mark {
+    pub png: PathBuf,
+    pub at_ms: i64,
+}
+
+/// `<dir>/.hpscreen/<stem>.marks.json`: the screenshots taken during a video.
+pub fn marks_path(media: &Path) -> PathBuf {
+    companion(media, "marks.json")
 }
 
 /// What is known about a recording without opening the video file.
@@ -153,6 +179,7 @@ mod companion_tests {
     fn meta_file_sits_with_the_other_companions() {
         let data = Path::new("d").join(".hpscreen");
         assert_eq!(meta_path(Path::new("d/hp_a.mp4")), data.join("hp_a.meta.json"));
+        assert_eq!(marks_path(Path::new("d/hp_a.mp4")), data.join("hp_a.marks.json"));
         assert_eq!(
             companion_paths(Path::new("d/hp_a.mp4")),
             [
@@ -161,6 +188,7 @@ mod companion_tests {
                 data.join("hp_a.meta.json"),
                 data.join("hp_a.edit.json"),
                 data.join("hp_a.preview.mp4"),
+                data.join("hp_a.shapes.json"),
             ]
         );
     }

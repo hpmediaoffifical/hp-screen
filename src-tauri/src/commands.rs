@@ -255,11 +255,26 @@ pub fn snip_ready(app: AppHandle) {
     }
 }
 
-/// Copies and/or saves the annotated picture; returns the saved file, if any.
+/// Copies and/or saves the annotated picture along with its annotation layers; returns the
+/// saved file, if any.
 #[tauri::command]
-pub async fn snip_finish(app: AppHandle, action: crate::snip::SnipAction, png: String) -> Result<Option<String>, String> {
+pub async fn snip_finish(
+    app: AppHandle,
+    action: crate::snip::SnipAction,
+    png: String,
+    shapes: Option<serde_json::Value>,
+) -> Result<Option<String>, String> {
     let handle = app.clone();
-    tauri::async_runtime::spawn_blocking(move || crate::snip::finish(&handle, action, &png))
+    tauri::async_runtime::spawn_blocking(move || crate::snip::finish(&handle, action, &png, shapes))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Reopens a saved screenshot in the annotation overlay, to keep editing it.
+#[tauri::command]
+pub async fn snip_edit_start(app: AppHandle, path: String) -> Result<(), String> {
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::snip::edit_start(&handle, &path))
         .await
         .map_err(|e| e.to_string())?
 }

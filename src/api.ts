@@ -157,6 +157,10 @@ export interface LibraryEntry {
   duration_ms: number | null;
   width: number | null;
   height: number | null;
+  /** Video: screenshots taken while recording, in order. */
+  shots: { png: string; at_ms: number }[];
+  /** Image: the video it was taken during, and the moment it shows. */
+  in_video: { video: string; at_ms: number } | null;
 }
 export const libraryList = (filter: MediaKind | null) => invoke<LibraryEntry[]>("library_list", { filter });
 export const libraryRename = (path: string, newStem: string) => invoke<string>("library_rename", { path, newStem });
@@ -189,12 +193,20 @@ export interface SnipContext {
   monitor: MonitorInfo;
   /** Windows to snap to, top-most first. */
   windows: SnapWindow[];
+  /** Saved annotation layers, when this overlay reopens an old picture. */
+  shapes: unknown[] | null;
+  /** The library picture being edited again, when this overlay reopens one. */
+  origin: string | null;
 }
 /** Opens "capture and annotate" from the main window. */
 export const snipStart = () => invoke<void>("snip_start");
+/** Reopens a saved screenshot with its annotations, to keep editing it. */
+export const snipEditStart = (path: string) => invoke<void>("snip_edit_start", { path });
 export const snipContext = () => invoke<SnipContext | null>("snip_context");
 export const snipReady = () => invoke<void>("snip_ready");
-export const snipFinish = (action: SnipAction, png: string) => invoke<string | null>("snip_finish", { action, png });
+/** Finishes the picture; `shapes` are its annotation layers, saved so it stays editable. */
+export const snipFinish = (action: SnipAction, png: string, shapes: unknown[] | null) =>
+  invoke<string | null>("snip_finish", { action, png, shapes });
 export const snipCancel = () => invoke<void>("snip_cancel");
 
 export const compactShow = () => invoke<void>("compact_show");
@@ -217,12 +229,22 @@ export interface SnapWindow {
 }
 /** Pins the annotated picture on screen where `rect` was; the overlay closes. */
 export const snipPin = (png: string, rect: Rect) => invoke<void>("snip_pin", { png, rect });
+export interface OcrWord {
+  text: string;
+  /** Box in the pixels of the PNG handed to `snipOcr`. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 export interface OcrResult {
   text: string;
   /** Language it was read in, e.g. "tiếng Việt". */
   language: string;
   vietnamese: boolean;
   note: string | null;
+  /** Every word read, with its box, so sensitive spots can be blurred where they sit. */
+  words: OcrWord[];
 }
 export const snipOcr = (png: string) => invoke<OcrResult>("snip_ocr", { png });
 export const copyText = (text: string) => invoke<void>("copy_text", { text });
