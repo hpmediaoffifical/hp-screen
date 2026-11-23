@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 // Draws click and key effects on the preview canvas. The effects themselves (which rings,
 // holds, wheel marks and chips exist, and when) come from the core; this only turns them into
 // pixels for a given time, with the same rules and numbers as the export.

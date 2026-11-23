@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Strokes drawn on screen while recording: their geometry, how long they stay, and the area
 //! they cover. Points are physical pixels relative to the captured area's origin.
 use crate::geometry::Rect;

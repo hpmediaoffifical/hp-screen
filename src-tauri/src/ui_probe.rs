@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Boxes of UI elements for automatic zoom: the element under a click and the one receiving
 //! keys. Read with UI Automation on a thread of its own, so the input hooks never wait on
 //! another application. Only boxes are read: never names, text or types.

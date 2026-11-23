@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Zoom: segments of the video shown closer, made from clicks or by hand, and the camera path
 //! (centre and zoom level over time) that moves smoothly between them.
 use crate::spring::{CAMERA, SpringState};

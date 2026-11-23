@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! The app's presence on the desktop: tray icon, closing to the tray, and the compact bar.
 //!
 //! HP Screen's own windows are excluded from every capture, so the app never shows up in its

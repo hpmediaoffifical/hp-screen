@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 import { useEffect, useMemo, useState } from "react";
 import { MIN_REGION, pickerContext, pickerDone, type PickerContext, type Rect, type WindowInfo } from "../api";
 

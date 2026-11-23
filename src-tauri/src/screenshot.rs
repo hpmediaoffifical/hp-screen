@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Screenshots: one frame at physical resolution, saved as PNG and copied to the clipboard.
 use crate::capture::{Target, grab_frame};
 use crate::paths::{new_media_path, output_dir};

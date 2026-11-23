@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Builds export frames with Direct2D: the source picture scaled into the output, then the
 //! effects drawn over it, read back as top-down BGRA for the encoder.
 use hp_core::effects::{Draw, RIPPLE_RADIUS};

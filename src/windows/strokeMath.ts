@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 // Stroke geometry and fading for the drawing overlay. Same rules and numbers as
 // hp-core::stroke, so what the user sees on screen matches what goes into the video.
 import type { Stroke } from "../liveApi.ts";

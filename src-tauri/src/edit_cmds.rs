@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Tauri commands of the edit page: open and save an edit, and run one export at a time.
 use crate::commands::{AppState, library_item};
 use crate::decoder::{VideoDecoder, VideoInfo};

@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Offline speech recognition for subtitles: the whisper.cpp command-line program and a model,
 //! downloaded once with the user's consent, checked against known SHA-256 sums, then run as a
 //! separate process on a 16 kHz mono WAV made from the video's sound.

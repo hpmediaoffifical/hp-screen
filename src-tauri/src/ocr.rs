@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Reading text in a picture with Windows' own OCR (`Windows.Media.Ocr`): offline, nothing to
 //! install beyond Windows language packs. Vietnamese is preferred, then English, then the
 //! user's own languages.

@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Pinned pictures: a finished capture kept on screen in its own small borderless window that
 //! stays on top. Each pin can be dragged, resized, copied and closed; several can be open.
 //! Like every HP Screen window, pins never appear in captures.

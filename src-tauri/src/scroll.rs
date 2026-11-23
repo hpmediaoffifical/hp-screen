@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Scrolling capture: long pages that do not fit on screen. The user scrolls the page inside
 //! the chosen area with their own mouse; HP Screen captures the area over and over and joins
 //! the frames where they overlap (`hp_core::snip::Stitcher`).

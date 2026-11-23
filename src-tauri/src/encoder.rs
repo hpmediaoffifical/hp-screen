@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! MP4 writer on Media Foundation: H.264 video (hardware encoder when available) and an
 //! optional AAC track, in a fragmented MP4 so a crash does not lose the recording
 //! (see spec 4.3 for the test behind that choice).

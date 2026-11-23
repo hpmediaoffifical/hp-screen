@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! The selection overlay: a transparent window over one monitor where the user drags out a
 //! region or clicks a window. `pick` opens it and resolves when the overlay reports back.
 use crate::capture::{self, MonitorInfo, Target, WindowInfo};

@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Region screenshots with annotations: the screen is frozen, shown in a full-screen overlay
 //! where the user selects an area and draws on it, and the result is copied and/or saved.
 use image::RgbaImage;

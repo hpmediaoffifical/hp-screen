@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Tauri commands: the only way the UI reaches the core.
 use crate::capture::{self, MonitorInfo, Target, WindowInfo};
 use crate::events;

@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Subtitles: reading whisper.cpp output, splitting it into readable cues, and writing SRT in
 //! output time (after cuts).
 use crate::cut::Cuts;

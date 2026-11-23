@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
 import { camList, type CameraInfo } from "../liveApi";
 import { getVersion } from "@tauri-apps/api/app";

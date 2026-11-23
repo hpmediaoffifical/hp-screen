@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 // Pure logic of the capture-and-annotate overlay. Run with: node --test tests/
 import { test } from "node:test";
 import assert from "node:assert/strict";

@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! The recording session as the UI sees it: the state machine from `hp_core::state` driving a
 //! `Pipeline`, with every change reported to the UI as a `rec-state` event.
 use crate::capture::{self, Target};

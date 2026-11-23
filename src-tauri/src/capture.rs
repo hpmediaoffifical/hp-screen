@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Screen capture sources on top of Windows Graphics Capture (via `windows-capture`).
 //!
 //! Three targets: a monitor, one window (its own content, even when covered), and a region of

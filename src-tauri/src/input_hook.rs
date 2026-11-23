@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Records mouse and shortcut activity next to a video (`<stem>.input.jsonl`) so later stages
 //! can add click effects and automatic zoom. The hooks exist only while a recording runs.
 //!

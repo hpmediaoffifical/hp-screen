@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow, PhysicalSize } from "@tauri-apps/api/window";
 import { errorMessage, pinClose, pinCopy, pinImage, pinReady } from "../api";

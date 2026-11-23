@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 import { dismissUpdate, installUpdate, progressText, useUpdate } from "../useUpdate";
 
 /** A small card in the corner of the main window when a new version is out. */

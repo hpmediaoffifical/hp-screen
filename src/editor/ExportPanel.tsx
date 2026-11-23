@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 import { useEffect, useState } from "react";
 import { errorMessage, formatElapsed, libraryOpen, libraryReveal } from "../api";
 import { exportCancel, exportStart, onExportDone, onExportError, onExportProgress, type EditDoc, type GifOptions } from "../editApi";

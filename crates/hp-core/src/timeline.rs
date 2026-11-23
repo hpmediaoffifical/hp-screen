@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Maps system clock ticks (QPC) to video time, skipping paused spans.
 //! Video, audio and the input log all go through one `Timeline` so they stay in sync.
 

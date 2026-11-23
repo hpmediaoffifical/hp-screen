@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! What is drawn live onto recorded frames: strokes the user draws on screen while recording
 //! (and, later, the webcam picture). The pacer thread calls `apply` on each frame right before
 //! it is encoded; only the area that has something on it goes through Direct2D.

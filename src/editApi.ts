@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 // Typed wrappers around the edit page's commands and events. Shapes mirror the Rust structs
 // in src-tauri/src/edit_cmds.rs and crates/hp-core/src/edit.rs.
 import { invoke } from "@tauri-apps/api/core";

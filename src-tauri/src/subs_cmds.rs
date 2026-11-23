@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Tauri commands for subtitles: install the recogniser (with consent, from the UI), make
 //! subtitles from a video's sound, and write an SRT next to the video.
 use crate::asr::{self, CLI, MODELS, Model};

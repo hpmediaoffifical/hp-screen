@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Writes an edited copy of a recording: decode, compose, encode into a `.part` file that is
 //! renamed into place only when everything succeeded. The source file is only ever read.
 use crate::compositor::{Compositor, Device};

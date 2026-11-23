@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Where files go: the output folder, its data sub-folder, new media file names, settings file.
 use hp_core::library::DATA_DIR;
 use hp_core::naming::{LocalTime, render_pattern, unique_path};

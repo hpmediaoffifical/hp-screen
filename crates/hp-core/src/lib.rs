@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Pure logic for HP Screen. Nothing in this crate calls Windows APIs.
 pub mod naming;
 pub mod geometry;

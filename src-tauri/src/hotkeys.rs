@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Global hotkeys: start/stop, pause, screenshot. They work while another app has focus.
 use crate::capture::{self, Target};
 use crate::commands::AppState;

@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 // The drawn (smooth) cursor in the preview: the same samples and shapes the export uses
 // (hp-core::cursor), read at a given source time.
 import type { CursorSample, CursorShape } from "../editApi.ts";

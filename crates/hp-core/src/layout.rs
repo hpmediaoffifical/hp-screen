@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! The output frame: its aspect, where the video sits in it, the decoration around it, and
 //! which part of the source is shown (zoom, plus the crop for "fill").
 use crate::geometry::make_even;

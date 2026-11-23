@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! The library on disk: listing the output folder and renaming or deleting an item together
 //! with the files that accompany it.
 use crate::recorder::Recorder;

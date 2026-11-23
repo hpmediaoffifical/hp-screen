@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! System audio (WASAPI loopback) and microphone capture, mixed into one 48 kHz stereo stream.
 //!
 //! Both sources follow the Windows default devices: a supervisor notices when the default

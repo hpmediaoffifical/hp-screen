@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Model of the recordings library: which files belong to it, their order, and where the
 //! files that accompany a recording live.
 use serde::{Deserialize, Serialize};

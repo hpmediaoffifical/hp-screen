@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 // Zoom helpers for the edit page preview. The camera path itself comes from the core
 // (zoom_track); these only read it and turn it into a CSS transform.
 import type { Camera, Span, Spot, ZoomKey, ZoomSegment } from "../editApi.ts";

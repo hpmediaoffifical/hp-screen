@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Click and key effects drawn over exported video, built from the input log.
 //!
 //! Positions of rings, dots and wheel marks are in source-video pixels (they zoom with the

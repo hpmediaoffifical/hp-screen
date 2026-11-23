@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! The Windows cursor's current shape, as an RGBA image with its hot spot, for recordings
 //! that draw a smooth cursor instead of the Windows one.
 use std::collections::HashMap;

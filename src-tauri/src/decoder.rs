@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Reads videos back with the Media Foundation Source Reader: BGRA frames for export and
 //! the editor, and 48 kHz stereo float audio.
 use crate::encoder::{AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, init_thread};

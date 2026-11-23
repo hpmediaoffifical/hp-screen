@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! The one clock video, audio and the input log share: QueryPerformanceCounter expressed in
 //! 100 ns units, which is also what Windows Graphics Capture stamps frames with.
 use std::sync::OnceLock;

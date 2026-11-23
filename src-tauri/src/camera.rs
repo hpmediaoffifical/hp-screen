@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Webcams through Media Foundation: list them, open one, and keep its latest frame as BGRA
 //! for the live layer. Reading runs on its own thread; dropping the camera releases it.
 use crate::clock;

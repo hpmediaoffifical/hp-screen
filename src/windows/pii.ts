@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Finding sensitive information (phone numbers, emails, ID and card numbers) among the
 //! words an OCR pass read, so one click can blur it all. Pure logic, tested in pii.test.ts.
 

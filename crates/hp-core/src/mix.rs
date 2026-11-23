@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Mixing of microphone and system audio.
 
 /// Adds two sample buffers, clamping to [-1, 1]. The result is as long as the longer input;

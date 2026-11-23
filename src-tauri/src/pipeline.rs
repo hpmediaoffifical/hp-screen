@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! One recording from capture to file, independent of the UI: capture frames, pace them to a
 //! constant frame rate on the shared timeline, encode, and report progress through a callback.
 use crate::audio::{self, AudioConfig, AudioSession};

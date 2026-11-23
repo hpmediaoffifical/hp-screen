@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Sample videos for tests, written with the app's own encoder (no desktop needed).
 use crate::encoder::{AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, EncoderConfig, Mp4Encoder};
 use std::path::{Path, PathBuf};

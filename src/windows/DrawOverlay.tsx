@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 import { useEffect, useRef, useState } from "react";
 import { errorMessage } from "../api";
 import { drawClear, drawContext, drawSet, drawStroke, onDrawMode, type Stroke, type Tool } from "../liveApi";

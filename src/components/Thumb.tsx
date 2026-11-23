@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useState } from "react";
 import type { LibraryEntry } from "../api";

@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Format of the per-recording input log (`<stem>.input.jsonl`) and the privacy filter that
 //! decides which key presses may be written to it.
 use crate::geometry::Rect;

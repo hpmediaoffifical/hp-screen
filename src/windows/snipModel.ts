@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 // Pure logic of the capture-and-annotate overlay: the annotation shapes, their numbering,
 // picking and moving them, and the undo/redo history. No DOM here, so it can be tested with
 // `node --test tests/`. All coordinates are image (physical) pixels.

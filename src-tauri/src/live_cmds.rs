@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Commands and windows for what is drawn live into a recording: the on-screen drawing layer
 //! (and, later, the webcam bubble). Both windows are excluded from capture; what reaches the
 //! video is drawn by `LiveLayer` in the pipeline.

@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Trimming and removed spans: which parts of the source video are kept, and how output
 //! time maps to source time and back. All times are milliseconds.
 use serde::{Deserialize, Serialize};

@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! Pure logic for "capture and annotate": snapping the selection to windows, choosing the OCR
 //! language and picture size, and stitching a scrolling capture into one long picture.
 use crate::geometry::Rect;

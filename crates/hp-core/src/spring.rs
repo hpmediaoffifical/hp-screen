@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 //! A damped spring, stepped at a fixed small time step so motion does not depend on the frame
 //! rate. Used for the zoom camera (overdamped: it never overshoots).
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 // Typed wrappers around the live drawing (and webcam) commands. Shapes mirror the Rust structs
 // in crates/hp-core/src/stroke.rs and src-tauri/src/live_cmds.rs.
 import { invoke } from "@tauri-apps/api/core";

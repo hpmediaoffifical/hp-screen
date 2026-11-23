@@ -1,3 +1,4 @@
+/*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 // Small time helpers for the edit page, kept free of Tauri imports so they can be tested
 // with `node --test` (see package.json "test").
 import type { Span } from "../editApi.ts";
