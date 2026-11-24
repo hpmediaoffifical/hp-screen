@@ -36,13 +36,13 @@ jobs:
       # hp-screen; vcpkg builds it, and its archive of built packages is cached.
       - uses: actions/cache@v4
         with:
-          path: ~\AppData\Localcpkgrchives
+          path: ~\AppData\Local\vcpkg\archives
           key: vcpkg-archives-x64-windows-static-tesseract
 
       - name: Tesseract (vcpkg)
         shell: pwsh
         run: |
-          & "$env:VCPKG_INSTALLATION_ROOTcpkg.exe" install "tesseract[core]:x64-windows-static"
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install "tesseract[core]:x64-windows-static"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
 
