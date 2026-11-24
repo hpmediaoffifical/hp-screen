@@ -1,6 +1,7 @@
 /*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
 import { useEffect, useMemo, useState } from "react";
-import { MIN_REGION, pickerContext, pickerDone, type PickerContext, type Rect, type WindowInfo } from "../api";
+import { MIN_REGION, pickerContext, pickerDone, pickerFrozen, type PickerContext, type Rect, type WindowInfo } from "../api";
+import Loupe from "./Loupe";
 
 interface Point {
   x: number;
@@ -15,15 +16,35 @@ export default function PickerOverlay() {
   const [ctx, setCtx] = useState<PickerContext | null>(null);
   const [dragStart, setDragStart] = useState<Point | null>(null);
   const [pointer, setPointer] = useState<Point | null>(null);
+  /** The monitor as it looked when the overlay opened: what the magnifier shows. */
+  const [frozen, setFrozen] = useState<HTMLImageElement | null>(null);
   const scale = window.devicePixelRatio || 1;
 
   useEffect(() => {
-    pickerContext().then(setCtx).catch(() => pickerDone(null));
+    let url = "";
+    pickerContext()
+      .then((context) => {
+        setCtx(context);
+        if (context?.mode !== "region") return;
+        // The magnifier is an extra: choosing works without it, and before it has loaded.
+        pickerFrozen()
+          .then((bytes) => {
+            url = URL.createObjectURL(new Blob([bytes], { type: "image/bmp" }));
+            const img = new Image();
+            img.onload = () => setFrozen(img);
+            img.src = url;
+          })
+          .catch(() => {});
+      })
+      .catch(() => pickerDone(null));
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") pickerDone(null);
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      if (url) URL.revokeObjectURL(url);
+    };
   }, []);
 
   // Window rectangles in this overlay's CSS pixels, top-most first.
@@ -90,7 +111,9 @@ export default function PickerOverlay() {
         setDragStart({ x: e.clientX, y: e.clientY });
         setPointer({ x: e.clientX, y: e.clientY });
       }}
-      onMouseMove={(e) => dragStart && setPointer({ x: e.clientX, y: e.clientY })}
+      // Followed before the press too: the magnifier helps place the first corner.
+      onMouseMove={(e) => setPointer({ x: e.clientX, y: e.clientY })}
+      onMouseLeave={() => !dragStart && setPointer(null)}
       onMouseUp={() => {
         if (physical && !tooSmall) {
           pickerDone({ kind: "region", monitor: ctx.monitor.index, rect: physical });
@@ -112,6 +135,15 @@ export default function PickerOverlay() {
         </div>
       ) : (
         <div className="picker-dim" />
+      )}
+      {frozen && pointer && (
+        <Loupe
+          image={frozen}
+          at={{ x: pointer.x * scale, y: pointer.y * scale }}
+          // Exactly the pixels that will be recorded, relative to this monitor.
+          box={physical ? { ...physical, x: physical.x - ctx.monitor.rect.x, y: physical.y - ctx.monitor.rect.y } : null}
+          scale={scale}
+        />
       )}
       <p className="picker-hint">Kéo chuột để chọn vùng quay · Esc để hủy</p>
     </div>

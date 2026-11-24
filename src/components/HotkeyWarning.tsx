@@ -9,6 +9,7 @@ export const HOTKEY_FIELDS = {
   screenshot: { field: "hotkey_screenshot", label: "Chụp ảnh và vẽ ghi chú" },
   quickshot: { field: "hotkey_quickshot", label: "Chụp nhanh (không vẽ)" },
   draw: { field: "hotkey_draw", label: "Vẽ lên màn hình khi quay" },
+  copytext: { field: "hotkey_copytext", label: "Chụp và chép chữ" },
 } as const;
 export type HotkeyField = (typeof HOTKEY_FIELDS)[keyof typeof HOTKEY_FIELDS]["field"];
 

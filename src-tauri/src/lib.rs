@@ -87,6 +87,7 @@ pub fn run() {
             commands::pick_target,
             commands::picker_context,
             commands::picker_done,
+            commands::picker_frozen,
             commands::settings_get,
             commands::settings_set,
             commands::library_list,

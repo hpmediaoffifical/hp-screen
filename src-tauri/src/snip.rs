@@ -72,6 +72,9 @@ pub struct SnipContext {
     pub shapes: Option<serde_json::Value>,
     /// The library picture being edited again, when this overlay reopens an old one.
     pub origin: Option<String>,
+    /// Opened only to copy the text of an area: no drawing tools, and the overlay closes once
+    /// the text is on the clipboard.
+    pub copy_text: bool,
 }
 
 /// A window on the frozen screen, relative to the monitor, in physical pixels.
@@ -108,20 +111,21 @@ fn frozen_file(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 /// Freezes the monitor under the mouse and opens the overlay on it. HP Screen's own windows
-/// are excluded from capture, so they never appear in the frozen picture.
-pub fn start(app: &AppHandle) -> Result<(), String> {
+/// are excluded from capture, so they never appear in the frozen picture. With `copy_text` the
+/// overlay only asks for an area and copies the text in it.
+pub fn start(app: &AppHandle, copy_text: bool) -> Result<(), String> {
     if app.get_webview_window(SNIP).is_some() {
         return Ok(()); // already open
     }
     shell::suspend_bar(app);
-    let opened = open_overlay(app);
+    let opened = open_overlay(app, copy_text);
     if opened.is_err() {
         shell::resume_bar(app);
     }
     opened
 }
 
-fn open_overlay(app: &AppHandle) -> Result<(), String> {
+fn open_overlay(app: &AppHandle, copy_text: bool) -> Result<(), String> {
     let monitors = capture::list_monitors();
     let mut cursor = POINT::default();
     // SAFETY: the out pointer is valid.
@@ -146,6 +150,7 @@ fn open_overlay(app: &AppHandle) -> Result<(), String> {
         windows,
         shapes: None,
         origin: None,
+        copy_text,
     };
     store_session_and_open_window(app, context)
 }
@@ -183,6 +188,7 @@ pub fn edit_start(app: &AppHandle, path: &str) -> Result<(), String> {
         windows: Vec::new(),
         shapes,
         origin: Some(path.to_string_lossy().into_owned()),
+        copy_text: false,
     };
     let opened = store_session_and_open_window(app, context);
     if opened.is_err() {

@@ -31,6 +31,9 @@ pub struct PickerContext {
 
 struct Session {
     context: PickerContext,
+    /// The monitor as it looked when the overlay opened (BMP), for the overlay's magnifier.
+    /// Region mode only; handed over once.
+    frozen: Option<Vec<u8>>,
     done: Sender<Option<Target>>,
 }
 
@@ -69,10 +72,19 @@ pub async fn pick(app: AppHandle, mode: PickMode) -> Result<Option<Target>, Stri
     }
     shell::suspend_bar(&app);
 
+    // Taken before the overlay exists, so its dimming is not in the picture. The magnifier is
+    // an extra: without the picture the overlay works as before.
+    let frozen = if mode == PickMode::Region {
+        let index = monitor.index;
+        tauri::async_runtime::spawn_blocking(move || frozen_bmp(index)).await.ok().flatten()
+    } else {
+        None
+    };
+
     let (tx, rx) = mpsc::channel();
     let state = app.state::<PickerState>();
     let context = PickerContext { mode, monitor: monitor.clone(), windows: capture::list_windows() };
-    *state.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(Session { context, done: tx });
+    *state.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(Session { context, frozen, done: tx });
 
     let window = WebviewWindowBuilder::new(&app, PICKER, WebviewUrl::App("index.html".into()))
         .title("HP Screen - Chọn vùng quay")
@@ -110,6 +122,21 @@ pub async fn pick(app: AppHandle, mode: PickMode) -> Result<Option<Target>, Stri
         }
     }
     Ok(choice)
+}
+
+/// One frame of monitor `index` as BMP bytes (quick to write, and the webview reads it).
+fn frozen_bmp(index: usize) -> Option<Vec<u8>> {
+    let frame = capture::grab_frame(&Target::Monitor { index }).ok()?;
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(frame).to_rgb8().write_to(&mut bytes, image::ImageFormat::Bmp).ok()?;
+    Some(bytes.into_inner())
+}
+
+/// The frozen monitor picture for the overlay's magnifier. Given out once.
+pub fn frozen(app: &AppHandle) -> Option<Vec<u8>> {
+    let state = app.state::<PickerState>();
+    let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+    guard.as_mut().and_then(|s| s.frozen.take())
 }
 
 /// Called by the overlay when it loads.

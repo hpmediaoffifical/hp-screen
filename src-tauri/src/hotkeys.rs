@@ -21,6 +21,8 @@ pub enum HotkeyAction {
     Quickshot,
     /// Draw on screen while recording.
     Draw,
+    /// Choose an area and copy the text in it.
+    Copytext,
 }
 
 /// Outcome of registering one hotkey, shown next to its field in Settings.
@@ -48,6 +50,7 @@ pub fn register_hotkeys(app: &AppHandle, settings: &Settings) -> Vec<HotkeyStatu
         (HotkeyAction::Screenshot, &settings.hotkey_screenshot),
         (HotkeyAction::Quickshot, &settings.hotkey_quickshot),
         (HotkeyAction::Draw, &settings.hotkey_draw),
+        (HotkeyAction::Copytext, &settings.hotkey_copytext),
     ]
     .into_iter()
     .map(|(action, hotkey)| register_one(app, action, hotkey, settings))
@@ -74,8 +77,15 @@ fn register_one(app: &AppHandle, action: HotkeyAction, hotkey: &str, settings: &
     if registered.is_ok() {
         return HotkeyStatus { action, hotkey: hotkey.to_string(), ok: true, message: None, suggestion: None };
     }
-    let taken = [&settings.hotkey_toggle, &settings.hotkey_pause, &settings.hotkey_screenshot, &settings.hotkey_quickshot]
-        .map(|k| k.to_string());
+    let taken = [
+        &settings.hotkey_toggle,
+        &settings.hotkey_pause,
+        &settings.hotkey_screenshot,
+        &settings.hotkey_quickshot,
+        &settings.hotkey_draw,
+        &settings.hotkey_copytext,
+    ]
+    .map(|k| k.to_string());
     let suggestion = hp_core::hotkey::alternatives(default_hotkey(action), &taken).into_iter().find(|k| is_free(k));
     let known = match hotkey {
         "Ctrl+Alt+S" | "Ctrl+Alt+A" => " (Zalo dùng tổ hợp này để chụp màn hình)",
@@ -98,6 +108,7 @@ fn default_hotkey(action: HotkeyAction) -> &'static str {
         HotkeyAction::Screenshot => DEFAULT_HOTKEY_SCREENSHOT,
         HotkeyAction::Quickshot => DEFAULT_HOTKEY_QUICKSHOT,
         HotkeyAction::Draw => DEFAULT_HOTKEY_DRAW,
+        HotkeyAction::Copytext => DEFAULT_HOTKEY_COPYTEXT,
     }
 }
 
@@ -180,11 +191,12 @@ pub fn run_action(app: &AppHandle, action: HotkeyAction) {
         }
         // Pressing pause when nothing is recording is not an error worth showing.
         HotkeyAction::Pause => state.recorder.toggle_pause().or(Ok(())),
-        HotkeyAction::Screenshot => {
+        HotkeyAction::Screenshot | HotkeyAction::Copytext => {
             let app = app.clone();
+            let copy_text = action == HotkeyAction::Copytext;
             // Freezing the screen takes a moment; keep the hotkey thread free.
             std::thread::spawn(move || {
-                if let Err(message) = crate::snip::start(&app) {
+                if let Err(message) = crate::snip::start(&app, copy_text) {
                     events::rec_error(&app, &message);
                 }
             });

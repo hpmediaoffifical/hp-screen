@@ -282,6 +282,7 @@ impl Inner {
             settings.hotkey_screenshot.clone(),
             settings.hotkey_quickshot.clone(),
             settings.hotkey_draw.clone(),
+            settings.hotkey_copytext.clone(),
         ];
         // The input log starts first, on the recording's clock. It is an extra: failing to start
         // it must not stop the recording, but then the Windows cursor is recorded as usual

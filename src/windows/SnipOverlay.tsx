@@ -37,6 +37,8 @@ import {
   type TextShape,
 } from "./snipModel";
 import { sensitiveGroups } from "./pii";
+import Loupe from "./Loupe";
+import { handlePoint } from "./loupeMath";
 
 /**
  * "Capture and annotate": the frozen screen fills this window. Point at a window and click to
@@ -333,6 +335,10 @@ export default function SnipOverlay() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [ocr, setOcr] = useState<OcrState | null>(null);
+  /** Opened by the "capture and copy text" hotkey: choose an area, its text is copied, done. */
+  const textMode = !!context?.copy_text;
+  /** The text that was copied in that mode, shown for a moment before the overlay closes. */
+  const [grabbed, setGrabbed] = useState<string | null>(null);
   // Measured sizes of the two floating panels (CSS pixels), used to keep them on screen.
   const toolsRef = useRef<HTMLDivElement>(null);
   const actionsRef = useRef<HTMLDivElement>(null);
@@ -592,19 +598,41 @@ export default function SnipOverlay() {
     }
   }
 
+  /** Text mode: reads the text in `box` straight from the screen, copies it and closes. */
+  const grabText = async (box: Box) => {
+    if (!image) return;
+    const rect = { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.w), h: Math.round(box.h) };
+    const out = document.createElement("canvas");
+    out.width = rect.w;
+    out.height = rect.h;
+    out.getContext("2d")!.drawImage(image, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
+    setBusy(true);
+    setError("");
+    try {
+      const text = (await snipOcr(out.toDataURL("image/png"))).text.trim();
+      if (!text) throw new Error("Không thấy chữ nào trong vùng vừa chọn.");
+      await copyText(text);
+      setGrabbed(text);
+      // Long enough to read "copied", short enough not to be in the way.
+      setTimeout(() => snipCancel(), 900);
+    } catch (e) {
+      // Nothing was copied: the area can be chosen again.
+      setError(errorMessage(e));
+      setSelection(null);
+      setBusy(false);
+    }
+  };
+
   function onPointerUp() {
     if (!drag || !image) return;
     if (drag.kind === "select") {
-      if (selection && (selection.w < 4 || selection.h < 4)) {
-        // A click without dragging takes the window under the pointer.
-        if (drag.snap) {
-          setSelection({ ...drag.snap.rect });
-          setTool("pen");
-        } else setSelection(null);
-      } else {
-        // The area is chosen: the pen is on by default, ready to draw or annotate at once.
-        setTool("pen");
-      }
+      // A click without dragging takes the window under the pointer.
+      const clicked = !selection || selection.w < 4 || selection.h < 4;
+      const area = clicked ? (drag.snap ? { ...drag.snap.rect } : null) : selection;
+      setSelection(area);
+      if (area && textMode) grabText(area);
+      // The area is chosen: the pen is on by default, ready to draw or annotate at once.
+      else if (area) setTool("pen");
     }
     if (drag.kind === "draw") {
       // A click with a shape tool draws nothing (a pen click still makes a dot).
@@ -780,6 +808,10 @@ export default function SnipOverlay() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (textAt) return; // the text box handles its own keys
+      if (textMode) {
+        if (e.key === "Escape") snipCancel();
+        return; // nothing to draw or save in this mode
+      }
       if (ocr) {
         if (e.key === "Escape") {
           e.preventDefault();
@@ -835,7 +867,7 @@ export default function SnipOverlay() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [tool, selection, textAt, finish, pin, ocr, picked, deletePicked, image, doUndo, doRedo]);
+  }, [tool, selection, textAt, finish, pin, ocr, picked, deletePicked, image, doUndo, doRedo, textMode]);
 
   const nextNumber = useMemo(() => nextStepNumber(shapes), [shapes]);
 
@@ -851,6 +883,16 @@ export default function SnipOverlay() {
   }
 
   const css = (v: number) => v / scale;
+
+  // The magnifier follows the corner or edge being placed, and the pointer before any area exists.
+  let loupeAt: Point | null = null;
+  if (drag?.kind === "select" && selection) {
+    loupeAt = {
+      x: drag.start.x <= selection.x ? selection.x + selection.w : selection.x,
+      y: drag.start.y <= selection.y ? selection.y + selection.h : selection.y,
+    };
+  } else if (drag?.kind === "resize" && selection && hover) loupeAt = handlePoint(selection, drag.handle, hover);
+  else if (!drag && !selection && !busy && hover) loupeAt = hover;
   const sel = selection && selection.w >= 4 && selection.h >= 4 && drag?.kind !== "select" ? selection : null;
   const activeColor = tool === "highlight" ? markerColor : color;
   const setActiveColor = tool === "highlight" ? setMarkerColor : setColor;
@@ -898,14 +940,28 @@ export default function SnipOverlay() {
         onPointerUp={onPointerUp}
         onPointerLeave={() => setHover(null)}
         // Double-click on the area (not on a drawing) finishes, like the ✓ button.
-        onDoubleClick={(e) => !tool && pickAt(toImage(e)) < 0 && finish("both")}
+        onDoubleClick={(e) => !textMode && !tool && pickAt(toImage(e)) < 0 && finish("both")}
       />
 
-      {!sel && (
-        <p className="snip-hint">
-          Bấm vào một cửa sổ để chụp đúng khung · Kéo chuột để tự chọn vùng · Ctrl+A: cả màn hình · Esc để hủy
+      {textMode ? (
+        <p className="snip-hint" role="status">
+          {grabbed !== null
+            ? `✓ Đã chép ${grabbed.length} ký tự · dán bằng Ctrl+V`
+            : busy
+              ? "Đang đọc chữ…"
+              : error
+                ? `${error} Kéo chọn lại · Esc để hủy`
+                : "Kéo chọn vùng có chữ để chép · Bấm vào một cửa sổ để lấy chữ cả cửa sổ · Esc để hủy"}
         </p>
+      ) : (
+        !sel && (
+          <p className="snip-hint">
+            Bấm vào một cửa sổ để chụp đúng khung · Kéo chuột để tự chọn vùng · Ctrl+A: cả màn hình · Esc để hủy
+          </p>
+        )
       )}
+
+      {loupeAt && <Loupe image={image} at={loupeAt} box={drag ? selection : null} scale={scale} />}
 
       {snap && (
         <span className="snip-size snip-snap-tag" style={{ left: css(snap.rect.x) + 4, top: css(snap.rect.y) + 4 }}>
@@ -958,7 +1014,7 @@ export default function SnipOverlay() {
         />
       )}
 
-      {sel && (
+      {sel && !textMode && (
         <>
           {/* Drawing tools: a column beside the area, plus their options when a tool is on. */}
           <div

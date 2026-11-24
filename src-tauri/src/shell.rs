@@ -35,11 +35,12 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let toggle = MenuItemBuilder::with_id("toggle", "Bắt đầu / Dừng quay").build(app)?;
     let shot = MenuItemBuilder::with_id("screenshot", "Chụp ảnh và vẽ ghi chú").build(app)?;
     let quick = MenuItemBuilder::with_id("quickshot", "Chụp nhanh").build(app)?;
+    let text = MenuItemBuilder::with_id("copytext", "Chụp và chép chữ").build(app)?;
     let compact = MenuItemBuilder::with_id("compact", "Thanh gọn").build(app)?;
     let open = MenuItemBuilder::with_id("open", "Mở HP Screen").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Thoát").build(app)?;
     let menu = MenuBuilder::new(app)
-        .items(&[&toggle, &shot, &quick])
+        .items(&[&toggle, &shot, &quick, &text])
         .separator()
         .items(&[&compact, &open])
         .separator()
@@ -54,6 +55,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         "toggle" => hotkeys::run_action(app, HotkeyAction::Toggle),
         "screenshot" => hotkeys::run_action(app, HotkeyAction::Screenshot),
         "quickshot" => hotkeys::run_action(app, HotkeyAction::Quickshot),
+        "copytext" => hotkeys::run_action(app, HotkeyAction::Copytext),
         "compact" => show_compact(app),
         "open" => show_main(app),
         "quit" => quit_app(app),

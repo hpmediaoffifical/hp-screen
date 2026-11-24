@@ -190,6 +190,16 @@ html[data-window="snip"], html[data-window="snip"] body { background: #000; over
   position: absolute; background: #4c8dff; color: #fff; font-size: 12px; padding: 2px 8px; border-radius: 4px;
   pointer-events: none; font-variant-numeric: tabular-nums;
 }
+/* Magnifier beside the pointer while an area is chosen or resized (both overlays). */
+.loupe {
+  position: absolute; pointer-events: none; z-index: 5; border: 2px solid #fff; border-radius: 6px; overflow: hidden;
+  background: #0c0f16; box-shadow: 0 6px 20px rgba(0, 0, 0, .6), 0 0 0 1px rgba(0, 0, 0, .6); box-sizing: content-box;
+}
+.loupe canvas { display: block; image-rendering: pixelated; }
+.loupe-label {
+  display: block; height: 22px; line-height: 22px; text-align: center; color: #fff; font-size: 12px;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
 .snip-toolbar {
   position: absolute; display: flex; flex-direction: column; gap: 6px; padding: 6px;
   background: rgba(15, 19, 27, .97); border: 1px solid var(--border); border-radius: 10px;

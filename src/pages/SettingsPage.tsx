@@ -24,7 +24,7 @@ import {
   type WebcamSettings,
 } from "../api";
 
-type HotkeyField = "hotkey_toggle" | "hotkey_pause" | "hotkey_screenshot" | "hotkey_quickshot" | "hotkey_draw";
+type HotkeyField = "hotkey_toggle" | "hotkey_pause" | "hotkey_screenshot" | "hotkey_quickshot" | "hotkey_draw" | "hotkey_copytext";
 
 const HOTKEYS: { field: HotkeyField; action: HotkeyStatus["action"]; label: string }[] = [
   { field: "hotkey_toggle", action: "toggle", label: "Bật / tắt quay" },
@@ -32,6 +32,7 @@ const HOTKEYS: { field: HotkeyField; action: HotkeyStatus["action"]; label: stri
   { field: "hotkey_screenshot", action: "screenshot", label: "Chụp ảnh và vẽ ghi chú" },
   { field: "hotkey_quickshot", action: "quickshot", label: "Chụp nhanh (không vẽ)" },
   { field: "hotkey_draw", action: "draw", label: "Vẽ lên màn hình khi quay" },
+  { field: "hotkey_copytext", action: "copytext", label: "Chụp và chép chữ (không lưu ảnh)" },
 ];
 
 const QUALITIES: { value: Quality; label: string; hint: string }[] = [

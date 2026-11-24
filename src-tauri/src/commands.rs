@@ -88,6 +88,12 @@ pub fn picker_context(app: AppHandle) -> Option<crate::picker::PickerContext> {
     crate::picker::context(&app)
 }
 
+/// The monitor as it looked when the region overlay opened, for its magnifier.
+#[tauri::command]
+pub fn picker_frozen(app: AppHandle) -> Result<tauri::ipc::Response, String> {
+    crate::picker::frozen(&app).map(tauri::ipc::Response::new).ok_or_else(|| "Không có ảnh màn hình".to_string())
+}
+
 #[tauri::command]
 pub fn picker_done(app: AppHandle, target: Option<Target>) {
     crate::picker::finish(&app, target);
@@ -106,7 +112,7 @@ pub fn settings_set(app: AppHandle, state: State<'_, AppState>, settings: Settin
     let previous = std::mem::replace(&mut *state.settings.lock().unwrap_or_else(|e| e.into_inner()), settings.clone());
     // Re-registering briefly drops the hotkeys, so only do it when one of them changed.
     let hotkeys = |s: &Settings| {
-        [s.hotkey_toggle.clone(), s.hotkey_pause.clone(), s.hotkey_screenshot.clone(), s.hotkey_quickshot.clone(), s.hotkey_draw.clone()]
+        [s.hotkey_toggle.clone(), s.hotkey_pause.clone(), s.hotkey_screenshot.clone(), s.hotkey_quickshot.clone(), s.hotkey_draw.clone(), s.hotkey_copytext.clone()]
     };
     if hotkeys(&previous) != hotkeys(&settings) {
         crate::hotkeys::register_hotkeys(&app, &settings);
@@ -236,7 +242,7 @@ pub fn set_target(app: AppHandle, state: State<'_, AppState>, target: Target) {
 #[tauri::command]
 pub async fn snip_start(app: AppHandle) -> Result<(), String> {
     let handle = app.clone();
-    tauri::async_runtime::spawn_blocking(move || crate::snip::start(&handle))
+    tauri::async_runtime::spawn_blocking(move || crate::snip::start(&handle, false))
         .await
         .map_err(|e| e.to_string())?
 }

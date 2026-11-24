@@ -17,6 +17,8 @@ pub const DEFAULT_HOTKEY_SCREENSHOT: &str = "Ctrl+Alt+C";
 pub const DEFAULT_HOTKEY_QUICKSHOT: &str = "Ctrl+Alt+N";
 /// Draw on screen while recording.
 pub const DEFAULT_HOTKEY_DRAW: &str = "Ctrl+Alt+D";
+/// Choose an area and get its text on the clipboard, nothing else ("T" for text).
+pub const DEFAULT_HOTKEY_COPYTEXT: &str = "Ctrl+Alt+T";
 /// Seconds a finished stroke stays before fading; 0 keeps strokes until cleared.
 pub const DRAW_FADE_CHOICES: [u32; 5] = [0, 2, 3, 5, 10];
 /// Defaults before version 2. Zalo holds both for its own screenshots, so settings still on
@@ -53,6 +55,7 @@ pub struct Settings {
     /// Look for a new release on start and hourly, and install it without asking (never
     /// while a recording is running). Off: releases are only offered for a manual install.
     pub auto_update: bool,
+    pub hotkey_copytext: String,
 }
 
 impl Default for Settings {
@@ -78,6 +81,7 @@ impl Default for Settings {
             webcam: crate::webcam::WebcamSettings::default(),
             smooth_cursor: false,
             auto_update: true,
+            hotkey_copytext: DEFAULT_HOTKEY_COPYTEXT.to_string(),
         }
     }
 }
@@ -135,12 +139,13 @@ pub fn normalize(mut s: Settings) -> Settings {
         s.draw_fade_secs = defaults.draw_fade_secs;
     }
 
-    const SPARE_HOTKEYS: [&str; 8] = [
+    const SPARE_HOTKEYS: [&str; 9] = [
         DEFAULT_HOTKEY_TOGGLE,
         DEFAULT_HOTKEY_PAUSE,
         DEFAULT_HOTKEY_SCREENSHOT,
         DEFAULT_HOTKEY_QUICKSHOT,
         DEFAULT_HOTKEY_DRAW,
+        DEFAULT_HOTKEY_COPYTEXT,
         "Ctrl+Alt+F9",
         "Ctrl+Alt+F10",
         "Ctrl+Alt+F11",
@@ -152,6 +157,7 @@ pub fn normalize(mut s: Settings) -> Settings {
         (&mut s.hotkey_screenshot, DEFAULT_HOTKEY_SCREENSHOT),
         (&mut s.hotkey_quickshot, DEFAULT_HOTKEY_QUICKSHOT),
         (&mut s.hotkey_draw, DEFAULT_HOTKEY_DRAW),
+        (&mut s.hotkey_copytext, DEFAULT_HOTKEY_COPYTEXT),
     ] {
         let mut value = match parse_hotkey(slot) {
             Ok(h) => format_hotkey(&h),
@@ -344,5 +350,27 @@ mod auto_update_tests {
         let s = load_settings(r#"{"auto_update":"có","countdown_secs":5}"#);
         assert!(s.auto_update);
         assert_eq!(s.countdown_secs, 5);
+    }
+}
+
+#[cfg(test)]
+mod copytext_tests {
+    use super::*;
+
+    #[test]
+    fn settings_saved_before_the_copy_text_hotkey_get_its_default() {
+        let s = load_settings(r#"{"version":2,"hotkey_toggle":"Ctrl+Alt+R"}"#);
+        assert_eq!(s.hotkey_copytext, DEFAULT_HOTKEY_COPYTEXT);
+    }
+
+    #[test]
+    fn the_copy_text_hotkey_cannot_collide_with_another() {
+        let s = load_settings(r#"{"hotkey_copytext":"Ctrl+Alt+C"}"#);
+        assert_eq!(s.hotkey_screenshot, "Ctrl+Alt+C");
+        assert_eq!(s.hotkey_copytext, DEFAULT_HOTKEY_COPYTEXT);
+        // A key the user gave another action is not taken back by this one.
+        let s = load_settings(r#"{"hotkey_draw":"Ctrl+Alt+T"}"#);
+        assert_eq!(s.hotkey_draw, "Ctrl+Alt+T");
+        assert_ne!(s.hotkey_copytext, "Ctrl+Alt+T");
     }
 }

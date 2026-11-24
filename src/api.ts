@@ -90,6 +90,8 @@ export interface PickerContext {
 }
 export const pickTarget = (mode: PickMode) => invoke<Target | null>("pick_target", { mode });
 export const pickerContext = () => invoke<PickerContext | null>("picker_context");
+/** The monitor as it looked when the region overlay opened (BMP bytes), for its magnifier. */
+export const pickerFrozen = () => invoke<ArrayBuffer>("picker_frozen");
 export const pickerDone = (target: Target | null) => invoke<void>("picker_done", { target });
 
 export type Quality = "light" | "standard" | "high";
@@ -116,6 +118,7 @@ export interface Settings {
   /** Record without the Windows cursor and draw a smooth one when editing. */
   smooth_cursor: boolean;
   auto_update: boolean;
+  hotkey_copytext: string;
 }
 
 export type CamShape = "circle" | "rounded";
@@ -135,7 +138,7 @@ export const settingsGet = () => invoke<Settings>("settings_get");
 export const settingsSet = (settings: Settings) => invoke<Settings>("settings_set", { settings });
 
 export interface HotkeyStatus {
-  action: "toggle" | "pause" | "screenshot" | "quickshot" | "draw";
+  action: "toggle" | "pause" | "screenshot" | "quickshot" | "draw" | "copytext";
   hotkey: string;
   ok: boolean;
   message: string | null;
@@ -198,6 +201,8 @@ export interface SnipContext {
   shapes: unknown[] | null;
   /** The library picture being edited again, when this overlay reopens one. */
   origin: string | null;
+  /** Opened only to copy the text of an area. */
+  copy_text: boolean;
 }
 /** Opens "capture and annotate" from the main window. */
 export const snipStart = () => invoke<void>("snip_start");
