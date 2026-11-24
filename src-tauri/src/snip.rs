@@ -54,6 +54,8 @@ use hp_core::geometry::{Rect, monitor_containing};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
 use windows::Win32::Foundation::POINT;
 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
@@ -102,7 +104,19 @@ pub struct SnipState(Mutex<Option<SnipSession>>);
 struct SnipSession {
     context: SnipContext,
     moment: Option<(PathBuf, i64)>,
+    /// Tells this overlay from the one before it, for its watchdog.
+    id: u64,
+    /// The page has drawn itself and the window is on screen.
+    ready: bool,
+    /// When the page last gave a sign of life.
+    alive: Instant,
 }
+
+static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
+/// The page has this long to load and draw the frozen screen.
+const READY_WITHIN: Duration = Duration::from_secs(12);
+/// A page on screen reports every second; silent for this long, it is taken for dead.
+const SILENT_FOR: Duration = Duration::from_secs(8);
 
 fn frozen_file(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_cache_dir().map_err(|e| e.to_string())?;
@@ -207,7 +221,10 @@ fn store_session_and_open_window(app: &AppHandle, context: SnipContext) -> Resul
     // The screen frozen during a recording: this picture belongs to that moment of the video.
     let moment = crate::library_fs::recording_moment(&app.state::<AppState>().recorder);
     let monitor = context.monitor.clone();
-    *app.state::<SnipState>().0.lock().unwrap_or_else(|e| e.into_inner()) = Some(SnipSession { context, moment });
+    let id = NEXT_SESSION.fetch_add(1, Ordering::SeqCst);
+    *app.state::<SnipState>().0.lock().unwrap_or_else(|e| e.into_inner()) =
+        Some(SnipSession { context, moment, id, ready: false, alive: Instant::now() });
+    watch(app.clone(), id);
 
     let window = WebviewWindowBuilder::new(app, SNIP, WebviewUrl::App("index.html".into()))
         .title("HP Screen - Chụp ảnh")
@@ -222,6 +239,54 @@ fn store_session_and_open_window(app: &AppHandle, context: SnipContext) -> Resul
     let _ = window.set_position(PhysicalPosition::new(monitor.rect.x, monitor.rect.y));
     let _ = window.set_size(PhysicalSize::new(monitor.rect.w, monitor.rect.h));
     Ok(())
+}
+
+/// Whether an overlay is open (on screen or still loading).
+pub fn is_open(app: &AppHandle) -> bool {
+    app.get_webview_window(SNIP).is_some()
+}
+
+/// A sign of life from the overlay's page; `ready` once it has drawn the frozen screen.
+pub fn alive(app: &AppHandle, ready: bool) {
+    if let Some(session) = app.state::<SnipState>().0.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        session.alive = Instant::now();
+        session.ready |= ready;
+    }
+}
+
+/// Watches overlay `id` until it closes. The overlay covers the whole screen on top of every
+/// window, so a page that never loads, or stops answering, must not be left there: it would
+/// take every click and key, and the screen would look frozen. Such an overlay is closed and
+/// the reason is shown and logged.
+fn watch(app: AppHandle, id: u64) {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let state = app.state::<SnipState>();
+            let (ready, silent) = {
+                let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+                let Some(session) = guard.as_mut().filter(|s| s.id == id) else { return };
+                // Hidden on purpose (a scrolling capture is running): a hidden page's timers
+                // slow down, which is no sign of trouble.
+                let hidden = app.get_webview_window(SNIP).is_none_or(|w| !w.is_visible().unwrap_or(false));
+                if session.ready && hidden {
+                    session.alive = Instant::now();
+                }
+                (session.ready, session.alive.elapsed())
+            };
+            if silent <= if ready { SILENT_FOR } else { READY_WITHIN } {
+                continue;
+            }
+            let message = if ready {
+                "Công cụ chụp ảnh không còn phản hồi nên HP Screen đã đóng nó lại. Hãy bấm phím chụp lần nữa."
+            } else {
+                "Công cụ chụp ảnh không mở được nên HP Screen đã đóng nó lại. Hãy bấm phím chụp lần nữa."
+            };
+            close(&app);
+            events::rec_error(&app, message);
+            return;
+        }
+    });
 }
 
 pub fn context(app: &AppHandle) -> Option<SnipContext> {

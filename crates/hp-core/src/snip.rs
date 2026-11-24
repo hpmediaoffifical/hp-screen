@@ -54,6 +54,301 @@ pub fn ocr_scale(width: u32, height: u32, max_dimension: u32) -> f64 {
     enlarge.min(max_dimension as f64 / longest)
 }
 
+/// One word the OCR engine read, and where it sits in the picture (pixels).
+#[derive(Clone, Copy, Debug)]
+pub struct OcrBox<'a> {
+    pub text: &'a str,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+/// Text that stood in columns, as a spreadsheet takes it from the clipboard: the cells of a
+/// row separated by tabs, the rows by line breaks.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct TableText {
+    pub text: String,
+    pub rows: usize,
+    pub cols: usize,
+}
+
+/// Words closer than this (in text heights) belong to one cell; a wider space starts another.
+const CELL_GAP: f64 = 1.2;
+/// A column boundary is an empty strip at least this wide (in text heights) across every row
+/// that has several cells.
+const COLUMN_STRIP: f64 = 0.3;
+
+/// Reads `words` as a table when they stand in columns, and returns `None` for ordinary text.
+///
+/// Words level with each other are a row. Within a row, words with a wide space between them
+/// are different cells. A column boundary is a vertical strip that no cell of any several-cell
+/// row crosses; rows of one cell (a title, a sentence) take no part in that, since they may run
+/// across the whole table. It is a table when at least two rows have text in two columns.
+/// A cell whose text wraps over several lines comes out as several rows.
+pub fn table_text(words: &[OcrBox]) -> Option<TableText> {
+    struct Cell {
+        x0: f64,
+        x1: f64,
+        text: String,
+    }
+
+    let mut items: Vec<&OcrBox> = words.iter().filter(|w| !w.text.trim().is_empty() && w.w > 0.0 && w.h > 0.0).collect();
+    if items.len() < 4 {
+        return None;
+    }
+    let mut heights: Vec<f64> = items.iter().map(|w| w.h).collect();
+    heights.sort_by(f64::total_cmp);
+    let height = heights[heights.len() / 2];
+
+    // Rows: words whose middles are level, top to bottom.
+    let middle = |w: &OcrBox| w.y + w.h / 2.0;
+    items.sort_by(|a, b| middle(a).total_cmp(&middle(b)));
+    let mut lines: Vec<Vec<&OcrBox>> = Vec::new();
+    let mut level = 0.0;
+    for word in items {
+        match lines.last_mut() {
+            Some(line) if (middle(word) - level).abs() < height * 0.5 => {
+                line.push(word);
+                level += (middle(word) - level) / line.len() as f64;
+            }
+            _ => {
+                level = middle(word);
+                lines.push(vec![word]);
+            }
+        }
+    }
+
+    // Cells: runs of words with only ordinary spaces between them.
+    let rows: Vec<Vec<Cell>> = lines
+        .into_iter()
+        .map(|mut line| {
+            line.sort_by(|a, b| a.x.total_cmp(&b.x));
+            let mut cells: Vec<Cell> = Vec::new();
+            for word in line {
+                match cells.last_mut() {
+                    Some(cell) if word.x - cell.x1 < height * CELL_GAP => {
+                        cell.x1 = cell.x1.max(word.x + word.w);
+                        cell.text.push(' ');
+                        cell.text.push_str(word.text.trim());
+                    }
+                    _ => cells.push(Cell { x0: word.x, x1: word.x + word.w, text: word.text.trim().to_string() }),
+                }
+            }
+            cells
+        })
+        .collect();
+
+    // Columns: what is left between the strips no cell of a several-cell row crosses.
+    let mut spans: Vec<(f64, f64)> = rows.iter().filter(|r| r.len() > 1).flatten().map(|c| (c.x0, c.x1)).collect();
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut columns: Vec<(f64, f64)> = Vec::new();
+    for (x0, x1) in spans {
+        match columns.last_mut() {
+            Some(column) if x0 < column.1 + height * COLUMN_STRIP => column.1 = column.1.max(x1),
+            _ => columns.push((x0, x1)),
+        }
+    }
+    if columns.len() < 2 {
+        return None;
+    }
+    // A cell belongs to the column its start is in; one that starts in a strip, to the next.
+    let column_of = |cell: &Cell| columns.iter().position(|c| cell.x0 < c.1).unwrap_or(columns.len() - 1);
+
+    let mut tabled = 0;
+    let mut out: Vec<String> = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let mut cells = vec![String::new(); columns.len()];
+        for cell in row {
+            let slot = &mut cells[column_of(cell)];
+            if !slot.is_empty() {
+                slot.push(' ');
+            }
+            slot.push_str(&cell.text);
+        }
+        if cells.iter().filter(|c| !c.is_empty()).count() >= 2 {
+            tabled += 1;
+        }
+        out.push(cells.join("\t").trim_end_matches('\t').to_string());
+    }
+    if tabled < 2 {
+        return None;
+    }
+    Some(TableText { text: out.join("\n"), rows: out.len(), cols: columns.len() })
+}
+
+#[cfg(test)]
+mod table_tests {
+    use super::*;
+
+    /// Words laid out like a screen: 10 px per letter, 16 px tall, a 6 px space between words.
+    fn words(rows: &[(f64, &[(f64, &'static str)])]) -> Vec<OcrBox<'static>> {
+        let mut out = Vec::new();
+        for (y, cells) in rows {
+            for (x, text) in cells.iter() {
+                let mut at = *x;
+                for word in text.split(' ') {
+                    let w = word.chars().count() as f64 * 10.0;
+                    out.push(OcrBox { text: word, x: at, y: *y, w, h: 16.0 });
+                    at += w + 6.0;
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn columns_become_tabs_and_rows_become_lines() {
+        let w = words(&[
+            (10.0, &[(10.0, "Tên hàng"), (220.0, "Số lượng"), (400.0, "Giá")]),
+            (40.0, &[(10.0, "Bút bi xanh"), (220.0, "12"), (400.0, "36.000")]),
+            (70.0, &[(10.0, "Vở"), (220.0, "5"), (400.0, "50.000")]),
+        ]);
+        let t = table_text(&w).expect("a table");
+        assert_eq!((t.rows, t.cols), (3, 3));
+        assert_eq!(t.text, "Tên hàng\tSố lượng\tGiá\nBút bi xanh\t12\t36.000\nVở\t5\t50.000");
+    }
+
+    #[test]
+    fn an_empty_cell_keeps_its_place() {
+        let w = words(&[
+            (10.0, &[(10.0, "A"), (200.0, "B"), (400.0, "C")]),
+            (40.0, &[(10.0, "một"), (400.0, "ba")]),
+            (70.0, &[(200.0, "hai"), (400.0, "ba")]),
+        ]);
+        let t = table_text(&w).expect("a table");
+        assert_eq!(t.text, "A\tB\tC\nmột\t\tba\n\thai\tba");
+    }
+
+    #[test]
+    fn a_title_across_the_table_does_not_hide_its_columns() {
+        let w = words(&[
+            (10.0, &[(10.0, "Bảng giá tháng mười một năm nay cho mọi cửa hàng")]),
+            (40.0, &[(10.0, "Bút"), (300.0, "3.000")]),
+            (70.0, &[(10.0, "Vở"), (300.0, "10.000")]),
+        ]);
+        let t = table_text(&w).expect("a table");
+        assert_eq!((t.rows, t.cols), (3, 2));
+        assert!(t.text.starts_with("Bảng giá tháng mười một năm nay cho mọi cửa hàng\nBút\t3.000"));
+    }
+
+    #[test]
+    fn ordinary_text_is_not_a_table() {
+        let w = words(&[
+            (10.0, &[(10.0, "HP Screen quay màn hình và chụp ảnh")]),
+            (40.0, &[(10.0, "rồi cho bạn vẽ ghi chú lên ảnh")]),
+            (70.0, &[(10.0, "trước khi lưu hoặc sao chép")]),
+        ]);
+        assert_eq!(table_text(&w), None);
+        assert_eq!(table_text(&[]), None);
+    }
+
+    #[test]
+    fn one_wide_space_in_one_line_is_not_a_table() {
+        let w = words(&[
+            (10.0, &[(10.0, "Tổng cộng"), (300.0, "86.000")]),
+            (40.0, &[(10.0, "Cảm ơn quý khách đã mua hàng tại đây")]),
+            (70.0, &[(10.0, "Hẹn gặp lại quý khách lần sau nhé")]),
+        ]);
+        assert_eq!(table_text(&w), None);
+    }
+
+    #[test]
+    fn rows_that_do_not_line_up_into_columns_are_not_a_table() {
+        // Every strip one row leaves empty is crossed by the other row.
+        let w = words(&[
+            (10.0, &[(10.0, "aaaaaaaaaa"), (200.0, "bbbbbbbbbb")]),
+            (40.0, &[(100.0, "cccccccccccc"), (300.0, "dd")]),
+        ]);
+        assert_eq!(table_text(&w), None);
+    }
+}
+
+/// One word from Tesseract's TSV output: its text, its box in the pixels of the picture that
+/// was read, and which line of text it belongs to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TsvWord {
+    pub text: String,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    /// Block, paragraph and line numbers: words sharing all three are one line.
+    pub line: (u32, u32, u32),
+}
+
+/// Words Tesseract is less sure of than this (0–100) are left out: at that level it is the
+/// shapes of icons and borders read as letters, not text.
+pub const TSV_MIN_CONFIDENCE: f64 = 10.0;
+
+/// The words in Tesseract's TSV output, in reading order. Each row is
+/// `level page block paragraph line word left top width height confidence text`; rows of
+/// level 5 are words. Rows that do not fit that shape, empty words and words below
+/// [`TSV_MIN_CONFIDENCE`] are skipped.
+pub fn tsv_words(tsv: &str) -> Vec<TsvWord> {
+    tsv.lines()
+        .filter_map(|row| {
+            let cols: Vec<&str> = row.splitn(12, '\t').collect();
+            if cols.len() < 12 || cols[0] != "5" {
+                return None;
+            }
+            let number = |i: usize| cols[i].trim().parse::<f64>().ok();
+            let text = cols[11].trim();
+            if text.is_empty() || number(10)? < TSV_MIN_CONFIDENCE {
+                return None;
+            }
+            let part = |i: usize| cols[i].trim().parse::<u32>().ok();
+            Some(TsvWord { text: text.to_string(), x: number(6)?, y: number(7)?, w: number(8)?, h: number(9)?, line: (part(2)?, part(3)?, part(4)?) })
+        })
+        .collect()
+}
+
+/// The text of `words`: the words of a line separated by spaces, lines by line breaks.
+pub fn tsv_text(words: &[TsvWord]) -> String {
+    let mut text = String::new();
+    let mut last = None;
+    for word in words {
+        if let Some(line) = last {
+            text.push(if line == word.line { ' ' } else { '\n' });
+        }
+        text.push_str(&word.text);
+        last = Some(word.line);
+    }
+    text
+}
+
+#[cfg(test)]
+mod tsv_tests {
+    use super::*;
+
+    const SAMPLE: &str = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n\
+        1\t1\t0\t0\t0\t0\t0\t0\t800\t200\t-1\t\n\
+        4\t1\t1\t1\t1\t0\t10\t10\t300\t20\t-1\t\n\
+        5\t1\t1\t1\t1\t1\t10\t10\t60\t20\t96.5\tChưa\n\
+        5\t1\t1\t1\t1\t2\t80\t10\t40\t20\t93.1\tbiết\n\
+        5\t1\t1\t1\t1\t3\t130\t12\t9\t9\t0\t\"=~\n\
+        4\t1\t1\t1\t2\t0\t10\t40\t300\t20\t-1\t\n\
+        5\t1\t1\t1\t2\t1\t10\t40\t90\t20\t91\tnguyên\n\
+        5\t1\t1\t1\t2\t2\t110\t40\t20\t20\t95\t \n\
+        5\t1\t2\t1\t1\t1\t10\t90\t50\t20\t88\tgốc.\n\
+        not a row at all\n";
+
+    #[test]
+    fn words_keep_their_text_box_and_line() {
+        let words = tsv_words(SAMPLE);
+        assert_eq!(words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>(), ["Chưa", "biết", "nguyên", "gốc."]);
+        assert_eq!((words[1].x, words[1].y, words[1].w, words[1].h), (80.0, 10.0, 40.0, 20.0));
+        assert_eq!(words[0].line, (1, 1, 1));
+        assert_eq!(words[3].line, (2, 1, 1));
+    }
+
+    #[test]
+    fn lines_are_joined_with_spaces_and_separated_by_line_breaks() {
+        assert_eq!(tsv_text(&tsv_words(SAMPLE)), "Chưa biết\nnguyên\ngốc.");
+        assert_eq!(tsv_text(&[]), "");
+    }
+}
+
 /// What happened to one frame given to a [`Stitcher`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StitchStep {

@@ -178,6 +178,8 @@ ul.grid, ul.recent { list-style: none; margin: 0; padding: 0; }
 .mode-window-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .mode.on .mode-window-name { color: var(--text); }
 
+.crash { margin: 24px; color: var(--text); }
+
 /* Capture-and-annotate overlay */
 html[data-window="snip"], html[data-window="snip"] body { background: #000; overflow: hidden; }
 .snip { position: fixed; inset: 0; user-select: none; }
@@ -408,6 +410,7 @@ html[data-window="region-border"], html[data-window="region-border"] body { back
   user-select: text;
 }
 .snip-ocr-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.snip-ocr-table { display: flex; align-items: center; gap: 6px; padding: 0; cursor: pointer; }
 .snip-ocr-note { margin: 0; font-size: 12px; line-height: 1.45; color: var(--warn); }
 .snip-ocr-text {
   min-height: 180px; max-height: 50vh; resize: vertical; padding: 8px 10px; border-radius: 8px;

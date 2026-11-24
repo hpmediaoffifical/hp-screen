@@ -196,7 +196,12 @@ pub fn run_action(app: &AppHandle, action: HotkeyAction) {
             let copy_text = action == HotkeyAction::Copytext;
             // Freezing the screen takes a moment; keep the hotkey thread free.
             std::thread::spawn(move || {
-                if let Err(message) = crate::snip::start(&app, copy_text) {
+                // Pressed again while the overlay is open: it closes. Unlike Esc, a global
+                // hotkey works even when the overlay does not have the keyboard, so this
+                // always gets the screen back.
+                if crate::snip::is_open(&app) {
+                    crate::snip::close(&app);
+                } else if let Err(message) = crate::snip::start(&app, copy_text) {
                     events::rec_error(&app, &message);
                 }
             });

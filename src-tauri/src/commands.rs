@@ -252,14 +252,40 @@ pub fn snip_context(app: AppHandle) -> Option<crate::snip::SnipContext> {
     crate::snip::context(&app)
 }
 
+/// A window's page reports an exception nothing caught. It is written to the log. `fatal`: the
+/// page can no longer draw itself; an overlay that covers the screen is then closed at once,
+/// because a broken one would sit on top of everything and take every click and key.
+#[tauri::command]
+pub fn page_failed(app: AppHandle, window: tauri::WebviewWindow, message: String, fatal: bool) {
+    let label = window.label().to_string();
+    crate::paths::log_error(&app, &format!("[page {label}{}] {message}", if fatal { ", fatal" } else { "" }));
+    #[cfg(debug_assertions)]
+    eprintln!("[hp] page {label} failed (fatal: {fatal}): {message}");
+    if !fatal {
+        return;
+    }
+    match label.as_str() {
+        crate::snip::SNIP => crate::snip::close(&app),
+        crate::picker::PICKER => crate::picker::finish(&app, None),
+        _ => {}
+    }
+}
+
 /// The overlay is drawn and ready: show it.
 #[tauri::command]
 pub fn snip_ready(app: AppHandle) {
     use tauri::Manager;
+    crate::snip::alive(&app, true);
     if let Some(window) = app.get_webview_window(crate::snip::SNIP) {
         let _ = window.show();
         let _ = window.set_focus();
     }
+}
+
+/// The overlay's page is running; sent every second while it is open (see `snip::watch`).
+#[tauri::command]
+pub fn snip_alive(app: AppHandle) {
+    crate::snip::alive(&app, false);
 }
 
 /// Copies and/or saves the annotated picture along with its annotation layers; returns the

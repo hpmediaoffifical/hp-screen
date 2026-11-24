@@ -278,6 +278,12 @@ export default function SettingsPage({ focusHotkey = null }: { focusHotkey?: Hot
             </button>
           </p>
         </Field>
+        <Field label="Phần mềm của bên khác">
+          <p className="hint about-line">
+            Nhận chữ tiếng Việt dùng Tesseract OCR và dữ liệu tiếng Việt của nó (giấy phép Apache 2.0), cùng thư viện
+            Leptonica (giấy phép BSD 2 điều khoản). Đó là công sức của các tác giả gốc, không phải của HP Media.
+          </p>
+        </Field>
       </Group>
     </section>
   );

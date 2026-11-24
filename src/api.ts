@@ -204,12 +204,17 @@ export interface SnipContext {
   /** Opened only to copy the text of an area. */
   copy_text: boolean;
 }
+/** Reports an exception nothing caught. `fatal`: the page cannot draw itself any more (a
+ * full-screen overlay is then closed, so a broken one never blocks the screen). */
+export const pageFailed = (message: string, fatal: boolean) => invoke<void>("page_failed", { message, fatal }).catch(() => {});
 /** Opens "capture and annotate" from the main window. */
 export const snipStart = () => invoke<void>("snip_start");
 /** Reopens a saved screenshot with its annotations, to keep editing it. */
 export const snipEditStart = (path: string) => invoke<void>("snip_edit_start", { path });
 export const snipContext = () => invoke<SnipContext | null>("snip_context");
 export const snipReady = () => invoke<void>("snip_ready");
+/** Sign of life, sent every second: an overlay whose page stops answering is closed by the core. */
+export const snipAlive = () => invoke<void>("snip_alive");
 /** Finishes the picture; `shapes` are its annotation layers, saved so it stays editable. */
 export const snipFinish = (action: SnipAction, png: string, shapes: unknown[] | null) =>
   invoke<string | null>("snip_finish", { action, png, shapes });
@@ -251,6 +256,8 @@ export interface OcrResult {
   note: string | null;
   /** Every word read, with its box, so sensitive spots can be blurred where they sit. */
   words: OcrWord[];
+  /** The text with its columns kept (tabs between cells), when it stood in columns. */
+  table: { text: string; rows: number; cols: number } | null;
 }
 export const snipOcr = (png: string) => invoke<OcrResult>("snip_ocr", { png });
 export const copyText = (text: string) => invoke<void>("copy_text", { text });

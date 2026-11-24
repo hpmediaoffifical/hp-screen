@@ -6,12 +6,16 @@ use crate::shell;
 use hp_core::geometry::monitor_containing;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use windows::Win32::Foundation::POINT;
 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
 pub const PICKER: &str = "picker";
+static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
+/// The overlay's page has this long to load.
+const LOADED_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -34,6 +38,10 @@ struct Session {
     /// The monitor as it looked when the overlay opened (BMP), for the overlay's magnifier.
     /// Region mode only; handed over once.
     frozen: Option<Vec<u8>>,
+    /// Tells this overlay from the one before it, for its watchdog.
+    id: u64,
+    /// The overlay's page has loaded and asked what to show.
+    loaded: bool,
     done: Sender<Option<Target>>,
 }
 
@@ -84,7 +92,22 @@ pub async fn pick(app: AppHandle, mode: PickMode) -> Result<Option<Target>, Stri
     let (tx, rx) = mpsc::channel();
     let state = app.state::<PickerState>();
     let context = PickerContext { mode, monitor: monitor.clone(), windows: capture::list_windows() };
-    *state.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(Session { context, frozen, done: tx });
+    let id = NEXT_SESSION.fetch_add(1, Ordering::SeqCst);
+    *state.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(Session { context, frozen, id, loaded: false, done: tx });
+    {
+        // The overlay is see-through and covers the screen: if its page never loads, nothing
+        // shows but every click lands on it. Such an overlay is closed.
+        let app = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(LOADED_WITHIN);
+            let state = app.state::<PickerState>();
+            let dead = state.0.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|s| s.id == id && !s.loaded);
+            if dead {
+                finish(&app, None);
+                crate::events::rec_error(&app, "Lớp chọn vùng không mở được nên HP Screen đã đóng nó lại. Hãy thử lại.");
+            }
+        });
+    }
 
     let window = WebviewWindowBuilder::new(&app, PICKER, WebviewUrl::App("index.html".into()))
         .title("HP Screen - Chọn vùng quay")
@@ -142,8 +165,11 @@ pub fn frozen(app: &AppHandle) -> Option<Vec<u8>> {
 /// Called by the overlay when it loads.
 pub fn context(app: &AppHandle) -> Option<PickerContext> {
     let state = app.state::<PickerState>();
-    let guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
-    guard.as_ref().map(|s| s.context.clone())
+    let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+    guard.as_mut().map(|s| {
+        s.loaded = true;
+        s.context.clone()
+    })
 }
 
 /// Called by the overlay with the user's choice (`None` = cancelled). Closes the overlay.

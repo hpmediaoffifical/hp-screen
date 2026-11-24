@@ -49,6 +49,21 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # Tesseract (the built-in Vietnamese text recognition) is linked statically into the
+      # program. vcpkg, which the runner already has, builds it; its own archive of built
+      # packages is cached, so only the first run after a version change compiles anything.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: vcpkg-archives-x64-windows-static-tesseract
+
+      - name: Tesseract (vcpkg)
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install "tesseract[core]:x64-windows-static"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+
       - name: Kiểm thử
         run: |
           cargo test -p hp-core

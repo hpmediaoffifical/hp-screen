@@ -31,6 +31,7 @@ mod cursor_shape;
 mod test_media;
 mod pin;
 mod ocr;
+mod tess;
 mod scroll;
 mod updater;
 
@@ -102,6 +103,8 @@ pub fn run() {
             commands::snip_start,
             commands::snip_context,
             commands::snip_ready,
+            commands::snip_alive,
+            commands::page_failed,
             commands::snip_finish,
             commands::snip_cancel,
             commands::snip_frozen,

@@ -1,8 +1,9 @@
 /*! © 2026 HP Media (hpvn.media) — HP Screen. Bảo lưu mọi quyền. HP không có đại lý khác, không hợp tác với đơn vị nào, mọi sao chép đều là vi phạm. */
-//! Reading text in a picture with Windows' own OCR (`Windows.Media.Ocr`): offline, nothing to
-//! install beyond Windows language packs. Vietnamese is preferred, then English, then the
-//! user's own languages.
-use hp_core::snip::{ocr_scale, pick_ocr_language};
+//! Reading text in a picture, offline. The built-in Vietnamese engine (`tess`) does the work;
+//! Windows' own OCR (`Windows.Media.Ocr`) stands in if that engine cannot run. Windows' OCR
+//! alone was not enough: most machines have no Vietnamese for it, and it then reads accented
+//! letters wrong.
+use hp_core::snip::{OcrBox, TableText, ocr_scale, pick_ocr_language, table_text, tsv_text};
 use image::RgbaImage;
 use serde::Serialize;
 use windows::Globalization::Language;
@@ -23,6 +24,8 @@ pub struct OcrOutcome {
     /// Every word read, with its box in the *input* picture's pixels (unscaled). Words follow
     /// line order, top to bottom, left to right within a line.
     pub words: Vec<OcrWord>,
+    /// The same text with its columns kept (tabs between cells), when it stood in columns.
+    pub table: Option<TableText>,
 }
 
 /// One word and where it sits in the picture.
@@ -62,6 +65,21 @@ fn ocr_error(e: windows::core::Error) -> String {
 
 /// Reads the text in `picture`. Blocking: call it off the main thread.
 pub fn recognize(picture: &RgbaImage) -> Result<OcrOutcome, String> {
+    match crate::tess::words(picture) {
+        Ok(found) => {
+            let words: Vec<OcrWord> =
+                found.iter().map(|w| OcrWord { text: w.text.clone(), x: w.x, y: w.y, w: w.w, h: w.h }).collect();
+            let boxes: Vec<OcrBox> = words.iter().map(|w| OcrBox { text: &w.text, x: w.x, y: w.y, w: w.w, h: w.h }).collect();
+            let table = table_text(&boxes);
+            Ok(OcrOutcome { text: tsv_text(&found), language: "tiếng Việt".to_string(), vietnamese: true, note: None, words, table })
+        }
+        // The built-in engine could not run: Windows' own is better than nothing.
+        Err(reason) => recognize_with_windows(picture).map_err(|e| format!("{e} (bộ nhận chữ tiếng Việt: {reason})")),
+    }
+}
+
+/// Reads the text in `picture` with Windows' own OCR. Blocking.
+fn recognize_with_windows(picture: &RgbaImage) -> Result<OcrOutcome, String> {
     // WinRT needs the calling thread in an apartment; "already initialised" is fine too.
     // SAFETY: plain COM initialisation of the current thread.
     let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
@@ -129,7 +147,9 @@ pub fn recognize(picture: &RgbaImage) -> Result<OcrOutcome, String> {
     let note = (!vietnamese).then(|| {
         format!("Máy chưa có bộ nhận chữ tiếng Việt nên HP Screen đọc bằng {name}; chữ có dấu có thể bị sai. {HOW_TO_ADD_VIETNAMESE}")
     });
-    Ok(OcrOutcome { text: lines.join("\n"), language: name, vietnamese, note, words })
+    let boxes: Vec<OcrBox> = words.iter().map(|w| OcrBox { text: &w.text, x: w.x, y: w.y, w: w.w, h: w.h }).collect();
+    let table = table_text(&boxes);
+    Ok(OcrOutcome { text: lines.join("\n"), language: name, vietnamese, note, words, table })
 }
 
 /// Puts text on the clipboard, retrying while another program holds it.
@@ -172,6 +192,7 @@ mod desktop_tests {
         let picture = image::open(path).expect("sample").to_rgba8();
         let outcome = recognize(&picture).expect("ocr");
         println!("{outcome:?}");
+        println!("--- Windows' own:\n{:?}", recognize_with_windows(&picture).map(|o| o.text));
         assert!(!outcome.text.trim().is_empty());
     }
 }

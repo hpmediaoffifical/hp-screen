@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import {
   copyText,
   errorMessage,
+  snipAlive,
   snipCancel,
   snipContext,
   snipFinish,
@@ -299,7 +300,8 @@ function drawShape(ctx: CanvasRenderingContext2D, s: Shape, image: HTMLImageElem
   ctx.restore();
 }
 
-type OcrState = { busy: true } | { busy: false; result: OcrResult; text: string; copied: boolean };
+/** `asTable`: the text shown keeps its columns (tabs between cells), for pasting into a spreadsheet. */
+type OcrState = { busy: true } | { busy: false; result: OcrResult; text: string; copied: boolean; asTable: boolean };
 
 export default function SnipOverlay() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -338,7 +340,7 @@ export default function SnipOverlay() {
   /** Opened by the "capture and copy text" hotkey: choose an area, its text is copied, done. */
   const textMode = !!context?.copy_text;
   /** The text that was copied in that mode, shown for a moment before the overlay closes. */
-  const [grabbed, setGrabbed] = useState<string | null>(null);
+  const [grabbed, setGrabbed] = useState<{ chars: number; table: string; warn: string } | null>(null);
   // Measured sizes of the two floating panels (CSS pixels), used to keep them on screen.
   const toolsRef = useRef<HTMLDivElement>(null);
   const actionsRef = useRef<HTMLDivElement>(null);
@@ -455,6 +457,13 @@ export default function SnipOverlay() {
       handlePoints(selection).forEach(([, p]) => ctx.fillRect(p.x - hs / 2, p.y - hs / 2, hs, hs));
     }
   }, [image, selection, shapes, draft, scale, block, snap, pickedShape]);
+
+  // Sign of life for the core's watchdog: this window covers the whole screen, so if its page
+  // ever stops running the core closes it rather than leave the screen blocked.
+  useEffect(() => {
+    const timer = setInterval(() => snipAlive().catch(() => {}), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Tell the core to show the window after the first paint.
   useEffect(() => {
@@ -609,12 +618,19 @@ export default function SnipOverlay() {
     setBusy(true);
     setError("");
     try {
-      const text = (await snipOcr(out.toDataURL("image/png"))).text.trim();
+      const found = await snipOcr(out.toDataURL("image/png"));
+      // Text in columns is copied with its columns: it pastes into a spreadsheet as cells.
+      const text = (found.table?.text ?? found.text).trim();
       if (!text) throw new Error("Không thấy chữ nào trong vùng vừa chọn.");
       await copyText(text);
-      setGrabbed(text);
-      // Long enough to read "copied", short enough not to be in the way.
-      setTimeout(() => snipCancel(), 900);
+      setGrabbed({
+        chars: text.length,
+        table: found.table ? ` (bảng ${found.table.rows} hàng × ${found.table.cols} cột)` : "",
+        // Read with another language's engine: say so, or wrong accents arrive unannounced.
+        warn: found.vietnamese ? "" : ` · đọc bằng ${found.language} nên chữ có dấu có thể sai`,
+      });
+      // Long enough to read "copied" (and the warning), short enough not to be in the way.
+      setTimeout(() => snipCancel(), found.vietnamese ? 900 : 2600);
     } catch (e) {
       // Nothing was copied: the area can be chosen again.
       setError(errorMessage(e));
@@ -728,7 +744,9 @@ export default function SnipOverlay() {
     const run = ++ocrRun.current;
     try {
       const result = await snipOcr(out.png);
-      if (run === ocrRun.current) setOcr({ busy: false, result, text: result.text, copied: false });
+      // Text that stood in columns opens as a table; the panel can switch it back.
+      if (run === ocrRun.current)
+        setOcr({ busy: false, result, text: result.table?.text ?? result.text, copied: false, asTable: !!result.table });
     } catch (e) {
       if (run !== ocrRun.current) return;
       setOcr(null);
@@ -946,7 +964,7 @@ export default function SnipOverlay() {
       {textMode ? (
         <p className="snip-hint" role="status">
           {grabbed !== null
-            ? `✓ Đã chép ${grabbed.length} ký tự · dán bằng Ctrl+V`
+            ? `✓ Đã chép ${grabbed.chars} ký tự${grabbed.table} · dán bằng Ctrl+V${grabbed.warn}`
             : busy
               ? "Đang đọc chữ…"
               : error
@@ -1187,6 +1205,20 @@ export default function SnipOverlay() {
             <span className="snip-label">Đọc bằng {ocr.result.language}</span>
           </div>
           {ocr.result.note && <p className="snip-ocr-note">{ocr.result.note}</p>}
+          {ocr.result.table && (
+            <label className="snip-label snip-ocr-table">
+              <input
+                type="checkbox"
+                checked={ocr.asTable}
+                onChange={(e) => {
+                  const asTable = e.target.checked;
+                  const text = asTable ? ocr.result.table!.text : ocr.result.text;
+                  setOcr({ ...ocr, asTable, text, copied: false });
+                }}
+              />
+              Giữ dạng bảng {ocr.result.table.rows} hàng × {ocr.result.table.cols} cột (dán vào Excel thành từng ô)
+            </label>
+          )}
           <textarea
             className="snip-ocr-text"
             autoFocus
@@ -1195,6 +1227,13 @@ export default function SnipOverlay() {
             placeholder="Không tìm thấy chữ nào trong vùng này."
             value={ocr.text}
             onChange={(e) => setOcr({ ...ocr, text: e.target.value, copied: false })}
+            // In a table, Tab types a cell boundary instead of leaving the box.
+            onKeyDown={(e) => {
+              if (e.key !== "Tab" || !ocr.asTable || e.shiftKey || e.ctrlKey || e.altKey) return;
+              e.preventDefault();
+              e.currentTarget.setRangeText("\t", e.currentTarget.selectionStart, e.currentTarget.selectionEnd, "end");
+              setOcr({ ...ocr, text: e.currentTarget.value, copied: false });
+            }}
           />
           <div className="snip-row snip-ocr-actions">
             <button className="snip-btn snip-wide" onClick={() => setOcr(null)}>

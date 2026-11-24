@@ -13,7 +13,8 @@
 - File MP4 (H.264 + AAC) ghi dạng phân mảnh: máy treo hay tắt nóng vẫn giữ được video.
 - Thu âm mic và âm thanh máy theo thiết bị mặc định của Windows.
 - Phím tắt toàn cục để bắt đầu/dừng, tạm dừng và chụp ảnh; thanh điều khiển gọn không lọt vào video.
-- Chụp ảnh đúng pixel vật lý, vẽ chú thích, copy vào clipboard.
+- Chụp ảnh đúng pixel vật lý, vẽ chú thích, copy vào clipboard; kính lúp khi kéo vùng để canh đúng từng pixel.
+- Nhận chữ trong ảnh chụp (đọc đúng tiếng Việt có dấu, chạy trên máy, không cần mạng); bảng giữ nguyên cột khi dán vào Excel; một phím tắt để chụp và chép chữ ngay.
 - Thư viện video và ảnh đã quay: xem, phát, đổi tên, xóa.
 - Ghi kèm nhật ký chuột/phím cho mỗi video, dùng cho hiệu ứng click và hiện phím tắt khi xuất.
 
@@ -23,12 +24,19 @@
   - Windows Graphics Capture để ghi hình.
   - Media Foundation để mã hóa video.
   - WASAPI qua `cpal` để thu âm.
+- [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) với dữ liệu tiếng Việt để nhận chữ, gộp tĩnh vào file chạy. Giấy phép và ghi công của Tesseract và các thư viện đi kèm nằm trong `src-tauri/third-party/`.
 - React + TypeScript cho giao diện tiếng Việt.
 - `crates/hp-core`: phần logic thuần, có kiểm thử tự động.
 
 ## Chạy từ mã nguồn
 
-Cần Windows 11, [Rust](https://rustup.rs/), Node.js và [pnpm](https://pnpm.io/).
+Cần Windows 11, [Rust](https://rustup.rs/), Node.js, [pnpm](https://pnpm.io/) và [vcpkg](https://github.com/microsoft/vcpkg).
+
+Bộ nhận chữ tiếng Việt (Tesseract) được gộp thẳng vào file chạy, nên cần vcpkg biên dịch nó một lần trên mỗi máy (khoảng 15 phút), rồi đặt biến môi trường `VCPKG_ROOT` trỏ tới thư mục vcpkg:
+
+```bash
+vcpkg install "tesseract[core]:x64-windows-static"
+```
 
 ```bash
 pnpm install
