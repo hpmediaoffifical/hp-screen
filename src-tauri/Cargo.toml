@@ -1,6 +1,6 @@
 [package]
 name = "hp-screen"
-version = "0.2.4"
+version = "0.2.5"
 description = "HP Screen - quay màn hình cho Windows 11"
 authors = ["Nguyễn Hoàng Phụng (HP Media)"]
 license = "MIT"
@@ -13,6 +13,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# Finds Tesseract (the built-in Vietnamese text recognition) and the libraries it needs,
+# as built by vcpkg: see README, "Chạy từ mã nguồn".
+vcpkg = "0.2"
 
 [dependencies]
 hp-core = { path = "../crates/hp-core" }
