@@ -85,3 +85,18 @@ jobs:
           # latest.json is what the app reads from releases/latest/download/latest.json.
           includeUpdaterJson: true
           args: --config src-tauri/tauri.release.conf.json
+
+      # Seen on v0.2.5: the build and signing succeeded but GitHub refused to create the
+      # Release ("Resource not accessible by integration") although the token has
+      # contents: write. The signed installer is then kept as a workflow artifact, so a
+      # maintainer can publish it (with latest.json) without building again.
+      - name: Giữ bộ cài đã ký khi không tạo được Release
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: hp-screen-${{ github.ref_name }}
+          path: |
+            target/release/bundle/nsis/*-setup.exe
+            target/release/bundle/nsis/*-setup.exe.sig
+          if-no-files-found: ignore
+          retention-days: 14
